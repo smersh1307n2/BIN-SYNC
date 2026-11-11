@@ -1,5 +1,13 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
+## T-pass continuation update — 2026-11-11
+
+- BIN-SYNC branch head: 827d366bb23bd80c53dfdb434b0f77c2cf60e4e6. Local Windows Release BinSync.Tests passed 678/678 on this head.
+- Windows NodePersistence.Save retains the existing per-path serialization gate and delete-sharing reader contract. A bounded Windows-only retry now handles transient UnauthorizedAccessException during atomic destination replacement; the focused concurrent reader/saver test passes.
+- RCP2 uses the minimum contiguous applied prefix across every Active member, capped by the author's signed issued high-watermark. TLS test certificates use Windows-compatible persisted user keys; both client/server handshake failures are surfaced in test diagnostics.
+- FLD-DB is public and fix/crash-consistency-outbox is reachable without credentials. The BIN-SYNC Actions workflow now performs the FLD checkout/build/test unconditionally; no FLD_DB_READ_TOKEN secret is required.
+- Local solution-wide and FLD host builds remain unverified because api.nuget.org is unreachable from this workstation (NU1301); FldBinSyncHost restore cannot create its missing assets file. Await the exact-head GitHub Actions result before marking the cross-repository gate complete.
+- Physical receipt, ChangeId and tombstone/Ghost GC remain disabled.
 ## C-pass continuation update — 2026-11-10
 
 - Experimental strict-contiguity changes to NRS2/RCP2 acceptance were reverted in `e358b5a2` and `1a68150d` after checking the normative offline-catch-up contract. Active code retains higher signed roster/checkpoint catch-up behavior, existing monotonicity checks and same-sequence fork rejection.

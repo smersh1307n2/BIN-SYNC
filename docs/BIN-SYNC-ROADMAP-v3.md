@@ -1,3 +1,10 @@
+## 1.70. Public FLD-DB checkout gate enabled — 2026-11-11
+
+- [x] smersh1307n2/FLD-DB is now public. Unauthenticated Git access verified the integration branch fix/crash-consistency-outbox at 03f988eeea3e0c8cc1f4209834ddf3fb1d157a37.
+- [x C] Updated .github/workflows/dotnet.yml: the FLD checkout is now unconditional and no longer depends on FLD_DB_READ_TOKEN. The Ubuntu/Windows host job must build FldBinSyncHost, run the FLD Storage/Manifest/Run/WAL/Engine durability projects, and run FldBinSyncHost.Tests.
+- [x T] Latest BIN-SYNC branch head 827d366bb23bd80c53dfdb434b0f77c2cf60e4e6: local Windows Release BinSync.Tests passed 678/678. The Windows state-file replacement test also passed after a bounded retry for transient destination access denial.
+- [!] Local full-solution and FLD host builds are not claimed: this workstation cannot reach api.nuget.org (NU1301), and the host project's assets file is not present. GitHub Actions is now the required exact-head cross-repository build/test gate.
+- Historical FLD_DB_READ_TOKEN references in older sections below describe the former private-repository state; they are no longer current setup instructions.
 ## 1.69. CI green after Windows waiter deadline correction — 2026-11-10
 
 - [x CI] The full BIN-SYNC workflow for source commit `47e9f3df0b8c9a8ac0ed77cc6d31e1f068ed6711` completed successfully: Linux .NET tests 678/678, Windows .NET test job success, signed v3.1 control-plane vectors success, fuzz/lab success, and the workflow's host-adapter job completed.
