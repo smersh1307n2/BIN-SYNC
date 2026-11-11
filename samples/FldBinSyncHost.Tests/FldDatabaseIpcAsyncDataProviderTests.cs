@@ -34,6 +34,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             StorageIpcEndpoint.Publish(root, StorageIpcEndpoint.Create(
                 root, 0, ownerId, Environment.ProcessId));
 
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                    root, Guid.NewGuid(), TimeSpan.FromSeconds(10), NodeId.From(Id(0x42)), () => 17));
+
             await using var provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 root, clientId, TimeSpan.FromSeconds(10), author, () => 17);
 
