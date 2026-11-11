@@ -2815,3 +2815,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] FLD-DB commit `e6802c4e2f666a13869dbba58030f7669b6c24f4` ensures the database is disposed before temporary-directory cleanup in the new host test, including Windows file-handle semantics.
 - [~ CI] Re-run the exact cross-repository gate against FLD head `4a254a93500b777be6c673a062b3f297dd2fe1df` and BIN-SYNC head containing `cbf6a449a009bc81865e3e62a34e2619749077e0`. Required: Storage shutdown/fencing tests and the real-FLD stale-generation integration test pass on the CI platform; the existing three-platform Storage Integration matrix must remain green.
 - [~ T] These tests cover session-generation fencing and bounded shutdown, not durable request idempotency. The next architectural item remains the durable request identity/result ledger and host restart replay contract, followed by the single-owner Host/discovery and FLD Database facade.
+
+
+
+### 1.100 — Expose per-session request correlation to the IPC host handler — 2026-11-11
+
+- [x C] FLD-DB commits `861ea7c92449374f7ab1280855560aa6eabef6bd` and `31c84462f1f2b8969aab3ff2d60c73a371f74e4d` extend `StorageIpcRequestContext` with the frame's `RequestId`. The XML contract explicitly states this value is only a per-session transport correlation id; it resets after reconnect and must not be used alone as the durable idempotency key.
+- [x T] FLD-DB commit `47c509ed273f4fe492dd4635be1d332cffaed280` verifies the handler receives request IDs 1, 2 in order on one connection. BIN-SYNC commit `050fac24f4e41389946069c6a29392f9d04ee838` extends the real-FLD host integration test to assert that the handler sees those exact IDs across the two durable writes.
+- [~ CI] Re-run against FLD head `47c509ed273f4fe492dd4635be1d332cffaed280` and the latest BIN-SYNC PR head. After this test is green, define a separate stable operation/idempotency identity in the host request envelope; do not conflate it with the session-local frame RequestId.
+- [~ T] Durable exactly-once effects require the host to persist a stable operation identity and request fingerprint with the operation's durable result (atomically with Storage mutations, or via FLD's existing durable apply receipt for Database operations). A retry after reconnect must reuse that same operation identity and identical request fingerprint; conflicting reuse must fail closed. This is the next design/implementation item.
