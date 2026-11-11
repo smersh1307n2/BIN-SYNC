@@ -69,6 +69,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(value, current.Value);
             Assert.Equal(17u, current.OriginAuthorEpoch);
 
+            await provider.CommitPublishedOriginsAsync([
+                new ProviderPublishedOrigin(change, new OperationOrigin(author, 17, 44))
+            ]);
+            current = await provider.ReadCurrentAsync(RecordId.From(recordBytes), 7);
+            Assert.NotNull(current);
+            Assert.Equal(44ul, current.OriginSequence);
+
             ProviderSnapshotHandle snapshot = await provider.OpenSnapshotAsync();
             Assert.Equal(1ul, snapshot.ChangeFeedWatermark);
             ProviderSnapshotPage snapshotPage = await provider.ReadSnapshotAsync(snapshot.Token, 0, 16);
@@ -76,6 +83,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.True(snapshotPage.IsComplete);
             Assert.Equal(value, snapshotEntry.Value);
             Assert.Equal(BatchId.From(changeBytes), snapshotEntry.ChangeId);
+            Assert.Equal(44ul, snapshotEntry.OriginSequence);
 
             await provider.AcknowledgeLocalChangesAsync(1);
             await provider.ReleaseSnapshotAsync(snapshot.Token);

@@ -11,7 +11,7 @@ namespace BinSync.FldHost;
 /// It intentionally advertises only IAsyncDataProvider; synchronous commit guards,
 /// publication stamping, FULL_REPLACE and GC capabilities are not emulated.
 /// </summary>
-public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
+public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore
 {
     private readonly FldDatabaseIpcClient _client;
     private readonly FldDatabaseIpcOutboxLease _outboxLease;
@@ -138,6 +138,38 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
         {
             _feedGate.Release();
         }
+    }
+
+    public async ValueTask CommitPublishedOriginsAsync(
+        IReadOnlyList<ProviderPublishedOrigin> published,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(published);
+        ThrowIfUnavailable(cancellationToken);
+        if (published.Count == 0) return;
+        var stamps = new FldPublishedOrigin[published.Count];
+        for (int i = 0; i < stamps.Length; i++)
+        {
+            ProviderPublishedOrigin item = published[i]
+                ?? throw new ArgumentException("Published-origin list contains null.", nameof(published));
+            ProviderChange change = item.Change
+                ?? throw new InvalidDataException("Published-origin entry has no provider change.");
+            if (change.ChangeId.IsZero || change.Mutation.ChangeId != change.ChangeId ||
+                item.Origin.AuthorNodeId != change.Mutation.AuthorNodeId ||
+                item.Origin.AuthorEpoch == 0 || item.Origin.Sequence == 0)
+                throw new InvalidDataException("Published-origin entry does not match the immutable provider change identity.");
+            byte[] recordId = new byte[16];
+            change.Mutation.RecordId.WriteTo(recordId);
+            stamps[i] = new FldPublishedOrigin
+            {
+                RecordId = recordId,
+                FieldId = change.Mutation.FieldId,
+                ChangeId = change.ChangeId.ToArray(),
+                OriginAuthorEpoch = item.Origin.AuthorEpoch,
+                OriginSequence = item.Origin.Sequence
+            };
+        }
+        await _client.CommitPublishedOriginsAsync(stamps, cancellationToken).ConfigureAwait(false);
     }
 
     public async ValueTask<ProviderChangePage> ReadLocalChangesAsync(
