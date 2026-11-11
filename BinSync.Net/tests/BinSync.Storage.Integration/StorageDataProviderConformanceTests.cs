@@ -1199,6 +1199,101 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
 
 
     [Fact]
+    public void Field_tombstone_record_tombstone_and_newer_ghost_survive_full_replace_restart()
+    {
+        string directory = Path.Combine(_root, "provider-tombstone-ghost-restart");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            ProviderMutation fieldTombstone = new()
+            {
+                RecordId = Record(140),
+                FieldId = 1,
+                IsTombstone = true,
+                HlcWall = 250,
+                HlcLogical = 1,
+                AuthorNodeId = Node(1),
+                Value = Array.Empty<byte>()
+            };
+            ProviderMutation recordTombstone = new()
+            {
+                RecordId = Record(141),
+                FieldId = Model.LifecycleFieldId,
+                IsRecordTombstone = true,
+                HlcWall = 200,
+                HlcLogical = 1,
+                AuthorNodeId = Node(1),
+                Value = Array.Empty<byte>()
+            };
+            ProviderMutation hiddenField = new()
+            {
+                RecordId = Record(141),
+                FieldId = 1,
+                HlcWall = 150,
+                HlcLogical = 0,
+                AuthorNodeId = Node(1),
+                Value = "older-than-delete"u8.ToArray()
+            };
+            ProviderMutation ghostField = new()
+            {
+                RecordId = Record(141),
+                FieldId = 2,
+                HlcWall = 300,
+                HlcLogical = 0,
+                AuthorNodeId = Node(2),
+                Value = "newer-ghost"u8.ToArray()
+            };
+            ProviderMutation[] image = { fieldTombstone, recordTombstone, hiddenField, ghostField };
+            Array.Sort(image, ProviderMutationCodec.CompareCanonical);
+            Guid generation = Guid.Parse("9c000000-0000-0000-0000-000000000001");
+            byte[] digest = StorageDataProvider.ComputeFullReplaceDigest(generation, 27, image);
+
+            using (var provider = new StorageDataProvider(directory, partitionId: 101, deleteOnDispose: false))
+            {
+                provider.BeginFullReplace(generation, 27, image.Length, digest);
+                provider.StageFullReplacePage(generation, 0, image);
+                provider.CommitFullReplace(generation);
+
+                Assert.True(provider.TryReadCurrent(Record(140), 1, out ProviderMutation? deletedField));
+                Assert.True(deletedField!.IsTombstone);
+                Assert.False(provider.TryReadCurrent(Record(141), 1, out _));
+                Assert.True(provider.TryReadCurrent(Record(141), 2, out ProviderMutation? ghost));
+                Assert.Equal("newer-ghost", System.Text.Encoding.UTF8.GetString(ghost!.Value));
+                Assert.False(ghost.IsRecordTombstone);
+            }
+
+            using (var reopened = new StorageDataProvider(directory, partitionId: 101, deleteOnDispose: false))
+            {
+                Assert.True(reopened.TryReadCurrent(Record(140), 1, out ProviderMutation? deletedField));
+                Assert.True(deletedField!.IsTombstone);
+                Assert.False(reopened.TryReadCurrent(Record(141), 1, out _));
+                Assert.True(reopened.TryReadCurrent(Record(141), 2, out ProviderMutation? ghost));
+                Assert.Equal("newer-ghost", System.Text.Encoding.UTF8.GetString(ghost!.Value));
+
+                ProviderSnapshotHandle snapshot = reopened.OpenSnapshot();
+                try
+                {
+                    ProviderSnapshotPage page = reopened.ReadSnapshot(snapshot.Token, 0, 16);
+                    Assert.True(page.IsComplete);
+                    Assert.Contains(page.Entries, entry => entry.IsTombstone && entry.RecordId == Record(140));
+                    Assert.Contains(page.Entries, entry => entry.IsRecordTombstone && entry.RecordId == Record(141));
+                    Assert.Contains(page.Entries, entry =>
+                        entry.RecordId == Record(141) && entry.FieldId == 2 && !entry.IsTombstone);
+                }
+                finally
+                {
+                    reopened.ReleaseSnapshot(snapshot.Token);
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+
+    [Fact]
     public void Full_replace_preserves_record_and_field_tombstones()
     {
         string directory = Path.Combine(_root, "provider-full-replace-tombstones");
