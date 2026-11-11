@@ -3,9 +3,10 @@ using System.IO;
 namespace BinSync.Storage;
 
 /// <summary>
-/// Async-only receiver coordinator. It owns Node and Metadata durability without
-/// requiring an IDataProvider or sync-over-async adapter. Provider APPLY is always
-/// contextual and awaited before the transport ACK.
+/// Async-only coordinator for remote receive/recovery and provider local-feed
+/// publication. It owns Node and Metadata durability without requiring an IDataProvider
+/// or sync-over-async adapter. Provider APPLY is contextual and awaited before transport
+/// ACK; local publication awaits origin stamping and independent Outbox/receipt ACKs.
 /// </summary>
 public sealed class AsyncStorageSyncCoordinator
 {

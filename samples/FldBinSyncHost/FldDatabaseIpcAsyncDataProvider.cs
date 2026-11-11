@@ -9,7 +9,10 @@ namespace BinSync.FldHost;
 /// <summary>
 /// Process-isolated IDataProvider implementation over the FLD Database IPC facade.
 /// It advertises IAsyncDataProvider, independent IPC receipt lifecycle, immutable
-/// published-origin stamping, and durable publication cutover. Async commit guards,
+/// published-origin stamping, and durable publication cutover. Create one provider
+/// instance with one stable FLD ClientId per BIN-SYNC namespace/coordinator: FLD
+/// ClientSequence is contiguous per ClientId, while the Node WAL receipt stream is
+/// namespace-scoped. Reconnects must reuse that ClientId. Async commit guards,
 /// author-epoch closure, FULL_REPLACE and GC capabilities are not emulated.
 /// </summary>
 public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore, IAsyncProviderOperationReceiptStore, IAsyncProviderPublicationMode
