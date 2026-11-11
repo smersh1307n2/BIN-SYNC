@@ -2935,3 +2935,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] BIN-SYNC commit `887340a043fdb44420ace263345a42b6540a0903` updates the cross-repository dispatcher integration probe to discover and connect through the published endpoint rather than a hard-coded pipe name.
 - [~ CI] Re-run the exact cross-repository gate against the latest FLD branch and BIN-SYNC PR head. Required: Host executable builds with warnings-as-errors, endpoint tests pass, and the multi-process owner/restart test succeeds on Linux, Windows and macOS.
 - [~ T] The Storage-only Host is now implemented as an executable, but the multi-process test must pass before considering ownership/discovery complete. The FLD Database facade remains a separate later phase and must not be loaded by Storage-only clients.
+
+
+
+### 1.113 — Partition-scope endpoint records to support multiple partitions per root
+
+- [x C] FLD-DB commit `c2f9aff0b41c709ca9951cb4e627372e2f2f75bb` changes the discovery filename to `.fld1-storage-ipc-{PartitionId:X16}.endpoint`. The deterministic pipe name was already partition-scoped; the endpoint file now is too, so independent partitions in one root cannot overwrite each other's discovery record.
+- [x C] FLD-DB commit `c6501f85dc12fd15d6a8ddda186c8b963ce07a2b` updates Host cleanup to delete only its exact partition endpoint. Tests `5a1c59e021436092f691d0e70a115a0085b08770` and `c626d8e1bd49ec86d0c0fcfc9ee9237862a0f2cb` cover same-root partition isolation and process-host endpoint lookup.
+- [x T] BIN-SYNC commit `77feb94a24abe795ab2057e3eab3b8e1a8c13740` updates the host composition probe to use partition-specific endpoint deletion.
+- [~ CI] Re-run the full cross-repository and three-platform Storage Integration gates against FLD head `c626d8e1bd49ec86d0c0fcfc9ee9237862a0f2cb` and the latest BIN-SYNC PR head.
