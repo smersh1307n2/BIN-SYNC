@@ -228,6 +228,167 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
     }
 
+    [Fact]
+    public async Task Async_host_composition_exchanges_changes_bidirectionally_between_two_database_host_processes()
+    {
+        string hostRootA = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-a-" + Guid.NewGuid().ToString("N"));
+        string hostRootB = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-b-" + Guid.NewGuid().ToString("N"));
+        string nodeRootA = Path.Combine(Path.GetTempPath(), "binsync-two-host-node-a-" + Guid.NewGuid().ToString("N"));
+        string nodeRootB = Path.Combine(Path.GetTempPath(), "binsync-two-host-node-b-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x537;
+        const uint nodeStorageNamespace = 702;
+        byte[] authorABytes = Id(0x71);
+        byte[] authorBBytes = Id(0x72);
+        NodeId authorA = NodeId.From(authorABytes);
+        NodeId authorB = NodeId.From(authorBBytes);
+        Process? hostA = null;
+        Process? hostB = null;
+        StorageDatabase? nodeStorageA = null;
+        StorageDatabase? nodeStorageB = null;
+        StorageMetadataStore? metadataA = null;
+        StorageMetadataStore? metadataB = null;
+        Wal? walA = null;
+        Wal? walB = null;
+        Node? nodeA = null;
+        Node? nodeB = null;
+        FldDatabaseIpcAsyncDataProvider? providerA = null;
+        FldDatabaseIpcAsyncDataProvider? providerB = null;
+        FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteA = null;
+        FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteB = null;
+        try
+        {
+            hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes);
+            hostB = StartDatabaseHost(hostRootB, namespaceId, authorBBytes);
+            _ = await WaitForHostEndpointAsync(hostRootA, hostA, TimeSpan.FromSeconds(45));
+            _ = await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45));
+
+            nodeStorageA = StorageDatabase.Open(nodeRootA, nodeStorageNamespace);
+            nodeStorageB = StorageDatabase.Open(nodeRootB, nodeStorageNamespace);
+            metadataA = new StorageMetadataStore(nodeStorageA);
+            metadataB = new StorageMetadataStore(nodeStorageB);
+            walA = Wal.Open(Path.Combine(nodeRootA, "node.wal"));
+            walB = Wal.Open(Path.Combine(nodeRootB, "node.wal"));
+            nodeA = new NodeBuilder().WithNodeId(authorA).WithEpoch(17).Build();
+            nodeB = new NodeBuilder().WithNodeId(authorB).WithEpoch(17).Build();
+            nodeA.AttachWal(walA);
+            nodeB.AttachWal(walB);
+
+            Guid clientA = Guid.NewGuid();
+            Guid clientB = Guid.NewGuid();
+            providerA = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRootA, clientA, TimeSpan.FromSeconds(15), authorA, () => 17);
+            providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRootB, clientB, TimeSpan.FromSeconds(15), authorB, () => 17);
+            remoteA = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRootA, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+            remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+            await providerA.EnableMetadataStoreOwnedPublicationAsync(0);
+            await providerB.EnableMetadataStoreOwnedPublicationAsync(0);
+
+            var coordinatorA = new AsyncStorageSyncCoordinator(nodeA, metadataA, "two-host-a", checked((int)namespaceId));
+            var coordinatorB = new AsyncStorageSyncCoordinator(nodeB, metadataB, "two-host-b", checked((int)namespaceId));
+            var adapterA = new FldBinSyncAsyncHostAdapter(
+                coordinatorA, providerA, remoteA,
+                current => StorageNodePersistence.Save(nodeStorageA, current));
+            var adapterB = new FldBinSyncAsyncHostAdapter(
+                coordinatorB, providerB, remoteB,
+                current => StorageNodePersistence.Save(nodeStorageB, current));
+
+            AsyncStorageStartupRecoveryResult startupA = await adapterA.RecoverBeforeAcceptingSessionsAsync();
+            AsyncStorageStartupRecoveryResult startupB = await adapterB.RecoverBeforeAcceptingSessionsAsync();
+            Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0), startupA);
+            Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0), startupB);
+
+            RecordId recordA = RecordId.From(Id(0x73));
+            RecordId recordB = RecordId.From(Id(0x74));
+            byte[] valueA = "host-a-to-host-b"u8.ToArray();
+            byte[] valueB = "host-b-to-host-a"u8.ToArray();
+            await providerA.AppendLocalChangeWithReceiptAsync(new ProviderMutation
+            {
+                RecordId = recordA,
+                FieldId = 0x0751,
+                AuthorNodeId = authorA,
+                OriginAuthorEpoch = 17,
+                HlcWall = 71_100,
+                HlcLogical = 1,
+                Value = valueA,
+                ChangeId = BatchId.From(Id(0x75))
+            });
+            await providerB.AppendLocalChangeWithReceiptAsync(new ProviderMutation
+            {
+                RecordId = recordB,
+                FieldId = 0x0752,
+                AuthorNodeId = authorB,
+                OriginAuthorEpoch = 17,
+                HlcWall = 72_100,
+                HlcLogical = 2,
+                Value = valueB,
+                ChangeId = BatchId.From(Id(0x76))
+            });
+
+            var (toA, toB) = PipeTransport.CreatePair();
+            Task<SyncSession> acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+            Task<SyncSession> connectTask = SyncSession.ConnectAsync(nodeA, toA);
+            await using SyncSession acceptor = await acceptTask;
+            await using SyncSession initiator = await connectTask;
+
+            Task<BatchResult> receiveA = adapterA.ReceiveBatchAsync(initiator);
+            Task<BatchResult> receiveB = adapterB.ReceiveBatchAsync(acceptor);
+            Task<int> sendA = adapterA.RunOutboundRoundAsync([initiator]);
+            Task<int> sendB = adapterB.RunOutboundRoundAsync([acceptor]);
+            await Task.WhenAll(receiveA, receiveB, sendA, sendB).WaitAsync(TimeSpan.FromSeconds(60));
+
+            Assert.Equal(1, (await receiveA).Applied);
+            Assert.Equal(1, (await receiveB).Applied);
+            Assert.Equal(1, await sendA);
+            Assert.Equal(1, await sendB);
+
+            ProviderMutation? currentAtA = await providerA.ReadCurrentAsync(recordB, 0x0752);
+            ProviderMutation? currentAtB = await providerB.ReadCurrentAsync(recordA, 0x0751);
+            Assert.NotNull(currentAtA);
+            Assert.NotNull(currentAtB);
+            Assert.Equal(valueB, currentAtA!.Value);
+            Assert.Equal(valueA, currentAtB!.Value);
+            Assert.True(nodeA.TryGetField(checked((int)namespaceId), recordB, 0x0752, out var nodeValueAtA));
+            Assert.True(nodeB.TryGetField(checked((int)namespaceId), recordA, 0x0751, out var nodeValueAtB));
+            Assert.Equal(valueB, nodeValueAtA!.Value);
+            Assert.Equal(valueA, nodeValueAtB!.Value);
+
+            Assert.Equal(1UL, metadataA.GetReceiveCursor(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(1UL, metadataB.GetReceiveCursor(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(1UL, Assert.Single(metadataA.ReadPeerStreamStates(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, 17, checked((int)namespaceId))).State.AckedCursor);
+            Assert.Equal(1UL, Assert.Single(metadataB.ReadPeerStreamStates(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId))).State.AckedCursor);
+            Assert.Empty((await providerA.ReadLocalChangesAsync(0, 16)).Changes);
+            Assert.Empty((await providerB.ReadLocalChangesAsync(0, 16)).Changes);
+        }
+        finally
+        {
+            if (providerA is not null) await providerA.DisposeAsync();
+            if (providerB is not null) await providerB.DisposeAsync();
+            if (remoteA is not null) await remoteA.DisposeAsync();
+            if (remoteB is not null) await remoteB.DisposeAsync();
+            nodeA?.Dispose();
+            nodeB?.Dispose();
+            walA?.Dispose();
+            walB?.Dispose();
+            metadataA?.Dispose();
+            metadataB?.Dispose();
+            nodeStorageA?.Dispose();
+            nodeStorageB?.Dispose();
+            if (hostA is not null) await StopDatabaseHostAsync(hostA);
+            if (hostB is not null) await StopDatabaseHostAsync(hostB);
+            try { Directory.Delete(hostRootA, recursive: true); } catch { }
+            try { Directory.Delete(hostRootB, recursive: true); } catch { }
+            try { Directory.Delete(nodeRootA, recursive: true); } catch { }
+            try { Directory.Delete(nodeRootB, recursive: true); } catch { }
+        }
+    }
+
     private static Process StartDatabaseHost(string root, uint namespaceId, byte[] localAuthor)
     {
         AssemblyMetadataAttribute repositoryMetadata = typeof(FldDatabaseIpcAsyncDataProviderTests)
