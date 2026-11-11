@@ -251,7 +251,7 @@ public sealed class StorageNamespaceGcStoreTests
                         {
                             OriginAuthorEpoch = originEpoch,
                             IssuedOriginSequence = finalIssued,
-                            MaxIssuedHlcWall = 500,
+                            MaxIssuedHlcWall = 100,
                             MaxIssuedHlcLogical = 2
                         }
                     }
@@ -282,14 +282,14 @@ public sealed class StorageNamespaceGcStoreTests
 
                 var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
                     roster, 1, new byte[32], reports, generation, digest,
-                    fullReplaceHlcWallFloor: 500, fullReplaceHlcLogicalFloor: 2);
+                    fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
                 gc.AcceptRetentionCheckpoint(
                     NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
                 Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, origin, originEpoch, finalIssued - 1));
                 Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, origin, originEpoch, finalIssued));
                 Assert.False(gc.HasProtocolTombstoneGcProof(
-                    roster, trust, origin, originEpoch, finalIssued, 500, 2, generation, digest));
+                    roster, trust, origin, originEpoch, finalIssued, 100, 2, generation, digest));
 
                 // A report forwarded over another route cannot impersonate the offline member:
                 // the signed member identity and transport epoch remain bound to its roster key.
@@ -307,7 +307,7 @@ public sealed class StorageNamespaceGcStoreTests
                 Assert.True(gc.TryReadNamespaceRoster(19, trust, out NamespaceRosterCertificate? restored));
                 Assert.NotNull(restored);
                 Assert.False(gc.HasProtocolTombstoneGcProof(
-                    restored!, trust, origin, originEpoch, finalIssued, 500, 2, generation, digest));
+                    restored!, trust, origin, originEpoch, finalIssued, 100, 2, generation, digest));
 
                 var recoveredReports = gc.ReadOriginFrontiers(restored!);
                 AppliedOriginFrontierReport caughtUp = MemberReport(2, 2, finalIssued);
@@ -319,15 +319,15 @@ public sealed class StorageNamespaceGcStoreTests
                     restored!, 2, NamespaceRetentionCheckpointProtocol.ComputeDigest(
                         NamespaceRetentionCheckpointProtocol.CreateFromReports(
                             restored!, 1, new byte[32], recoveredReports, generation, digest,
-                            fullReplaceHlcWallFloor: 500, fullReplaceHlcLogicalFloor: 2)),
+                            fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2)),
                     nextReports, generation, digest,
-                    fullReplaceHlcWallFloor: 500, fullReplaceHlcLogicalFloor: 2);
+                    fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
                 gc.AcceptRetentionCheckpoint(
                     NamespaceRetentionCheckpointProtocol.Sign(nextCheckpoint, keys[0].Seed),
                     restored!, trust);
 
                 Assert.True(gc.HasProtocolTombstoneGcProof(
-                    restored!, trust, origin, originEpoch, finalIssued, 500, 2, generation, digest));
+                    restored!, trust, origin, originEpoch, finalIssued, 100, 2, generation, digest));
                 Assert.Equal(finalIssued, nextReports.Single(
                     report => report.MemberNodeId == restored!.Members[2].NodeId)
                     .Entries.Single().ContiguousAppliedOriginSequence);
