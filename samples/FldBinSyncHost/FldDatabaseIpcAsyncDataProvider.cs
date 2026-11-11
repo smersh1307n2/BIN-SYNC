@@ -97,6 +97,12 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     public async ValueTask AppendLocalChangeAsync(
         ProviderMutation mutation, CancellationToken cancellationToken = default)
     {
+        _ = await AppendLocalChangeWithReceiptAsync(mutation, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<ulong> AppendLocalChangeWithReceiptAsync(
+        ProviderMutation mutation, CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(mutation);
         ThrowIfUnavailable(cancellationToken);
         await _feedGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -132,8 +138,12 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 activeEpoch, mutation.HlcWall, mutation.HlcLogical,
                 mutation.KeyEpoch, isTombstone);
             Guid operationId = new(mutation.ChangeId.ToArray(), bigEndian: true);
-            await _client.AppendLocalProviderBatchAutoSequenceAsync(
-                operationId, [local], cancellationToken).ConfigureAwait(false);
+            FldDatabaseIpcAutoSequenceWriteResult result =
+                await _client.AppendLocalProviderBatchAutoSequenceAsync(
+                    operationId, [local], cancellationToken).ConfigureAwait(false);
+            if (result.ClientSequence == 0)
+                throw new InvalidDataException("FLD auto-sequence append returned a zero receipt sequence.");
+            return result.ClientSequence;
         }
         finally
         {
@@ -141,47 +151,20 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         }
     }
 
-    public async ValueTask CommitPublishedOriginsAsync(
-        IReadOnlyList<ProviderPublishedOrigin> published,
-        CancellationToken cancellationToken = default)
+    public async ValueTask AcknowledgeOperationReceiptsAsync(
+        ulong throughSequence, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(published);
+        if (throughSequence == 0)
+            throw new ArgumentOutOfRangeException(nameof(throughSequence));
         ThrowIfUnavailable(cancellationToken);
-        if (published.Count == 0) return;
         await _feedGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             ThrowIfUnavailable(cancellationToken);
-            uint activeEpoch = _activeAuthorEpoch();
-            if (activeEpoch == 0)
-                throw new InvalidOperationException("The FLD provider has no active BIN-SYNC author epoch.");
-
-            var stamps = new FldPublishedOrigin[published.Count];
-            for (int i = 0; i < stamps.Length; i++)
-            {
-                ProviderPublishedOrigin item = published[i]
-                    ?? throw new ArgumentException("Published-origin list contains null.", nameof(published));
-                ProviderChange change = item.Change
-                    ?? throw new InvalidDataException("Published-origin entry has no provider change.");
-                if (change.ChangeId.IsZero || change.Mutation.ChangeId != change.ChangeId ||
-                    change.Mutation.AuthorNodeId != _localAuthor ||
-                    change.Mutation.OriginAuthorEpoch != activeEpoch ||
-                    change.Mutation.OriginSequence != 0 ||
-                    item.Origin.AuthorNodeId != _localAuthor ||
-                    item.Origin.AuthorEpoch != activeEpoch || item.Origin.Sequence == 0)
-                    throw new InvalidDataException("Published-origin entry does not match the active local draft identity.");
-                byte[] recordId = new byte[16];
-                change.Mutation.RecordId.WriteTo(recordId);
-                stamps[i] = new FldPublishedOrigin
-                {
-                    RecordId = recordId,
-                    FieldId = change.Mutation.FieldId,
-                    ChangeId = change.ChangeId.ToArray(),
-                    OriginAuthorEpoch = item.Origin.AuthorEpoch,
-                    OriginSequence = item.Origin.Sequence
-                };
-            }
-            await _client.CommitPublishedOriginsAsync(stamps, cancellationToken).ConfigureAwait(false);
+            bool acknowledged = await _client.AcknowledgeThroughAsync(
+                throughSequence, cancellationToken).ConfigureAwait(false);
+            if (!acknowledged)
+                throw new InvalidOperationException("FLD did not acknowledge the requested IPC receipt prefix.");
         }
         finally
         {
