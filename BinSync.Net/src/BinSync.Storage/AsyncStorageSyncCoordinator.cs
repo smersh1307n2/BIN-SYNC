@@ -404,11 +404,12 @@ public sealed class AsyncStorageSyncCoordinator
         if (_metadataStore is not IMetadataPeerStateStore peerStore)
             throw new InvalidOperationException("The configured Metadata Store does not support durable peer state.");
 
+        Dictionary<NodeId, ulong> ceilings;
         await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             RegisterInterestedPeer(session, _namespaceId);
-            var ceilings = new Dictionary<NodeId, ulong>();
+            ceilings = new Dictionary<NodeId, ulong>();
             foreach (NodeId author in peerStore.ReadOutboundAuthors(
                 _scopeId, _node.NodeId, _namespaceId))
             {
@@ -425,15 +426,19 @@ public sealed class AsyncStorageSyncCoordinator
                     _scopeId, _node.NodeId, _namespaceId, author);
                 if (high != 0) ceilings[author] = high;
             }
-
-            return await session.PushBatchAsync(
-                _node, _namespaceId, peerStore, _scopeId,
-                ceilings, schemaVersion, ct).ConfigureAwait(false);
         }
         finally
         {
             _asyncAdmissionGate.Release();
         }
+
+        // Never hold namespace admission while waiting for transport ACK: the peer may
+        // simultaneously send a batch whose receive path needs this same coordinator.
+        // The immutable reservation plus captured ceilings make this network phase safe
+        // to overlap with later publication and remote receive.
+        return await session.PushBatchAsync(
+            _node, _namespaceId, peerStore, _scopeId,
+            ceilings, schemaVersion, ct).ConfigureAwait(false);
     }
 
     /// <summary>
