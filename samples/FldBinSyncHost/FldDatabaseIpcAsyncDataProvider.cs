@@ -255,9 +255,11 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
         for (int i = 0; i < entries.Length; i++)
         {
             FldProviderSnapshotEntryMetadata metadata = page.Entries[i];
-            byte[] value = metadata.IsTombstone || metadata.IsRecordTombstone
-                ? Array.Empty<byte>()
-                : await ReadCompleteSnapshotValueAsync(handle, metadata, cancellationToken).ConfigureAwait(false);
+            byte[] value = metadata.IsRecordTombstone
+                ? FldLifecycle.DeadValue.ToArray()
+                : metadata.IsTombstone
+                    ? Array.Empty<byte>()
+                    : await ReadCompleteSnapshotValueAsync(handle, metadata, cancellationToken).ConfigureAwait(false);
             entries[i] = ToProviderMutation(metadata, value);
         }
         return new ProviderSnapshotPage(entries, page.NextIndex, !page.HasMore);
@@ -449,11 +451,19 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
         return value;
     }
 
-    private static ProviderMutation ToProviderMutation(
+    private ProviderMutation ToProviderMutation(
         FldProviderSnapshotEntryMetadata metadata, byte[] value)
     {
         bool recordTombstone = metadata.IsRecordTombstone;
         BatchId changeId = IsZero(metadata.ChangeId) ? default : BatchId.From(metadata.ChangeId);
+        NodeId author = NodeId.From(metadata.AuthorNodeId);
+        uint originEpoch = metadata.OriginAuthorEpoch;
+        if (originEpoch == 0 && !changeId.IsZero && author == _localAuthor)
+        {
+            originEpoch = _activeAuthorEpoch();
+            if (originEpoch == 0)
+                throw new InvalidOperationException("The local FLD snapshot draft has a ChangeId but no active author epoch.");
+        }
         return new ProviderMutation
         {
             RecordId = RecordId.From(metadata.RecordId),
@@ -462,11 +472,11 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider
             IsRecordTombstone = recordTombstone,
             HlcWall = metadata.HlcWall,
             HlcLogical = metadata.HlcLogical,
-            AuthorNodeId = NodeId.From(metadata.AuthorNodeId),
+            AuthorNodeId = author,
             KeyEpoch = recordTombstone ? (ushort)0 : metadata.KeyEpoch,
-            Value = recordTombstone || metadata.IsTombstone ? Array.Empty<byte>() : value,
+            Value = value,
             ChangeId = changeId,
-            OriginAuthorEpoch = metadata.OriginAuthorEpoch,
+            OriginAuthorEpoch = originEpoch,
             OriginSequence = metadata.OriginSequence
         };
     }
