@@ -29,7 +29,9 @@ public sealed class StorageSyncCoordinatorTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastCommit = batch;
-            return ValueTask.FromResult(_provider.ApplyRemoteBatch(batch.ApplyToken, batch.Mutations));
+            ProviderApplyReceipt applied = _provider.ApplyRemoteBatch(batch.ApplyToken, batch.Mutations);
+            return ValueTask.FromResult(new ProviderApplyReceipt(
+                batch.ApplyToken, batch.BatchDigest.ToArray(), applied.IsDuplicate));
         }
     }
 
