@@ -104,6 +104,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 clientBytes, operationBytes, receiptSequence, fingerprint, out _));
 
             await provider.AcknowledgeOperationReceiptsAsync(receiptSequence);
+            await provider.AcknowledgeOperationReceiptsAsync(receiptSequence);
             Assert.Throws<InvalidOperationException>(() =>
                 database.TryGetLocalOperationReceipt(clientBytes, operationBytes, receiptSequence, fingerprint, out _));
 
