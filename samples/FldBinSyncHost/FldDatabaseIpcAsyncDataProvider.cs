@@ -304,11 +304,9 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         for (int i = 0; i < entries.Length; i++)
         {
             FldProviderSnapshotEntryMetadata metadata = page.Entries[i];
-            byte[] value = metadata.IsRecordTombstone
-                ? FldLifecycle.DeadValue.ToArray()
-                : metadata.IsTombstone
-                    ? Array.Empty<byte>()
-                    : await ReadCompleteSnapshotValueAsync(handle, metadata, cancellationToken).ConfigureAwait(false);
+            byte[] value = metadata.IsRecordTombstone || metadata.IsTombstone
+                ? Array.Empty<byte>()
+                : await ReadCompleteSnapshotValueAsync(handle, metadata, cancellationToken).ConfigureAwait(false);
             entries[i] = ToProviderMutation(metadata, value);
         }
         return new ProviderSnapshotPage(entries, page.NextIndex, !page.HasMore);
@@ -354,49 +352,111 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         ThrowIfUnavailable(cancellationToken);
         byte[] recordBytes = new byte[16];
         recordId.WriteTo(recordBytes);
-        FldDatabaseIpcCurrentMetadata? metadata = await _client.ReadCurrentMetadataAsync(
-            recordBytes.ToArray(), fieldId, cancellationToken).ConfigureAwait(false);
-        if (metadata is null) return null;
 
-        byte[] value = metadata.IsTombstone
-            ? Array.Empty<byte>()
-            : await ReadCompleteCurrentValueAsync(recordBytes.ToArray(), fieldId, metadata, cancellationToken)
-                .ConfigureAwait(false);
-        bool recordTombstone = false;
-        if (fieldId == FldLifecycle.FieldId)
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            if (metadata.IsTombstone || !value.AsSpan().SequenceEqual(FldLifecycle.DeadValue))
-                return null;
-            recordTombstone = true;
-            value = Array.Empty<byte>();
+            FldDatabaseIpcCurrentMetadata? metadata = await _client.ReadCurrentMetadataAsync(
+                recordBytes, fieldId, cancellationToken).ConfigureAwait(false);
+            if (metadata is null) return null;
+
+            if (!metadata.IsTombstone && metadata.ValueLength > 0 && IsZero(metadata.ChangeId))
+                return await ReadCurrentFromSnapshotAsync(
+                    recordId, recordBytes, fieldId, cancellationToken).ConfigureAwait(false);
+
+            byte[] value;
+            try
+            {
+                value = metadata.IsTombstone
+                    ? Array.Empty<byte>()
+                    : await ReadCompleteCurrentValueAsync(
+                        recordBytes, fieldId, metadata, cancellationToken).ConfigureAwait(false);
+            }
+            catch (CurrentValueChangedException) when (attempt < 2)
+            {
+                continue;
+            }
+
+            bool recordTombstone = false;
+            if (fieldId == FldLifecycle.FieldId)
+            {
+                if (metadata.IsTombstone || !value.AsSpan().SequenceEqual(FldLifecycle.DeadValue))
+                    return null;
+                recordTombstone = true;
+                value = Array.Empty<byte>();
+            }
+
+            BatchId changeId = IsZero(metadata.ChangeId) ? default : BatchId.From(metadata.ChangeId);
+            NodeId author = NodeId.From(metadata.AuthorNodeId);
+            if (author.IsZero) author = _localAuthor;
+            uint originEpoch = metadata.OriginAuthorEpoch;
+            if (originEpoch == 0 && !changeId.IsZero && author == _localAuthor)
+            {
+                originEpoch = _activeAuthorEpoch();
+                if (originEpoch == 0)
+                    throw new InvalidOperationException("The local FLD draft has a ChangeId but no active author epoch.");
+            }
+
+            return new ProviderMutation
+            {
+                RecordId = recordId,
+                FieldId = fieldId,
+                IsTombstone = !recordTombstone && metadata.IsTombstone,
+                IsRecordTombstone = recordTombstone,
+                HlcWall = metadata.HlcWall,
+                HlcLogical = metadata.HlcLogical,
+                AuthorNodeId = author,
+                KeyEpoch = recordTombstone ? (ushort)0 : metadata.KeyEpoch,
+                Value = value,
+                ChangeId = changeId,
+                OriginAuthorEpoch = originEpoch,
+                OriginSequence = metadata.OriginSequence
+            };
         }
 
-        byte[] authorBytes = metadata.AuthorNodeId;
-        BatchId changeId = IsZero(metadata.ChangeId) ? default : BatchId.From(metadata.ChangeId);
-        uint originEpoch = metadata.OriginAuthorEpoch;
-        if (originEpoch == 0 && !changeId.IsZero &&
-            NodeId.From(authorBytes) == _localAuthor)
-        {
-            originEpoch = _activeAuthorEpoch();
-            if (originEpoch == 0)
-                throw new InvalidOperationException("The local FLD draft has a ChangeId but no active author epoch.");
-        }
+        throw new InvalidDataException("Current FLD field changed repeatedly while its version-fenced value was read.");
+    }
 
-        return new ProviderMutation
+    private async ValueTask<ProviderMutation?> ReadCurrentFromSnapshotAsync(
+        RecordId recordId,
+        ReadOnlyMemory<byte> recordBytes,
+        ushort fieldId,
+        CancellationToken cancellationToken)
+    {
+        // Legacy rows may have no ChangeId, so they cannot use the point-read
+        // version fence. Fall back to one immutable generation without creating
+        // a snapshot ACK barrier: this read covers only one requested field.
+        FldDatabaseIpcSnapshotHandle snapshot = await _client.OpenSnapshotAsync(
+            Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+        try
         {
-            RecordId = recordId,
-            FieldId = fieldId,
-            IsTombstone = !recordTombstone && metadata.IsTombstone,
-            IsRecordTombstone = recordTombstone,
-            HlcWall = metadata.HlcWall,
-            HlcLogical = metadata.HlcLogical,
-            AuthorNodeId = NodeId.From(authorBytes),
-            KeyEpoch = recordTombstone ? (ushort)0 : metadata.KeyEpoch,
-            Value = value,
-            ChangeId = changeId,
-            OriginAuthorEpoch = originEpoch,
-            OriginSequence = metadata.OriginSequence
-        };
+            int cursor = 0;
+            while (true)
+            {
+                FldProviderSnapshotMetadataPage page = await _client.ReadSnapshotPageAsync(
+                    snapshot, cursor, 256, cancellationToken).ConfigureAwait(false);
+                foreach (FldProviderSnapshotEntryMetadata metadata in page.Entries)
+                {
+                    if (metadata.FieldId != fieldId ||
+                        !metadata.RecordId.AsSpan().SequenceEqual(recordBytes.Span))
+                        continue;
+
+                    byte[] value = metadata.IsRecordTombstone || metadata.IsTombstone
+                        ? Array.Empty<byte>()
+                        : await ReadCompleteSnapshotValueAsync(snapshot, metadata, cancellationToken)
+                            .ConfigureAwait(false);
+                    return ToProviderMutation(metadata, value);
+                }
+
+                if (!page.HasMore) return null;
+                if (page.NextIndex <= cursor)
+                    throw new InvalidDataException("FLD snapshot metadata cursor did not advance.");
+                cursor = page.NextIndex;
+            }
+        }
+        finally
+        {
+            await _client.ReleaseSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -514,7 +574,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 (uint)Math.Min(1024 * 1024, FldDatabaseIpcProtocol.MaxCurrentValueChunkBytes),
                 cancellationToken).ConfigureAwait(false);
             if (chunk.Status != FldDatabaseIpcCurrentReadStatus.Data)
-                throw new InvalidDataException("Current field changed or disappeared while its value was being read.");
+                throw new CurrentValueChangedException();
             if (chunk.ValueLength != metadata.ValueLength || chunk.ValueOffset != offset ||
                 chunk.ValueChunk.Length == 0 || (ulong)offset + (uint)chunk.ValueChunk.Length > metadata.ValueLength)
                 throw new InvalidDataException("Current value chunk is inconsistent with its metadata.");
@@ -530,6 +590,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         bool recordTombstone = metadata.IsRecordTombstone;
         BatchId changeId = IsZero(metadata.ChangeId) ? default : BatchId.From(metadata.ChangeId);
         NodeId author = NodeId.From(metadata.AuthorNodeId);
+        if (author.IsZero) author = _localAuthor;
         uint originEpoch = metadata.OriginAuthorEpoch;
         if (originEpoch == 0 && !changeId.IsZero && author == _localAuthor)
         {
@@ -609,6 +670,14 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     {
         if (key.Length != sizeof(ushort)) throw new ArgumentException("FLD FieldId keys must be two bytes.", nameof(key));
         return BinaryPrimitives.ReadUInt16LittleEndian(key.Span);
+    }
+
+    private sealed class CurrentValueChangedException : IOException
+    {
+        public CurrentValueChangedException()
+            : base("Current FLD field changed while its value was being read.")
+        {
+        }
     }
 
     private static bool IsZero(ReadOnlySpan<byte> value)
