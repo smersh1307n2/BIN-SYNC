@@ -161,10 +161,10 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         try
         {
             ThrowIfUnavailable(cancellationToken);
-            bool acknowledged = await _client.AcknowledgeThroughAsync(
+            // False means the same contiguous prefix was already acknowledged;
+            // the receipt ACK operation is intentionally idempotent.
+            _ = await _client.AcknowledgeThroughAsync(
                 throughSequence, cancellationToken).ConfigureAwait(false);
-            if (!acknowledged)
-                throw new InvalidOperationException("FLD did not acknowledge the requested IPC receipt prefix.");
         }
         finally
         {
