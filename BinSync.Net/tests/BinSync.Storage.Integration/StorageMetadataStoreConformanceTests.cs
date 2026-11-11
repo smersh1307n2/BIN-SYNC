@@ -1273,6 +1273,73 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Peer_epoch_retirement_is_atomic_when_crash_occurs_after_wal_flush_before_memory_publish()
+    {
+        string directory = Path.Combine(_root, "peer-retirement-commit-crash");
+        const ulong partitionId = 458;
+        const int namespaceId = 7;
+        const string scope = "peer-retirement-commit-crash";
+        NodeId local = Node(1), peer = Node(2), author = Node(3);
+        ulong beforeRetirementCommit;
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, partitionId))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                store.FreezeOutbound(scope, local, namespaceId, author,
+                    new[] { FrozenOperation(210, 211) });
+                store.RegisterInterestedPeer(scope, local, peer, 1, namespaceId);
+                store.CompletePeerInitialSync(scope, local, peer, 1, namespaceId,
+                    new[] { new MetadataPeerStreamBaseline(author, 1, 1) });
+                store.RegisterInterestedPeer(scope, local, peer, 2, namespaceId);
+                store.CompletePeerInitialSync(scope, local, peer, 2, namespaceId,
+                    new[] { new MetadataPeerStreamBaseline(author, 1, 1) });
+
+                Assert.Equal(2, store.ReadInterestedPeers(scope, local, namespaceId).Count);
+                Assert.Single(store.ReadPeerStreamStates(scope, local, peer, 1, namespaceId));
+                Assert.Single(store.ReadPeerStreamStates(scope, local, peer, 2, namespaceId));
+                beforeRetirementCommit = storage.LastCommitSeq;
+            }
+
+            // The WAL record is flushed, then the injected exception interrupts the
+            // in-memory publish callback. Reopen must replay the entire retirement batch.
+            using (var faultingStorage = StorageDatabase.OpenForTesting(directory, partitionId, point =>
+            {
+                if (point == StorageFaultPoint.AfterWalFlushBeforePublish)
+                    throw new IOException("Injected crash after peer-retirement WAL flush.");
+            }))
+            using (var faultingStore = new StorageMetadataStore(faultingStorage))
+            {
+                Assert.Throws<IOException>(() =>
+                    faultingStore.RetireInterestedPeer(scope, local, peer, 1, 2, namespaceId));
+            }
+
+            using var recoveredStorage = StorageDatabase.Open(directory, partitionId);
+            using var recovered = new StorageMetadataStore(recoveredStorage);
+            Assert.Equal(beforeRetirementCommit + 1, recoveredStorage.LastCommitSeq);
+            var activePeer = Assert.Single(recovered.ReadInterestedPeers(scope, local, namespaceId));
+            Assert.Equal(2U, activePeer.PeerEpoch);
+            Assert.Equal(1U, recovered.GetRetiredPeerEpoch(scope, local, peer, namespaceId));
+            Assert.Empty(recovered.ReadPeerStreamStates(scope, local, peer, 1, namespaceId));
+            var replacementStream = Assert.Single(
+                recovered.ReadPeerStreamStates(scope, local, peer, 2, namespaceId));
+            Assert.Equal(author, replacementStream.AuthorStream);
+            Assert.Equal(1UL, replacementStream.State.StreamOffset);
+
+            // Replaying the retirement after reopen is idempotent and creates no
+            // second commit: the roster, old-row deletes and retired fence were atomic.
+            ulong afterRecovery = recoveredStorage.LastCommitSeq;
+            recovered.RetireInterestedPeer(scope, local, peer, 1, 2, namespaceId);
+            Assert.Equal(afterRecovery, recoveredStorage.LastCommitSeq);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Namespace_peer_roster_enrolls_future_outbound_author_streams()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-roster-future-stream"), 428);
