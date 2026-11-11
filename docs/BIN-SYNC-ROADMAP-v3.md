@@ -1,3 +1,13 @@
+## 1.72. Exact-head cross-repository FLD integration gate fully green — 2026-11-11
+
+- [x CI] BIN-SYNC exact head 2d65688aeee32eb8d2732bf718b6dca182df6949 passed workflow run 42963323793. Every job completed successfully.
+- [x CI] The public FLD checkout and FldBinSyncHost build passed on both Ubuntu and Windows; FldBinSyncHost.Tests passed 14/14 on each OS.
+- [x CI] FLD suites passed on both OSes: Core 23/23, Storage 66/66, Manifest 11/11, Run 26/26, WAL 21/21 and Engine 71/71. FLD branch fix/crash-consistency-outbox was at d6a6857eaaa28230f46feaca181faf340ad4e8ac; the default-chunk fixture correction is included.
+- [x CI] BIN-SYNC Core passed 678/678 on Linux and Windows; benchmark build, public samples, coverage threshold, fuzz/lab and v3.1 signed control-plane vectors all passed.
+- [x CI] Separate Storage Integration run 42963323775 passed on Ubuntu, Windows and macOS.
+- [x C] The former private-repository gate is closed: no FLD_DB_READ_TOKEN is required, and the cross-repository host tests are now actually executed rather than skipped.
+- [ ] Next: continue the remaining Phase 3–5 proof work. Keep physical receipt, ChangeId and tombstone/ghost GC disabled until each independent safe-horizon, composed-lease, crash/reopen and adversarial proof is complete.
+
 ## 1.71. FLD public host build passes; default-chunk test corrected — 2026-11-11
 
 - [x CI] Public FLD checkout and FldBinSyncHost build succeeded on both Ubuntu and Windows without FLD_DB_READ_TOKEN; both host adapter builds completed with zero warnings/errors.
