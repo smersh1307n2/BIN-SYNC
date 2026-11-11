@@ -3122,3 +3122,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [~ C] Define an opaque snapshot handle bound to ClientId and the Host generation, with stable page cursors, bounded value chunks, explicit release, and clear Host-restart semantics. Any pin that survives restart must be durable before it can protect Run files from GC/compaction; otherwise restart must invalidate the handle and reject stale use.
 - [~ T] Verify concurrent local writes, checkpoint, compaction and tombstone retention while paging; prove no page sees post-open writes, no pinned Run is reclaimed, release permits reclamation, and Host restart follows the documented handle policy.
 
+
+
+### 1.79 — Reconcile async-provider IPC inventory against implemented snapshot contract
+
+- [x A] Re-audited `FldDatabaseIpcClient`, dispatcher and `FldProviderSnapshot`: snapshot-open already returns the exact source-feed watermark captured with the immutable generation; metadata pages already expose current field provenance; bounded value chunks read from the same pinned generation.
+- [x A] Removed the assumption that a separate high-watermark RPC and a new current-state metadata RPC are prerequisites. A correct initial `ReadCurrentAsync` can use bounded snapshot traversal; this is a correctness-first fallback with linear lookup cost, not a point-read performance claim.
+- [x D] Updated FLD-DB `docs/FLD-DATABASE-IPC.md` in commit `f64190ba280d1cfe58ed639b18ea8b2be62a14d4` and this ADR to record the existing capability and prevent redundant protocol expansion.
+- [ ] C/T Implement the IPC-backed async provider using the existing operations, with a durable client identity/operation-sequence store supplied by the host; test retry after response loss and host restart before coordinator work.
+- [ ] C/T Add the genuinely missing atomic IPC contracts for published-origin stamping and durable publication/author-epoch transitions. Keep FULL_REPLACE, snapshot-state apply and GC disabled until their full capability contracts and safe-horizon proofs exist.
+- [ ] A/D Prove the async commit-barrier design across every conflicting writer before implementing the async coordinator; no thread-affine Monitor may cross an await.
