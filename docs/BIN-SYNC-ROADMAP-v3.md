@@ -3366,3 +3366,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Reworked the real Host process integration to use that failpoint: the caller must observe IPC response loss, the Host process must exit, and after restart against the same database root a fresh IPC client retries the exact immutable batch. The ApplyJournal must return the original ApplyToken/fingerprint as a duplicate; persisted value, ChangeId, origin epoch/sequence and zero local Outbox watermark are asserted.
 - [x CI] Exact BIN-SYNC head `8adf57d34b493f9d85f73581969641475a160a66` passed PR run `43056768685` (6/6 jobs), including the real-process response-loss/restart test on both Ubuntu and Windows, Linux/Windows .NET suites, Fuzz/Lab and v3.1 vectors. The matching FLD-DB host branch head `b0504fd2186eb3ea299f32b920122843ec931971` passed its independent Ubuntu/Windows/macOS CI run `43056180963` (3/3).
 - [ ] T Extend the same process-level approach to lost transport ACK and the complete receive-intent → Node checkpoint → FLD APPLY receipt → Metadata finalization interruption matrix on both peers.
+
+
+## 1.96. Transport ACK loss and immutable replay — 2026-11-11
+
+- [x C/T] Added `Lost_transport_ack_replays_same_batch_after_reconnect_without_reapplying` to the real `SyncSession` transport tests. The receiver applies the DELTA_BATCH, then an opt-in test transport drops the first ACK and closes the channel before delivery. The sender therefore has no durable ACK cursor and must replay the same pending batch after a fresh handshake.
+- [x T] The retry assertions require the receiver to recognize the duplicate without applying the operation again, retain the exact value, and return the ACK that advances the sender's per-author cursor. This complements §1.95's real FLD Host process crash after durable APPLY but before IPC response; it is a transport/session test, not yet a two-Host FLD ACK-loss process test.
+- [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository builds/tests must pass before this transport-loss proof is considered verified.
+- [ ] T Extend ACK-loss coverage through two independent FLD Database Host processes and the async Metadata/FLD adapter, then add crash/restart interruption tests across receive intent, Node checkpoint, provider APPLY receipt and Metadata finalization.
