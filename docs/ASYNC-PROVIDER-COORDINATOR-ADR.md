@@ -232,3 +232,39 @@ Exact-head verification passed:
 - Storage Integration run `43012649100`: Ubuntu, Windows and macOS — 3/3 jobs.
 
 This establishes the tested recovery primitive, not a completed process-isolated async coordinator. The existing `StorageSyncCoordinator` still has a synchronous `IDataProvider` dependency for its other operations; the production async-only provider path still needs a first-class async coordinator and async local-feed publication.
+
+
+## Async local-feed publication and receipt ACK design — 2026-11-11
+
+### Identity and ordering
+
+FLD `ClientSequence` is not the provider Outbox sequence, BIN-SYNC Node Outbox sequence, or Metadata outbound sequence. It is the contiguous receipt sequence for the stable FLD IPC ClientId. The idempotent operation identity remains the local ChangeId-derived OperationId and exact mutation fingerprint.
+
+The async coordinator must recover the FLD receipt sequence for every unacknowledged local ChangeId before it can retire that receipt. For an unstamped feed mutation (`OriginSequence == 0`), it may safely call `AppendLocalChangeWithReceiptAsync` again with the exact mutation: FLD returns the original ClientSequence for the same OperationId/fingerprint. A feed row already stamped with an OriginSequence must already have a matching durable Node-WAL receipt mapping; if it does not, fail closed rather than guessing or recreating an acknowledged operation.
+
+### Node WAL representation
+
+Add compact Node-WAL records for:
+- `(NamespaceId, ChangeId) -> ClientSequence` with a Published bit;
+- transition of that receipt mapping to Published after Metadata freeze, provider origin stamping, Node cache update and durable Node checkpoint;
+- acknowledgement of a contiguous ClientSequence prefix, which removes only those published mappings.
+
+No application payload, duplicate operation body, or second pending journal is stored in BIN-SYNC. FLD's WAL and receipt table remain authoritative for the actual write and idempotent result; BIN-SYNC's WAL stores only the sequence needed to retire the FLD receipt safely.
+
+Use WAL format v4 for the new record kinds. Existing v3 segments must be validated and atomically upgraded before v4 records are appended; ReplayFile must continue to read v3 segments. A checkpoint must not truncate a WAL while unresolved receipt mappings remain. This allows NodePersistence v17 snapshots to remain unchanged: unresolved mapping state is retained in the WAL, and the WAL can be truncated only after provider receipt ACK has succeeded and the ACK record has removed the mapping.
+
+### Required publication order
+
+1. Capture the provider Outbox high-watermark and scan only through that immutable ceiling.
+2. For each local ChangeId in the captured prefix, obtain/recover its stable ClientSequence through the exact idempotent append retry when needed; append the receipt mapping to Node WAL before any feed/receipt ACK.
+3. Freeze immutable operations in Metadata Store, commit published origins in FLD, update the Node cache, and persist the Node checkpoint.
+4. Mark the corresponding receipt mappings Published in Node WAL.
+5. Acknowledge the provider Outbox through the scanned feed cursor.
+6. Compute the contiguous Published ClientSequence prefix and call `AcknowledgeOperationReceiptsAsync`.
+7. Only after that provider ACK succeeds, append the Node-WAL receipt-ACK record and remove the mappings.
+
+The two ACKs remain independent. If Outbox ACK succeeds and receipt ACK response is lost, the retained WAL mappings allow an idempotent receipt-ACK retry even though the Outbox rows are gone. If receipt ACK succeeds but the Node-WAL ACK record is not durable, the retry is harmless because FLD receipt ACK is idempotent. Never append the WAL ACK record before the provider receipt ACK succeeds.
+
+### Concurrency and failure rules
+
+The async coordinator serializes its own publication pass and remote APPLY through one async admission gate, captures a finite feed ceiling, and does not hold a Monitor across IPC. A local write after the ceiling belongs to the next pass. Receipt sequences must be unique and contiguous for the configured ClientId; missing sequence mappings, sequence reuse, a stamped row without a retained mapping, or a non-contiguous Published prefix are hard failures. The provider Outbox ACK must never imply receipt ACK, and vice versa.
