@@ -254,6 +254,14 @@ public sealed class StorageSyncCoordinatorTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
 
+        // This focused test starts after the snapshot phase: establish the durable
+        // zero-offset stream baseline before asking the incremental sender to push.
+        metadata.RegisterInterestedPeer(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)initiator.PeerEpoch), 1);
+        metadata.CompletePeerInitialSync(scope, sender.NodeId, receiver.NodeId,
+            checked((uint)initiator.PeerEpoch), 1,
+            new[] { new MetadataPeerStreamBaseline(sender.NodeId, 0, checked((uint)sender.Epoch)) });
+
         var senderCoordinator = new AsyncStorageSyncCoordinator(sender, metadata, scope, 1);
         var receiverCoordinator = new AsyncStorageSyncCoordinator(receiver, metadata, scope, 1);
         var remoteProvider = new RecordingAsyncRemoteBatchStore(provider);
