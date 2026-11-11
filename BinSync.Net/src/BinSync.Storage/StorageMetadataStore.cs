@@ -180,20 +180,27 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 throw new InvalidDataException("Provider receipt stream binding has no partition identity row.");
             if (hasIdentity)
                 ValidatePartitionIdentity(partition, identity!);
-            if (hasNamespaceBinding != hasClientBinding)
-                throw new InvalidDataException("Provider receipt stream indexes are incomplete.");
 
             if (hasNamespaceBinding)
             {
-                if (namespaceValue!.Length != 16 || new Guid(namespaceValue) != receiptStreamId)
+                if (namespaceValue!.Length != 16)
+                    throw new InvalidDataException("Provider receipt namespace binding has an invalid length.");
+                if (new Guid(namespaceValue) != receiptStreamId)
                     throw new InvalidOperationException(
                         "BIN-SYNC namespace is already bound to a different FLD ClientId/receipt stream.");
-                if (clientValue!.Length != 2 ||
-                    BinaryPrimitives.ReadUInt16LittleEndian(clientValue) != ns)
+            }
+            if (hasClientBinding)
+            {
+                if (clientValue!.Length != 2)
+                    throw new InvalidDataException("Provider receipt ClientId binding has an invalid namespace value.");
+                if (BinaryPrimitives.ReadUInt16LittleEndian(clientValue) != ns)
                     throw new InvalidOperationException(
                         "FLD ClientId is already bound to a different BIN-SYNC namespace.");
-                return receiptStreamId;
             }
+            if (hasNamespaceBinding != hasClientBinding)
+                throw new InvalidDataException("Provider receipt stream indexes are incomplete.");
+            if (hasNamespaceBinding)
+                return receiptStreamId;
 
             using var batch = _storage.BeginWriteBatch();
             ulong actualBaseCommitSeq = _storage.LastCommitSeq;
