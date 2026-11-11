@@ -72,6 +72,65 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Async_pending_apply_recovery_replays_exact_wire_payload_before_finalizing_metadata()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-pending-recovery"), 428);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var sender = NewNode(38);
+        using var receiver = NewNode(39);
+        var (toSender, toReceiver) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        var connectTask = SyncSession.ConnectAsync(sender, toSender);
+        await using var acceptor = await acceptTask;
+        await using var initiator = await connectTask;
+        var coordinator = new StorageSyncCoordinator(receiver, provider, 1, metadata, "async-pending-recovery");
+        var asyncProvider = new RecordingAsyncRemoteBatchStore(provider);
+
+        RecordId record = RecordId.From(Guid.Parse("38000000-0000-0000-0000-000000000038").ToByteArray());
+        Assert.True(sender.WriteField(1, record, 0x0838, "async-recover"u8.ToArray(), new Hlc(5380, 0)));
+
+        using var sendCts = new CancellationTokenSource();
+        var receive = acceptor.ReceiveBatchAsync(receiver,
+            beforeApply: null,
+            beforeApplyWithOperationDecisions: (batch, payload, peer) =>
+            {
+                _ = coordinator.BeginRemoteBatchBeforeNodeApply(batch, payload.ToArray(), peer);
+                throw new InvalidOperationException("simulated process interruption after durable PendingApply");
+            },
+            beforeAck: null,
+            ct: CancellationToken.None,
+            receiveStateOwnedByMetadataStore: true);
+        Task<bool> send = initiator.PushBatchAsync(sender, 1, ct: sendCts.Token);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await receive);
+        sendCts.Cancel();
+        try { _ = await send; }
+        catch (OperationCanceledException) { }
+        catch (IOException) { }
+
+        MetadataPendingApplyIntent pending = Assert.Single(
+            metadata.ReadPendingApplyIntents("async-pending-recovery", receiver.NodeId));
+        Assert.True(pending.Batch.ReceiveStateOwnedByMetadataStore);
+        Assert.NotEmpty(pending.Batch.WirePayload);
+        Assert.False(receiver.TryGetField(1, record, 0x0838, out _));
+        Assert.False(provider.TryReadCurrent(record, 0x0838, out _));
+
+        int recovered = await coordinator.RecoverPendingAppliesAsync(
+            asyncProvider, node => StorageNodePersistence.Save(storage, node));
+
+        Assert.Equal(1, recovered);
+        Assert.NotNull(asyncProvider.LastCommit);
+        Assert.Equal(pending.ApplyToken, asyncProvider.LastCommit!.ApplyToken);
+        Assert.Equal(sender.NodeId, asyncProvider.LastCommit.SenderPeer);
+        Assert.Empty(metadata.ReadPendingApplyIntents("async-pending-recovery", receiver.NodeId));
+        Assert.True(receiver.TryGetField(1, record, 0x0838, out var nodeValue));
+        Assert.Equal("async-recover", Encoding.UTF8.GetString(nodeValue!.Value));
+        Assert.True(provider.TryReadCurrent(record, 0x0838, out var providerValue));
+        Assert.Equal("async-recover", Encoding.UTF8.GetString(providerValue!.Value));
+    }
+
+    [Fact]
     public async Task Pending_receive_intent_replays_wire_batch_into_node_and_provider_after_interruption()
     {
         using var storage = StorageDatabase.Open(Path.Combine(_root, "pending-receive-recovery"), 427);
