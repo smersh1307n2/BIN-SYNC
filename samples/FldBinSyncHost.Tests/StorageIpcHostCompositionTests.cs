@@ -44,13 +44,20 @@ public sealed class StorageIpcHostCompositionTests
                     _ = database.Commit();
                     return ValueTask.FromResult<ReadOnlyMemory<byte>>(requestedRecord);
                 },
-                maxConcurrentClients: 2);
+                maxConcurrentClients: 1);
             Task serverTask = server.RunAsync(serverCancellation.Token);
 
             try
             {
                 await using var client = await StorageIpcClientConnection.ConnectAsync(
                     pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10));
+                Exception? overload = await Record.ExceptionAsync(async () =>
+                    await StorageIpcClientConnection.ConnectAsync(
+                        pipeName, Guid.NewGuid(), TimeSpan.FromSeconds(10)));
+                Assert.NotNull(overload);
+                Assert.True(overload is IOException or InvalidDataException,
+                    $"Expected a transport-level overload rejection, received {overload.GetType().Name}.");
+
                 byte[] request = new byte[20 + value.Length];
                 recordId.CopyTo(request, 0);
                 BinaryPrimitives.WriteUInt16LittleEndian(request.AsSpan(16), fieldId);
