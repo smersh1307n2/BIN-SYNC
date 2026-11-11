@@ -1,6 +1,6 @@
 # Async Data Provider and Coordinator Architecture
 
-Status: Proposed; implementation gate for process-isolated FLD integration.
+Status: Partially implemented; two-host process-isolated integration and production host-composition gates remain open.
 
 Date: 2026-11-11
 
@@ -268,3 +268,24 @@ The two ACKs remain independent. If Outbox ACK succeeds and receipt ACK response
 ### Concurrency and failure rules
 
 The async coordinator serializes its own publication pass and remote APPLY through one async admission gate, captures a finite feed ceiling, and does not hold a Monitor across IPC. A local write after the ceiling belongs to the next pass. Receipt sequences must be unique and contiguous for the configured ClientId; missing sequence mappings, sequence reuse, a stamped row without a retained mapping, or a non-contiguous Published prefix are hard failures. The provider Outbox ACK must never imply receipt ACK, and vice versa.
+
+
+## Current implementation status — 2026-11-11
+
+The first-class `AsyncStorageSyncCoordinator` is now implemented in `BinSync.Net/src/BinSync.Storage/AsyncStorageSyncCoordinator.cs`. It provides:
+- metadata-authoritative PendingApply staging, contextual async remote APPLY, before-transport-ACK finalization and exact-payload startup recovery;
+- finite-ceiling FLD local-feed publication, stable ChangeId-to-ClientSequence recovery in the existing Node WAL, immutable Metadata freeze, published-origin stamping, Node cache checkpoint, and independent source Outbox / operation-receipt ACK ordering;
+- startup orchestration that recovers pending remote APPLY before publishing the captured local feed.
+
+The process-isolated sample test `Async_storage_coordinator_publishes_through_real_database_host_and_survives_host_restart` now runs the async local-publication coordinator against a separately launched FLD Database Host. It restarts the Host after the durable provider append but before the Node-WAL receipt mapping, reconnects with the same ClientId, completes publication, and verifies the persisted result after another Host restart. This proves one real IPC/local-publication recovery path; it does not prove bidirectional synchronization between two independent Hosts.
+
+The following remain implementation/release gates:
+1. two independent FLD Database Host processes and two independent BIN-SYNC coordinators exchanging changes in both directions through the async receive-before-ACK path;
+2. response-loss and restart injection after Metadata freeze, origin stamping, Node checkpoint, source Outbox ACK, receipt ACK, remote provider APPLY and Metadata finalization;
+3. namespace-wide admission across multiple sessions and a demonstrated barrier against concurrent application writes, relay reconciliation and receive/apply;
+4. explicit production async host composition. `FldBinSyncHostAdapter` and `FldBinSyncSessionScheduler` still use the synchronous reference coordinator;
+5. async snapshot rehydration, author-epoch lifecycle, FULL_REPLACE and the corresponding durable recovery/guard capabilities.
+
+The exact branch code head `21f4b9e4182bba02ee8350b099f1dd374347c7ed` passed BIN-SYNC PR run `43034559837` (6/6 jobs) and FLD Storage Integration PR run `43034559505` (3/3 jobs). These results validate the code at that head, not the still-open two-host or crash-matrix gates above.
+
+No sync-over-async bridge is permitted. Physical receipt, ChangeId and tombstone/Ghost GC remain disabled until the independent v3.1 proofs and adversarial tests are complete.
