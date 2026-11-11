@@ -784,10 +784,11 @@ public sealed class StorageIpcHostCompositionTests
                     await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
                     await using var reconnected = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
                         directory, clientId, TimeSpan.FromSeconds(10));
-                    FldDatabaseIpcWriteResult replay = await reconnected.AppendLocalProviderBatchAutoSequenceAsync(
+                    FldDatabaseIpcAutoSequenceWriteResult replay = await reconnected.AppendLocalProviderBatchAutoSequenceAsync(
                         operationId, new[] { mutation });
                     Assert.True(replay.IsDuplicate);
                     Assert.Equal(1, replay.MutationCount);
+                    Assert.Equal(1UL, replay.ClientSequence);
                     Assert.Equal(1UL, await reconnected.GetOutboxHighWatermarkAsync());
                 }
                 finally
