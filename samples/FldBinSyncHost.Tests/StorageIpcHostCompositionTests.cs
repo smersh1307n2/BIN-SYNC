@@ -305,6 +305,120 @@ public sealed class StorageIpcHostCompositionTests
         }
     }
 
+    [Fact]
+    public async Task Storage_ipc_replays_committed_operation_after_response_loss_and_host_restart()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-fld-ipc-ledger-restart-" + Guid.NewGuid().ToString("N"));
+        string pipeName = "fld1-ipc-" + Guid.NewGuid().ToString("N");
+        const ulong partition = 0x3106;
+        Guid clientId = Guid.Parse("31060000-0000-0000-0000-000000000001");
+        Guid operationId = Guid.Parse("31060000-0000-0000-0000-000000000002");
+        byte[] dataKey = "restart-proof-key"u8.ToArray();
+        byte[] dataValue = "one-durable-effect"u8.ToArray();
+        byte[] requestPayload = "write-restart-proof"u8.ToArray();
+        byte[] fingerprint = StorageIpcOperationLedger.ComputeFingerprint(6, requestPayload);
+        byte[] result = "durably-committed"u8.ToArray();
+        byte[] envelope = StorageIpcOperationProtocol.Encode(
+            new StorageIpcOperationEnvelope(operationId, 6, requestPayload));
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, partition))
+            {
+                var ledger = new StorageIpcOperationLedger(storage);
+                using var serverCancellation = new CancellationTokenSource();
+                var server = new StorageIpcServer(
+                    pipeName,
+                    (context, request, cancellationToken) =>
+                    {
+                        StorageIpcOperationEnvelope operation = StorageIpcOperationProtocol.Decode(request);
+                        byte[] requestFingerprint = StorageIpcOperationLedger.ComputeFingerprint(
+                            operation.OperationCode, operation.Payload.Span);
+                        if (ledger.TryGetResult(
+                            context.ClientId, operation.OperationId, requestFingerprint, out byte[]? prior))
+                            return ValueTask.FromResult<ReadOnlyMemory<byte>>(prior!);
+
+                        using var batch = storage.BeginWriteBatch();
+                        batch.Put(dataKey, dataValue);
+                        if (!ledger.TryStageResult(
+                            batch, context.ClientId, operation.OperationId,
+                            requestFingerprint, result, out prior))
+                            return ValueTask.FromResult<ReadOnlyMemory<byte>>(prior!);
+
+                        batch.Commit();
+                        // Simulate process shutdown after the durable commit but before
+                        // the response frame can be written to the connected client.
+                        serverCancellation.Cancel();
+                        return ValueTask.FromResult<ReadOnlyMemory<byte>>(result);
+                    });
+                Task serverTask = server.RunAsync(serverCancellation.Token);
+
+                try
+                {
+                    await using var client = await StorageIpcClientConnection.ConnectAsync(
+                        pipeName, clientId, TimeSpan.FromSeconds(10));
+                    Exception lostResponse = await Assert.ThrowsAnyAsync<Exception>(async () =>
+                        await client.RequestAsync(envelope));
+                    Assert.True(lostResponse is IOException or InvalidDataException or ObjectDisposedException,
+                        $"Expected response loss after durable commit, received {lostResponse.GetType().Name}.");
+                }
+                finally
+                {
+                    serverCancellation.Cancel();
+                    await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+                }
+
+                Assert.Equal(1UL, storage.LastCommitSeq);
+                Assert.True(storage.TryGet(dataKey, out byte[]? firstStored));
+                Assert.Equal(dataValue, firstStored);
+            }
+
+            using (var reopened = StorageDatabase.Open(directory, partition))
+            {
+                var ledger = new StorageIpcOperationLedger(reopened);
+                using var serverCancellation = new CancellationTokenSource();
+                var server = new StorageIpcServer(
+                    pipeName,
+                    (context, request, cancellationToken) =>
+                    {
+                        StorageIpcOperationEnvelope operation = StorageIpcOperationProtocol.Decode(request);
+                        byte[] requestFingerprint = StorageIpcOperationLedger.ComputeFingerprint(
+                            operation.OperationCode, operation.Payload.Span);
+                        if (!ledger.TryGetResult(
+                            context.ClientId, operation.OperationId, requestFingerprint, out byte[]? prior))
+                            throw new InvalidOperationException("The committed operation result was not recovered.");
+                        return ValueTask.FromResult<ReadOnlyMemory<byte>>(prior!);
+                    });
+                Task serverTask = server.RunAsync(serverCancellation.Token);
+
+                try
+                {
+                    await using var reconnectedClient = await StorageIpcClientConnection.ConnectAsync(
+                        pipeName, clientId, TimeSpan.FromSeconds(10));
+                    ReadOnlyMemory<byte> replayed = await reconnectedClient.RequestAsync(envelope);
+                    Assert.Equal(result, replayed.ToArray());
+                }
+                finally
+                {
+                    serverCancellation.Cancel();
+                    await serverTask.WaitAsync(TimeSpan.FromSeconds(10));
+                }
+
+                Assert.Equal(1UL, reopened.LastCommitSeq);
+                Assert.True(reopened.TryGet(dataKey, out byte[]? recoveredData));
+                Assert.Equal(dataValue, recoveredData);
+                Assert.True(ledger.TryGetResult(
+                    clientId, operationId, fingerprint, out byte[]? recoveredResult));
+                Assert.Equal(result, recoveredResult);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     private static byte[] Id(byte value)
     {
         byte[] bytes = new byte[16];
