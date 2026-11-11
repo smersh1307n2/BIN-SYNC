@@ -389,10 +389,10 @@ public sealed class AsyncStorageSyncCoordinator
 
     /// <summary>
     /// Deliver one immutable Metadata-owned outbound batch to a registered peer.
-    /// Local publication, remote APPLY and outbound reservation/ACK share the same
-    /// namespace admission gate, so this coordinator never interleaves those phases.
-    /// The captured per-author ceilings prevent this send from observing a later,
-    /// not-yet-published provider feed suffix.
+    /// Capture the outbound ceiling under the metadata lock, but do not take the
+    /// namespace admission semaphore: an inbound receive may hold that semaphore
+    /// while waiting for this peer to send. Durable peer reservations serialize the
+    /// send/ACK lifecycle; the captured ceilings exclude later publication suffixes.
     /// </summary>
     public async Task<bool> PushNextBatchAsync(
         SyncSession session,
