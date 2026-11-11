@@ -1110,7 +1110,7 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
             {
                 var gcStore = new StorageNamespaceGcStore(
                     storage, "fld-db/gc-disabled", Node(99));
-                using var trust = new TrustStore();
+                var trust = new TrustStore();
                 provider.AppendLocalChange(new ProviderMutation
                 {
                     RecordId = record,
