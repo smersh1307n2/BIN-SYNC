@@ -139,6 +139,95 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
     }
 
+    [Fact]
+    public async Task Async_remote_apply_uses_real_database_host_and_is_idempotent_across_ipc_clients()
+    {
+        string hostRoot = Path.Combine(Path.GetTempPath(), "fld-binsync-async-apply-" + Guid.NewGuid().ToString("N"));
+        const ushort namespaceId = 0x536;
+        byte[] localAuthor = Id(0x65);
+        byte[] sender = Id(0x66);
+        byte[] issuer = Id(0x67);
+        byte[] recordBytes = Id(0x68);
+        byte[] changeBytes = Id(0x69);
+        byte[] batchBytes = Id(0x6A);
+        byte[] value = "async-remote-apply-over-real-ipc"u8.ToArray();
+        Process? host = null;
+        FldDatabaseIpcAsyncDataProvider? reader = null;
+        FldDatabaseIpcAsyncRemoteBatchApplyStore? applyStore = null;
+        try
+        {
+            host = StartDatabaseHost(hostRoot, namespaceId, localAuthor);
+            _ = await WaitForHostEndpointAsync(hostRoot, host, TimeSpan.FromSeconds(45));
+
+            reader = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15),
+                NodeId.From(localAuthor), () => 1);
+            applyStore = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRoot, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+
+            var mutation = new ProviderMutation
+            {
+                RecordId = RecordId.From(recordBytes),
+                FieldId = 0x0651,
+                AuthorNodeId = NodeId.From(issuer),
+                KeyEpoch = 0,
+                Value = value,
+                ChangeId = BatchId.From(changeBytes),
+                OriginAuthorEpoch = 3,
+                OriginSequence = 1,
+                HlcWall = 65_100,
+                HlcLogical = 2
+            };
+            var batch = new ProviderRemoteBatchCommit(
+                Guid.NewGuid(),
+                NodeId.From(sender),
+                senderTransportEpoch: 4,
+                namespaceId: namespaceId,
+                NodeId.From(issuer),
+                issuerEpoch: 3,
+                BatchId.From(batchBytes),
+                cursorStart: 1,
+                cursorEnd: 1,
+                Id(0x6B),
+                Id(0x6C),
+                Id(0x6D),
+                protocolStateDelta: Array.Empty<byte>(),
+                new[] { mutation });
+
+            ProviderApplyReceipt first = await applyStore.ApplyRemoteBatchAsync(batch);
+            Assert.Equal(batch.ApplyToken, first.ApplyToken);
+            Assert.False(first.IsDuplicate);
+
+            await applyStore.DisposeAsync();
+            applyStore = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRoot, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+
+            ProviderApplyReceipt retry = await applyStore.ApplyRemoteBatchAsync(batch);
+            Assert.Equal(first.ApplyToken, retry.ApplyToken);
+            Assert.Equal(first.BatchFingerprint, retry.BatchFingerprint);
+            Assert.True(retry.IsDuplicate);
+
+            ProviderMutation? current = await reader.ReadCurrentAsync(
+                RecordId.From(recordBytes), 0x0651);
+            Assert.NotNull(current);
+            Assert.Equal(value, current!.Value);
+            Assert.Equal(BatchId.From(changeBytes), current.ChangeId);
+            Assert.Equal(3U, current.OriginAuthorEpoch);
+            Assert.Equal(1UL, current.OriginSequence);
+            Assert.Equal(0UL, await reader.GetLocalChangeHighWatermarkAsync());
+        }
+        finally
+        {
+            if (applyStore is not null)
+                await applyStore.DisposeAsync();
+            if (reader is not null)
+                await reader.DisposeAsync();
+            if (host is not null)
+                await StopDatabaseHostAsync(host);
+            try { Directory.Delete(hostRoot, recursive: true); } catch { }
+        }
+    }
+
     private static Process StartDatabaseHost(string root, uint namespaceId, byte[] localAuthor)
     {
         AssemblyMetadataAttribute repositoryMetadata = typeof(FldDatabaseIpcAsyncDataProviderTests)
