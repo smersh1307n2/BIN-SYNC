@@ -2888,3 +2888,11 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] Storage Integration run `42936934399` passed on Ubuntu, Windows and macOS.
 - [x T] The race test proves two batches may stage the same identity from the same base CommitSeq, but only one can commit. The loser receives `StorageConflictException`; its distinct data mutation is absent, and the durable winning result is available for replay. The BIN-SYNC sample repeats this public contract.
 - [~ T] Storage-only operation idempotency is now covered for exact replay, conflicting fingerprint, process-reopen recovery, WAL-flush crash recovery, wrong-store batch rejection and concurrent duplicate commits. Next: wire the ledger into an IPC handler and simulate a committed operation whose response is lost during server shutdown, then reconnect with the same ClientId + OperationId and prove the durable result is replayed without a second commit.
+
+
+
+### 1.108 — End-to-end lost-response recovery across IPC host restart
+
+- [x T] BIN-SYNC commit `17b634ee82ecb2e3ec2f87b99e39c75d34b51b1d` adds an end-to-end Storage IPC test that commits a StorageWriteBatch containing both a data mutation and the durable operation result, then cancels the server before it can send the response. The client observes transport loss, the StorageDatabase is closed/reopened, and a new server accepts the same stable ClientId + OperationId. The retry returns the exact stored result and proves LastCommitSeq remains 1 with only one data effect.
+- [~ CI] Re-run the exact cross-repository gate against FLD head `2e378a21ed3ccb61fe77e0f9a5c15beb849bac8c` and BIN-SYNC head containing `17b634ee82ecb2e3ec2f87b99e39c75d34b51b1d`.
+- [~ T] This validates the Storage-only request ledger across a lost response and server restart. It does not yet prove the separate FLD Database WAL path; that still needs a database-native durable operation receipt tied to the same OperationId.
