@@ -43,6 +43,105 @@ public sealed class StorageSyncCoordinatorTests
         }
     }
 
+    private sealed class RecordingAsyncLocalProvider :
+        IAsyncDataProvider,
+        IAsyncProviderOperationReceiptStore,
+        IAsyncProviderPublishedOriginStore,
+        IAsyncProviderPublicationMode
+    {
+        private readonly StorageDataProvider _provider;
+        private readonly InProcessAsyncDataProviderAdapter _adapter;
+        private readonly Dictionary<BatchId, ulong> _receipts = new();
+        private ulong _nextClientSequence = 1;
+
+        public ulong LastOutboxAck { get; private set; }
+        public ulong LastReceiptAck { get; private set; }
+        public bool LoseNextReceiptAckResponseAfterCommit { get; set; }
+
+        public RecordingAsyncLocalProvider(StorageDataProvider provider)
+        {
+            _provider = provider;
+            _adapter = new InProcessAsyncDataProviderAdapter(provider);
+        }
+
+        public ValueTask<RecordId> ResolveRecordIdAsync(ReadOnlyMemory<byte> key, CancellationToken ct = default)
+            => _adapter.ResolveRecordIdAsync(key, ct);
+        public ValueTask<ushort> ResolveFieldIdAsync(ReadOnlyMemory<byte> key, CancellationToken ct = default)
+            => _adapter.ResolveFieldIdAsync(key, ct);
+        public ValueTask AppendLocalChangeAsync(ProviderMutation mutation, CancellationToken ct = default)
+            => _adapter.AppendLocalChangeAsync(mutation, ct);
+        public ValueTask<ProviderChangePage> ReadLocalChangesAsync(ulong after, int limit, CancellationToken ct = default)
+            => _adapter.ReadLocalChangesAsync(after, limit, ct);
+        public ValueTask AcknowledgeLocalChangesAsync(ulong through, CancellationToken ct = default)
+        {
+            LastOutboxAck = Math.Max(LastOutboxAck, through);
+            return _adapter.AcknowledgeLocalChangesAsync(through, ct);
+        }
+        public ValueTask<ulong> GetLocalChangeHighWatermarkAsync(CancellationToken ct = default)
+            => _adapter.GetLocalChangeHighWatermarkAsync(ct);
+        public ValueTask<ProviderSnapshotHandle> OpenSnapshotAsync(CancellationToken ct = default)
+            => _adapter.OpenSnapshotAsync(ct);
+        public ValueTask<ProviderSnapshotPage> ReadSnapshotAsync(Guid token, int after, int limit, CancellationToken ct = default)
+            => _adapter.ReadSnapshotAsync(token, after, limit, ct);
+        public ValueTask ReleaseSnapshotAsync(Guid token, CancellationToken ct = default)
+            => _adapter.ReleaseSnapshotAsync(token, ct);
+        public ValueTask<ProviderApplyReceipt> ApplyRemoteBatchAsync(Guid token, IReadOnlyList<ProviderMutation> mutations, CancellationToken ct = default)
+            => _adapter.ApplyRemoteBatchAsync(token, mutations, ct);
+        public ValueTask<ProviderMutation?> ReadCurrentAsync(RecordId record, ushort field, CancellationToken ct = default)
+            => _adapter.ReadCurrentAsync(record, field, ct);
+
+        public ValueTask<ulong> AppendLocalChangeWithReceiptAsync(
+            ProviderMutation mutation, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (_receipts.TryGetValue(mutation.ChangeId, out ulong existing))
+                return ValueTask.FromResult(existing);
+            ulong sequence = _nextClientSequence++;
+            _receipts.Add(mutation.ChangeId, sequence);
+            return ValueTask.FromResult(sequence);
+        }
+
+        public ValueTask AcknowledgeOperationReceiptsAsync(ulong throughSequence, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (throughSequence >= _nextClientSequence)
+                throw new InvalidDataException("Receipt ACK exceeds the assigned ClientSequence high watermark.");
+            LastReceiptAck = Math.Max(LastReceiptAck, throughSequence);
+            if (LoseNextReceiptAckResponseAfterCommit)
+            {
+                LoseNextReceiptAckResponseAfterCommit = false;
+                throw new IOException("simulated response loss after durable operation receipt ACK");
+            }
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask CommitPublishedOriginsAsync(
+            IReadOnlyList<ProviderPublishedOrigin> published, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _provider.CommitPublishedOrigins(published);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<(bool Exists, ulong NodeOutboxHighWatermark)> TryGetMetadataStoreOwnedPublicationCutoverAsync(
+            CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            bool exists = _provider.TryGetMetadataStoreOwnedPublicationCutover(out ulong watermark);
+            return ValueTask.FromResult((exists, watermark));
+        }
+
+        public ValueTask EnableMetadataStoreOwnedPublicationAsync(
+            ulong nodeOutboxHighWatermark, CancellationToken ct = default)
+        {
+            ct.ThrowIfCancellationRequested();
+            _provider.EnableMetadataStoreOwnedPublication(nodeOutboxHighWatermark);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask DisposeAsync() => _adapter.DisposeAsync();
+    }
+
     [Fact]
     public async Task Async_provider_receive_commits_node_provider_and_metadata_before_transport_ack()
     {
@@ -79,6 +178,104 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal("async-ipc-apply", Encoding.UTF8.GetString(nodeValue!.Value));
         Assert.True(provider.TryReadCurrent(record, 0x0891, out var providerValue));
         Assert.Equal("async-ipc-apply", Encoding.UTF8.GetString(providerValue!.Value));
+    }
+
+    [Fact]
+    public async Task Async_local_publication_coalesces_feed_and_acks_outbox_before_receipts()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-local-publication"), 491);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(90);
+        const string scope = "async-local-publication";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+
+        string walPath = Path.Combine(_root, "async-local-publication.wal");
+        using var wal = Wal.Open(walPath);
+        node.AttachWal(wal);
+        var asyncProvider = new RecordingAsyncLocalProvider(provider);
+        RecordId record = RecordId.From(Guid.Parse("90000000-0000-0000-0000-000000000090").ToByteArray());
+        BatchId firstChange = BatchId.From(Guid.Parse("90000000-0000-0000-0000-000000000091").ToByteArray());
+        BatchId secondChange = BatchId.From(Guid.Parse("90000000-0000-0000-0000-000000000092").ToByteArray());
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0901, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 9001, Value = "coalesced-old"u8.ToArray(), ChangeId = firstChange
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0901, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 9002, Value = "coalesced-winner"u8.ToArray(), ChangeId = secondChange
+        });
+
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        int published = await coordinator.PublishLocalChangesAsync(
+            asyncProvider, current => StorageNodePersistence.Save(storage, current));
+
+        Assert.Equal(2, published);
+        Assert.Equal(2UL, asyncProvider.LastOutboxAck);
+        Assert.Equal(2UL, asyncProvider.LastReceiptAck);
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.True(metadata.TryGetOutboundChangeIdentity(
+            scope, node.NodeId, 1, secondChange, out _, out OperationOrigin origin));
+        Assert.Equal(node.NodeId, origin.AuthorNodeId);
+        Assert.Equal(1U, origin.AuthorEpoch);
+        Assert.Equal(1UL, origin.Sequence);
+        Assert.True(node.TryGetField(1, record, 0x0901, out var value));
+        Assert.Equal("coalesced-winner", Encoding.UTF8.GetString(value!.Value));
+        Assert.False(node.HasPendingProviderOperationReceipts);
+    }
+
+    [Fact]
+    public async Task Async_local_publication_recovers_receipt_ack_after_outbox_ack_and_response_loss()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-local-receipt-recovery"), 492);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(91);
+        const string scope = "async-local-receipt-recovery";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+
+        string walPath = Path.Combine(_root, "async-local-receipt-recovery.wal");
+        using var wal = Wal.Open(walPath);
+        node.AttachWal(wal);
+        var asyncProvider = new RecordingAsyncLocalProvider(provider)
+        {
+            LoseNextReceiptAckResponseAfterCommit = true
+        };
+        RecordId record = RecordId.From(Guid.Parse("91000000-0000-0000-0000-000000000091").ToByteArray());
+        BatchId changeId = BatchId.From(Guid.Parse("91000000-0000-0000-0000-000000000092").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0902, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 9100, Value = "receipt-recovery"u8.ToArray(), ChangeId = changeId
+        });
+
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        await Assert.ThrowsAsync<IOException>(async () =>
+            await coordinator.PublishLocalChangesAsync(
+                asyncProvider, current => StorageNodePersistence.Save(storage, current)));
+
+        Assert.Equal(1UL, asyncProvider.LastOutboxAck);
+        Assert.Equal(1UL, asyncProvider.LastReceiptAck);
+        Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.True(node.HasPendingProviderOperationReceipts);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+
+        int retried = await coordinator.PublishLocalChangesAsync(
+            asyncProvider, current => StorageNodePersistence.Save(storage, current));
+
+        Assert.Equal(0, retried);
+        Assert.Equal(1UL, asyncProvider.LastOutboxAck);
+        Assert.Equal(1UL, asyncProvider.LastReceiptAck);
+        Assert.False(node.HasPendingProviderOperationReceipts);
+        Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
     }
 
     [Fact]
