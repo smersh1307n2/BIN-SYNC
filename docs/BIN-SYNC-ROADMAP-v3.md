@@ -3222,5 +3222,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] Added compact Node-WAL receipt mappings, Published transitions, contiguous-prefix validation, provider ACK replay and checkpoint retention guard. WAL v4 is required; WAL/v3 is rejected rather than migrated. Implementation commits: `680477335c81d11e053a680742c43e3d25cf1240`, `54bf2759a26c88ab6d677d49120fab516d616e19`, `ece6ab867745cbe692b4b64330f3c7ac30d8eb0f`, `eab3da56530fdb081dbd84633040cde09266989b`.
 - [x T] WAL/v3 rejection, receipt mapping replay, Published-prefix/gap validation, provider receipt-ACK replay, and checkpoint-with-pending-receipt tests passed.
 - [x CI] Exact-head commit `785d67782b285b2147e9b3ad3dcde8bde2001fbb` passed BIN-SYNC run `43015451286` (6/6 jobs) and FLD Storage Integration run `43015451210` (3/3 jobs). The Windows/Linux .NET suites, Fuzz/Lab, signed vectors, cross-repo host adapters, and Ubuntu/Windows/macOS storage integration all passed.
-- [ ] C Build a first-class async-only coordinator over `IAsyncDataProvider`, `IAsyncProviderRemoteBatchCommitStore`, and the durable Metadata Store. Do not route async IPC through sync-over-async or rely on a dummy `IDataProvider`.
+- [x C] Added `AsyncStorageSyncCoordinator` as a first-class async-only receiver coordinator over Node, durable Metadata Store and `IAsyncProviderRemoteBatchCommitStore`; it has no `IDataProvider` dependency and uses an async admission semaphore rather than sync-over-async. Commit `c1854afebab0e1a495b352b0787ff5bb7484c82a`. BIN-SYNC and FLD Storage Integration exact-head workflows passed (`43017033504`, `43017033512`).
 - [ ] T Implement finite-ceiling async feed scan, idempotent receipt sequence recovery, origin stamping, Node checkpoint, independent Outbox/receipt ACK, and restart recovery. Keep FULL_REPLACE/GC disabled until equivalent async guards exist.
+
+
+### 1.86 — First-class async-only receiver coordinator
+
+- [x C] Extracted the async receive/recovery path into `AsyncStorageSyncCoordinator` (`BinSync.Net/src/BinSync.Storage/AsyncStorageSyncCoordinator.cs`). It does not require an `IDataProvider`, does not use sync-over-async, and awaits contextual remote APPLY before transport ACK.
+- [x T] Existing integration tests exercise successful receive, exact PendingApply recovery, response loss after durable provider commit, stable ApplyToken retry, and Node checkpoint reload.
+- [x CI] Commit `c1854afebab0e1a495b352b0787ff5bb7484c82a` passed BIN-SYNC and FLD Storage Integration (`43017033504`, `43017033512`).
+- [ ] C/T The async-only coordinator is currently receiver/recovery-only. It still needs async local-feed publication, durable ClientSequence/WAL receipt mapping orchestration, independent source Outbox and IPC receipt ACKs, and async startup recovery before the async provider integration can be called complete.
