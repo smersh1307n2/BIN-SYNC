@@ -295,7 +295,8 @@ public sealed class StorageNamespaceGcStoreTests
                 // the signed member identity and transport epoch remain bound to its roster key.
                 AppliedOriginFrontierReport forged = MemberReport(2, 2, finalIssued);
                 byte[] forgedBytes = OriginFrontierProtocol.Sign(forged, keys[0].Seed);
-                Assert.Throws<InvalidDataException>(() => gc.AcceptOriginFrontier(forgedBytes, roster));
+                Assert.Throws<System.Security.Cryptography.CryptographicException>(() =>
+                    gc.AcceptOriginFrontier(forgedBytes, roster));
             }
 
             // Reopen must preserve the lagging member's durable frontier and keep the
