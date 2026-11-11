@@ -53,6 +53,8 @@ public class MetadataCoordinatorRetryScanBench
                 RecordId = RecordId.From(IdBytes(i + 100)),
                 FieldId = 0x0101,
                 AuthorNodeId = Local,
+                OriginAuthorEpoch = 1,
+                OriginSequence = 0,
                 HlcWall = (ulong)(1_000_000 + i),
                 HlcLogical = 0,
                 Value = BitConverter.GetBytes(i)
