@@ -178,10 +178,10 @@ public sealed class AsyncStorageSyncCoordinator
                     afterSequence, limit, ct).ConfigureAwait(false);
                 if (page.Changes.Count > limit ||
                     page.ScannedThroughSequence < afterSequence ||
-                    page.ScannedThroughSequence > providerHighWatermark ||
                     page.ScannedThroughSequence == afterSequence)
                     throw new InvalidDataException("Async provider returned an invalid or non-advancing local-feed page.");
 
+                int pageChangeCount = 0;
                 ulong previousChangeSequence = afterSequence;
                 foreach (ProviderChange change in page.Changes)
                 {
@@ -191,6 +191,7 @@ public sealed class AsyncStorageSyncCoordinator
                     previousChangeSequence = change.Sequence;
                     if (change.Sequence > providerHighWatermark)
                         continue;
+                    pageChangeCount++;
                     if (change.ChangeId.IsZero || change.Mutation.ChangeId != change.ChangeId ||
                         change.Mutation.AuthorNodeId != _node.NodeId ||
                         change.Mutation.OriginAuthorEpoch == 0 || change.Mutation.OriginSequence != 0)
@@ -247,8 +248,10 @@ public sealed class AsyncStorageSyncCoordinator
                         AddAsyncCoalescedPendingLocalChange(winners, change);
                 }
 
-                totalChanges = checked(totalChanges + page.Changes.Count);
-                scannedThroughSequence = page.ScannedThroughSequence;
+                totalChanges = checked(totalChanges + pageChangeCount);
+                // A page may include appends that arrived after the entry ceiling.
+                // Clamp the durable ACK cursor and leave that suffix for the next pass.
+                scannedThroughSequence = Math.Min(page.ScannedThroughSequence, providerHighWatermark);
                 afterSequence = scannedThroughSequence;
             }
 
