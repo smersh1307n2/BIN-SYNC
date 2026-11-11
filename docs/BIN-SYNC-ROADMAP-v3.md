@@ -2944,3 +2944,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C] FLD-DB commit `c6501f85dc12fd15d6a8ddda186c8b963ce07a2b` updates Host cleanup to delete only its exact partition endpoint. Tests `5a1c59e021436092f691d0e70a115a0085b08770` and `c626d8e1bd49ec86d0c0fcfc9ee9237862a0f2cb` cover same-root partition isolation and process-host endpoint lookup.
 - [x T] BIN-SYNC commit `77feb94a24abe795ab2057e3eab3b8e1a8c13740` updates the host composition probe to use partition-specific endpoint deletion.
 - [~ CI] Re-run the full cross-repository and three-platform Storage Integration gates against FLD head `c626d8e1bd49ec86d0c0fcfc9ee9237862a0f2cb` and the latest BIN-SYNC PR head.
+
+
+
+### 1.114 — Fix endpoint isolation and stale-record race found by process CI
+
+- [!] First process-host gate `42939569291` exposed two test defects, not Storage data corruption: the wrong-partition lookup now correctly returns `FileNotFoundException` because each partition has a distinct endpoint filename; the restart poll had accepted the old endpoint file before the new owner atomically replaced it. The process test now waits for a different OwnerId. An xUnit2009 assertion warning was also removed.
+- [x T] FLD-DB commit `90819636a2af381a799b5d1247988f1483848abb` fixes the partition endpoint expectation and analyzer warning. FLD-DB commit `52ba42fd32e109bb858e1943cb3e7eab5f4ba726` fixes the process restart poll to wait for the new owner's endpoint record.
+- [x T] BIN-SYNC commit `04f788cf8a051ecbfb9b0d0529c8f129f62a7ca4` asserts the public endpoint path includes the exact partition identifier.
+- [~ CI] Re-run against the corrected FLD Storage tests and the latest BIN-SYNC PR head. Required: process restart must observe a new OwnerId, second Host must be rejected while the first owns the partition, and CommitSeq must remain 1 after replay.
