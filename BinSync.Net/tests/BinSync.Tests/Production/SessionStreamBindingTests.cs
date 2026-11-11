@@ -140,7 +140,7 @@ public sealed class SessionStreamBindingTests
 
         Assert.True(receiver.TryGetField(1, record, 0x100, out var afterFirstApply));
         Assert.Equal(value, afterFirstApply!.Value);
-        Assert.Equal(0UL, sender.PeerStates[(receiver.NodeId, 1)].AckedFor(sender.NodeId));
+        Assert.Equal(0L, sender.PeerStates[(receiver.NodeId, 1)].AckedFor(sender.NodeId));
 
         // Reconnect with the same durable Nodes. Sender has no ACK watermark, so it
         // must replay the immutable batch. Receiver recognizes the already-applied
@@ -156,7 +156,7 @@ public sealed class SessionStreamBindingTests
         Assert.Equal(0, duplicate.Applied);
         Assert.True(receiver.TryGetField(1, record, 0x100, out var afterRetry));
         Assert.Equal(value, afterRetry!.Value);
-        Assert.Equal(1UL, sender.PeerStates[(receiver.NodeId, 1)].AckedFor(sender.NodeId));
+        Assert.Equal(1L, sender.PeerStates[(receiver.NodeId, 1)].AckedFor(sender.NodeId));
     }
 
     private sealed class DropFirstAckTransport : IPeerAwareSyncTransport
