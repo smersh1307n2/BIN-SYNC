@@ -638,6 +638,80 @@ public sealed class StorageIpcHostCompositionTests
         }
     }
 
+    [Fact]
+    public async Task Snapshot_handle_is_rejected_after_dispatcher_restart_and_new_open_uses_new_generation()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-fld-ipc-snapshot-restart-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 37;
+        string pipeName = StorageIpcEndpoint.ComputePipeName(directory, 0);
+        byte[] localAuthor = Id(0x51);
+        Guid ownerId = Guid.NewGuid();
+        Guid clientId = Guid.NewGuid();
+        FldDatabaseIpcSnapshotHandle oldHandle;
+
+        try
+        {
+            using var database = FldDatabase.Open(directory, namespaceId, localAuthor);
+            StorageIpcEndpoint.Publish(directory, StorageIpcEndpoint.Create(
+                directory, 0, ownerId, Environment.ProcessId));
+
+            var firstDispatcher = new FldDatabaseIpcDispatcher(database);
+            using (var firstCancellation = new CancellationTokenSource())
+            {
+                var firstServer = new StorageIpcServer(pipeName, firstDispatcher.HandleAsync);
+                Task firstServerTask = firstServer.RunAsync(firstCancellation.Token);
+                try
+                {
+                    await firstServer.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+                    await using var firstClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                        directory, clientId, TimeSpan.FromSeconds(10));
+                    oldHandle = await firstClient.OpenSnapshotAsync(Guid.NewGuid());
+                }
+                finally
+                {
+                    firstCancellation.Cancel();
+                    await firstServerTask.WaitAsync(TimeSpan.FromSeconds(10));
+                    firstDispatcher.Dispose();
+                }
+            }
+
+            var secondDispatcher = new FldDatabaseIpcDispatcher(database);
+            using (var secondCancellation = new CancellationTokenSource())
+            {
+                var secondServer = new StorageIpcServer(pipeName, secondDispatcher.HandleAsync);
+                Task secondServerTask = secondServer.RunAsync(secondCancellation.Token);
+                try
+                {
+                    await secondServer.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+                    await using var reconnected = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                        directory, clientId, TimeSpan.FromSeconds(10));
+
+                    Assert.NotEqual(oldHandle.HostGeneration, secondDispatcher.HostGeneration);
+                    await Assert.ThrowsAsync<StorageIpcRemoteException>(
+                        async () => await reconnected.ReadSnapshotPageAsync(oldHandle, 0, 8));
+
+                    FldDatabaseIpcSnapshotHandle newHandle =
+                        await reconnected.OpenSnapshotAsync(Guid.NewGuid());
+                    Assert.Equal(secondDispatcher.HostGeneration, newHandle.HostGeneration);
+                    Assert.NotEqual(oldHandle.SnapshotToken, newHandle.SnapshotToken);
+                    Assert.True(await reconnected.ReleaseSnapshotAsync(newHandle));
+                }
+                finally
+                {
+                    secondCancellation.Cancel();
+                    await secondServerTask.WaitAsync(TimeSpan.FromSeconds(10));
+                    secondDispatcher.Dispose();
+                    StorageIpcEndpoint.DeleteIfOwned(directory, 0, ownerId);
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     private static byte[] Id(byte value)
     {
         byte[] bytes = new byte[16];
