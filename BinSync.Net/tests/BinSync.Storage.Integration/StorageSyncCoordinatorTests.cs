@@ -139,9 +139,9 @@ public sealed class StorageSyncCoordinatorTests
             asyncProvider, node => StorageNodePersistence.Save(storage, node));
 
         Assert.Equal(1, recovered);
-        Assert.Equal(2, asyncProvider.ApplyTokens.Count);
-        Assert.Equal(pending.ApplyToken, asyncProvider.ApplyTokens[0]);
-        Assert.Equal(asyncProvider.ApplyTokens[0], asyncProvider.ApplyTokens[1]);
+        Assert.Collection(asyncProvider.ApplyTokens,
+            firstToken => Assert.Equal(pending.ApplyToken, firstToken),
+            retryToken => Assert.Equal(pending.ApplyToken, retryToken));
         Assert.NotNull(asyncProvider.LastCommit);
         Assert.Equal(pending.ApplyToken, asyncProvider.LastCommit!.ApplyToken);
         Assert.Equal(sender.NodeId, asyncProvider.LastCommit.SenderPeer);
