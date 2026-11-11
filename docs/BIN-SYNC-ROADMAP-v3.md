@@ -1,3 +1,13 @@
+## 1.76. Latest branch audit; process-host IPC hardening and async provider boundary — 2026-11-11
+
+- [x CI] BIN-SYNC branch `feature/fld-external-storage` advanced beyond §1.75 to exact head `85c820149b9acef82f70588e3fdc2aafc2a75fa7`. Workflow run `42970934518` passed on Ubuntu and Windows, including the cross-repository FLD host-adapter jobs; Storage Integration run `42970934562` passed on Ubuntu, Windows and macOS.
+- [x T] The latest BIN-SYNC host-adapter test adds explicit coverage that a remote record tombstone retains its immutable ChangeId / OriginAuthorEpoch / OriginSequence when mapped to the FLD lifecycle row; local Outbox remains unchanged.
+- [x C/T] FLD-DB branch `fix/crash-consistency-outbox` advanced to `b2bb4b1a0f21b49538239f3523cd3ee69b2ecede`. Its Database Host process tests now cover concurrent provider clients, stable operation retry across Host restart, durable Outbox recovery, snapshot survival and writer-fence release after process exit. These are FLD IPC/Host process tests; they do not yet prove a complete process-isolated BIN-SYNC IDataProvider/StorageSyncCoordinator.
+- [~ CI] FLD exact-head workflow run `42971257956` is in progress for the latest FLD branch head. Do not count it as green until all OS jobs and tests complete.
+- [!] Architecture gate remains open: the production BIN-SYNC `IDataProvider` and contextual remote-apply interfaces are synchronous, while the FLD Database IPC client is asynchronous. The IPC facade still lacks a complete async provider/coordinator surface, including provider-current metadata reads, published-origin stamping and cross-call commit-lease composition. Do not introduce sync-over-async or claim process isolation complete.
+- [ ] Next in Roadmap order: finish the FLD exact-head CI gate; define the asynchronous provider/apply + commit-lease contract (or an explicitly durable host worker queue) against the existing coordinator call graph; implement the complete IPC-backed surface; then run two-process parity tests for local Outbox publication, remote APPLY, retries/duplicates, restart/reconnect, snapshots and FULL_REPLACE. Keep the in-process adapter as the reference until parity passes.
+- [!] Physical receipt, ChangeId and tombstone/ghost GC remain disabled. Preserve the two-runtime-DLL boundary and Host-as-executable split.
+
 ## 1.75. FLD identity-preserving IPC and cross-repository host gate green — 2026-11-11
 
 - [x CI] BIN-SYNC exact head e0cc43cb51d7e9df0a652c008e33ed5e4d7b30b9 passed workflow run 42970243666. Linux and Windows each passed all 678 BIN-SYNC tests; fuzz/lab passed 31 tests; v3.1 signed control-plane golden vectors passed; benchmark build, public samples and coverage threshold passed.
