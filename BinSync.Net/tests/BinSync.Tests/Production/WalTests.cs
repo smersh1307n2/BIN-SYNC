@@ -816,14 +816,14 @@ public class WalTests
             BatchId changeId = BatchId.From(Guid.NewGuid().ToByteArray());
             using (var wal = Wal.Open(path))
             {
-                byte[] header = File.ReadAllBytes(path);
-                Assert.Equal((ushort)4,
-                    System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(4, 2)));
                 receiver.AttachWal(wal);
                 receiver.RecordProviderOperationReceipt(1, changeId, 17);
                 receiver.MarkProviderOperationReceiptPublished(1, changeId, 17);
                 Assert.Equal(3, wal.Sequence);
             }
+            byte[] header = File.ReadAllBytes(path);
+            Assert.Equal((ushort)4,
+                System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(4, 2)));
 
             var recovered = Fix.MakeNode(941);
             using (var wal = Wal.Open(path))
