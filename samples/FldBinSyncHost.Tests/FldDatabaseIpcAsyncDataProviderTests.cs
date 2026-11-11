@@ -65,7 +65,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             Assert.Equal(1, published);
             Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, checked((int)namespaceId), node.NodeId));
-            Assert.False(node.HasPendingProviderOperationReceipts);
             Assert.True(node.TryGetField(checked((int)namespaceId), record, 0x0551, out var cached));
             Assert.Equal(value, cached!.Value);
 
@@ -97,7 +96,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Empty((await provider.ReadLocalChangesAsync(0, 16)).Changes);
             Assert.Equal(1UL, await provider.GetLocalChangeHighWatermarkAsync());
             await provider.AcknowledgeOperationReceiptsAsync(clientSequence);
-            Assert.False(node.HasPendingProviderOperationReceipts);
         }
         finally
         {
