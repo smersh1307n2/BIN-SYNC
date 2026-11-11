@@ -506,6 +506,31 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId))).State.AckedCursor);
             Assert.Empty((await providerA.ReadLocalChangesAsync(0, 16)).Changes);
             Assert.Empty((await providerB.ReadLocalChangesAsync(0, 16)).Changes);
+
+            // Re-establish the transport sessions only after both hosts have
+            // completed durable startup recovery. The persisted peer incarnation
+            // and cursors must support a fresh handshake without replaying data.
+            var (reconnectToA, reconnectToB) = PipeTransport.CreatePair();
+            Task<SyncSession> recoveredAcceptTask = SyncSession.AcceptAsync(nodeB, reconnectToB);
+            Task<SyncSession> recoveredConnectTask = SyncSession.ConnectAsync(nodeA, reconnectToA);
+            acceptor = await recoveredAcceptTask;
+            initiator = await recoveredConnectTask;
+
+            Task<int> resumedSendA = recoveredAdapterA.RunOutboundRoundAsync([initiator]);
+            Task<int> resumedSendB = recoveredAdapterB.RunOutboundRoundAsync([acceptor]);
+            await Task.WhenAll(resumedSendA, resumedSendB).WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.Equal(0, await resumedSendA);
+            Assert.Equal(0, await resumedSendB);
+            Assert.Equal(1UL, metadataA.GetReceiveCursor(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(1UL, metadataB.GetReceiveCursor(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(1UL, Assert.Single(metadataA.ReadPeerStreamStates(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, checked((uint)initiator.PeerEpoch),
+                checked((int)namespaceId))).State.AckedCursor);
+            Assert.Equal(1UL, Assert.Single(metadataB.ReadPeerStreamStates(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, checked((uint)acceptor.PeerEpoch),
+                checked((int)namespaceId))).State.AckedCursor);
         }
         finally
         {
