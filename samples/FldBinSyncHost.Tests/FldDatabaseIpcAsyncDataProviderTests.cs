@@ -646,6 +646,45 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
     }
 
+    private sealed class DropFirstAckTransport : IPeerAwareSyncTransport
+    {
+        private readonly ISyncTransport _inner;
+        private int _drop = 1;
+        private NodeId _peerNodeId;
+
+        public DropFirstAckTransport(ISyncTransport inner) => _inner = inner;
+
+        public NodeId PeerNodeId
+        {
+            get => _peerNodeId;
+            set
+            {
+                _peerNodeId = value;
+                if (_inner is IPeerAwareSyncTransport aware)
+                    aware.PeerNodeId = value;
+            }
+        }
+
+        public SyncTransportCapabilities Capabilities => _inner.Capabilities;
+        public int? MaxPacketSize => _inner.MaxPacketSize;
+
+        public async ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
+        {
+            var (frame, _) = FrameCodec.ParseFrame(packet.ToArray());
+            if (frame.FrameType == 0x0B && Interlocked.Exchange(ref _drop, 0) == 1)
+            {
+                await _inner.DisposeAsync().ConfigureAwait(false);
+                throw new IOException("Injected transport ACK loss after durable FLD APPLY.");
+            }
+            await _inner.SendAsync(packet, ct).ConfigureAwait(false);
+        }
+
+        public ValueTask<byte[]?> ReceiveAsync(CancellationToken ct = default) =>
+            _inner.ReceiveAsync(ct);
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
     private static Process StartDatabaseHost(
         string root, uint namespaceId, byte[] localAuthor, bool dropRemoteApplyResponseForTest = false)
     {
