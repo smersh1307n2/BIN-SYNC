@@ -23,7 +23,6 @@ public sealed class Wal : IDisposable
     public const string Tag = "BIN-SYNC/WAL/v4";
     private const uint Magic = 0x4253574C; // 'B''S''W''L'
     private const ushort Version = 4;
-    private const ushort PreviousVersion = 3;
     private const int RecordDigestLen = 16;
     private const string RecordDigestTag = "BIN-SYNC/WAL-RECORD/v2";
 
@@ -65,15 +64,14 @@ public sealed class Wal : IDisposable
         }
         else
         {
-            ushort fileVersion;
             fs.Position = 0;
             using (var br = new BinaryReader(fs, System.Text.Encoding.UTF8, leaveOpen: true))
             {
                 if (ReadBEU32(br) != Magic)
                     throw new InvalidDataException("Not a BinSync WAL (bad magic).");
-                fileVersion = ReadBEU16(br);
-                if (fileVersion != PreviousVersion && fileVersion != Version)
-                    throw new InvalidDataException($"Unsupported WAL version {fileVersion}; supported versions are {PreviousVersion} and {Version}.");
+                var fileVersion = ReadBEU16(br);
+                if (fileVersion != Version)
+                    throw new InvalidDataException($"Unsupported WAL version {fileVersion}; BIN-SYNC requires WAL v{Version}.");
             }
             long validEnd = 6;
             while (validEnd + 4 <= fs.Length)
@@ -92,7 +90,7 @@ public sealed class Wal : IDisposable
                     fs.ReadExactly(storedDigest);
                     VerifyRecordDigest(payload, storedDigest);
                 }
-                ValidateRecord(payload, fileVersion);
+                ValidateRecord(payload, Version);
                 validEnd = fs.Position;
                 seq++;
             }
@@ -104,8 +102,6 @@ public sealed class Wal : IDisposable
                 fs.SetLength(validEnd);
                 fs.Flush(flushToDisk: true);
             }
-            if (fileVersion == PreviousVersion)
-                fs = UpgradeToCurrentVersion(path, fs);
             fs.Position = fs.Length;
         }
         return new Wal(path, fs, seq);
@@ -296,8 +292,8 @@ public sealed class Wal : IDisposable
         using var br = new BinaryReader(fs, System.Text.Encoding.UTF8, leaveOpen: true);
         if (ReadBEU32(br) != Magic) throw new InvalidDataException("Not a BinSync WAL.");
         var version = ReadBEU16(br);
-        if (version != PreviousVersion && version != Version)
-            throw new InvalidDataException($"Unsupported WAL version {version}; supported versions are {PreviousVersion} and {Version}.");
+        if (version != Version)
+            throw new InvalidDataException($"Unsupported WAL version {version}; BIN-SYNC requires WAL v{Version}.");
         var records = new List<byte[]>();
         while (fs.Position + 4 <= fs.Length)
         {
@@ -633,37 +629,6 @@ public sealed class Wal : IDisposable
         };
         for (ulong i = 0; i < depCount; i++) entry.CausalDeps.Add(BatchId.From(r.B128()));
         return (applyFlag != 0, entry);
-    }
-
-    private static FileStream UpgradeToCurrentVersion(string path, FileStream previous)
-    {
-        string tempPath = path + ".upgrade-" + Guid.NewGuid().ToString("N");
-        try
-        {
-            using (var temp = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
-                FileShare.None, 4096, FileOptions.WriteThrough))
-            {
-                WriteHeader(temp);
-                previous.Position = 6;
-                previous.CopyTo(temp);
-                temp.Flush(flushToDisk: true);
-            }
-
-            // Close the old handle before atomic replacement (Windows requires delete sharing).
-            previous.Dispose();
-            File.Move(tempPath, path, overwrite: true);
-            return new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.Read,
-                4096, FileOptions.WriteThrough);
-        }
-        catch
-        {
-            previous.Dispose();
-            if (File.Exists(tempPath))
-            {
-                try { File.Delete(tempPath); } catch { /* best effort */ }
-            }
-            throw;
-        }
     }
 
     private static void WriteHeader(FileStream fs)

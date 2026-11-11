@@ -786,9 +786,9 @@ public class WalTests
 
 
     [Fact]
-    public void Wal_v3_segment_is_upgraded_to_v4_before_receipt_records_are_appended()
+    public void Wal_v3_segment_is_rejected_instead_of_being_migrated()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-v3-upgrade-" + Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(Path.GetTempPath(), "binsync-wal-v3-rejected-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, "node.wal");
         try
@@ -801,8 +801,8 @@ public class WalTests
                 Assert.True(source.WriteField(1, rid, 0x100, new byte[] { 0x41 }));
             }
 
-            // Existing v3 record payloads are byte-compatible with v4; downgrade only
-            // the header to simulate a durable WAL segment created by the previous release.
+            // The prior WAL marker is intentionally not migrated. The durable format
+            // contract requires an explicit fresh v4 WAL/namespace after a version change.
             using (var fs = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
             {
                 fs.Position = 4;
@@ -812,35 +812,8 @@ public class WalTests
                 fs.Flush(flushToDisk: true);
             }
 
-            var legacyReplay = Fix.MakeNode(941);
-            Assert.Equal(1, Wal.ReplayFile(path, legacyReplay));
-            Assert.True(legacyReplay.TryGetField(1, rid, 0x100, out var legacyField));
-            Assert.Equal(new byte[] { 0x41 }, legacyField!.Value);
-
-            var receiver = Fix.MakeNode(941);
-            BatchId changeId = BatchId.From(Guid.NewGuid().ToByteArray());
-            using (var wal = Wal.Open(path))
-            {
-                receiver.AttachWal(wal);
-                receiver.RecordProviderOperationReceipt(1, changeId, 17);
-                receiver.MarkProviderOperationReceiptPublished(1, changeId, 17);
-                Assert.Equal(3, wal.Sequence);
-            }
-            byte[] header = File.ReadAllBytes(path);
-            Assert.Equal((ushort)4,
-                System.Buffers.Binary.BinaryPrimitives.ReadUInt16BigEndian(header.AsSpan(4, 2)));
-
-            var recovered = Fix.MakeNode(941);
-            using (var wal = Wal.Open(path))
-            {
-                Assert.Equal(3, wal.Replay(recovered));
-            }
-            Assert.True(recovered.TryGetProviderOperationReceipt(1, changeId, out ulong sequence, out bool published));
-            Assert.Equal(17UL, sequence);
-            Assert.True(published);
-            Assert.Equal(17UL, recovered.GetPublishedProviderOperationReceiptPrefix(1));
-            Assert.True(recovered.TryGetField(1, rid, 0x100, out var field));
-            Assert.Equal(new byte[] { 0x41 }, field!.Value);
+            Assert.Throws<InvalidDataException>(() => Wal.Open(path));
+            Assert.Throws<InvalidDataException>(() => Wal.ReplayFile(path, Fix.MakeNode(941)));
         }
         finally
         {

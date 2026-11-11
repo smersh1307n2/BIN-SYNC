@@ -251,7 +251,7 @@ Add compact Node-WAL records for:
 
 No application payload, duplicate operation body, or second pending journal is stored in BIN-SYNC. FLD's WAL and receipt table remain authoritative for the actual write and idempotent result; BIN-SYNC's WAL stores only the sequence needed to retire the FLD receipt safely.
 
-Use WAL format v4 for the new record kinds. Existing v3 segments must be validated and atomically upgraded before v4 records are appended; ReplayFile must continue to read v3 segments. A checkpoint must not truncate a WAL while unresolved receipt mappings remain. This allows NodePersistence v17 snapshots to remain unchanged: unresolved mapping state is retained in the WAL, and the WAL can be truncated only after provider receipt ACK has succeeded and the ACK record has removed the mapping.
+Use WAL format v4 for the new record kinds. WAL/v3 and older/unknown WAL versions are rejected, not upgraded; ReplayFile also requires v4. This is deliberate fail-closed format policy: moving from v3 requires a fresh v4 Node WAL/namespace rather than an implicit migration or dual-write. A checkpoint must not truncate a WAL while unresolved receipt mappings remain. This allows NodePersistence v17 snapshots to remain unchanged: unresolved mapping state is retained in the WAL, and the WAL can be truncated only after provider receipt ACK has succeeded and the ACK record has removed the mapping.
 
 ### Required publication order
 
