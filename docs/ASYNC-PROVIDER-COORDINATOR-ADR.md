@@ -200,3 +200,22 @@ This is a real async optional capability, but it is not sufficient for safe end-
 No thread-affine Monitor is held across the provider await. A per-coordinator `SemaphoreSlim` serializes the async provider/finalization phase. The stable ApplyToken and provider-side durable receipt are the retry identity after an uncertain response.
 
 This is deliberately a narrow first slice, not a complete async coordinator. The current orchestration assumes one receive stream per namespace/coordinator. Multiple independent sessions sharing one coordinator still require namespace-wide admission before production use. Local feed publication, Node-WAL persistence of the IPC receipt ClientSequence, independent receipt ACK, async snapshot rehydration, FULL_REPLACE and all physical GC remain out of scope and disabled. Exact-head CI plus response-loss/restart tests are required before this path is considered production-ready.
+
+
+## Async PendingApply recovery update — 2026-11-11
+
+The first asynchronous receive slice now has a matching startup recovery method:
+`StorageSyncCoordinator.RecoverPendingAppliesAsync(IAsyncProviderRemoteBatchCommitStore, Action<Node>, CancellationToken)`.
+
+Recovery follows the same durable ordering as live receive:
+
+1. Read the durable PendingApply set while holding only the short Metadata/Coordinator gate.
+2. Require `ReceiveStateOwnedByMetadataStore`, the exact retained `WirePayload`, a full-header fingerprint, and a complete operation-decision mask. Missing context is a hard failure; async recovery never downgrades to `IDataProvider.ApplyRemoteBatch(ApplyToken, mutations)`.
+3. Replay the exact payload into Node with the persisted decision mask and checkpoint Node before provider IPC.
+4. Verify the decoded batch against the stored namespace, BatchId, digest chain, header fingerprint and deterministic ApplyToken.
+5. Await contextual provider APPLY using the original sender/transport epoch, issuer epoch, BatchId, cursor range, digests and RecordsRoot.
+6. Validate the returned ApplyToken, then finalize the Metadata PendingApply receipt and validate its durable author/header fingerprint.
+
+The async admission semaphore serializes this recovery pass against the coordinator's async receive path. The implementation does not hold a thread-affine Monitor across provider IPC. A provider commit whose response is lost is retried with the same ApplyToken and immutable context; provider idempotency remains mandatory.
+
+The recovery API is a startup barrier, not a claim that every synchronous writer has joined the async admission protocol. Hosts must run it before accepting sync sessions or application writes. The new interruption test stages PendingApply and interrupts before Node mutation, then verifies replay into Node/provider and metadata finalization. Response-loss-after-provider-commit and multi-process restart fault injection remain required before production readiness.
