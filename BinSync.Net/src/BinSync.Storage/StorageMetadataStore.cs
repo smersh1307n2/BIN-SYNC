@@ -2050,6 +2050,12 @@ private static bool ValidateIncomingBatchForStaging(
         if (current.RelayHighWatermarks.TryGetValue(new RelayKey(namespaceId, localAuthor), out ulong existingRelayHigh) &&
             existingRelayHigh != 0)
             throw new InvalidDataException("An author stream cannot be populated by both local outbound and incoming relay operations.");
+        if (current.PendingApplies.Values.Any(pending =>
+            pending.Batch.NamespaceId == namespaceId &&
+            pending.Batch.Operations.Any(operation =>
+                operation.AuthorNodeId == localAuthor && operation.RelayEligible)))
+            throw new InvalidOperationException(
+                "Outbound publication is fenced while an incoming relay apply for the same author stream is unresolved.");
         var existingByChangeId = new Dictionary<BatchId, MetadataOutboundItem>();
         var newOperations = new List<MetadataFrozenOperation>(operations.Count);
         bool sawNewOperation = false;

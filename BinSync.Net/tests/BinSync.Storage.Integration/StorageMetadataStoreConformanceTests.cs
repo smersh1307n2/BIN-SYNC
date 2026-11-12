@@ -2532,4 +2532,31 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         }
     }
 
+
+    [Fact]
+    public void Pending_relay_apply_fences_outbound_author_stream_across_reopen()
+    {
+        const string scope = "pending-relay-author-fence";
+        const int namespaceId = 7;
+        NodeId local = Node(1), author = Node(3);
+        string directory = Path.Combine(_root, "pending-relay-author-fence");
+        Guid token = Guid.Parse("00000000-0000-0000-0000-000000000455");
+
+        using (var first = new StorageMetadataStore(directory, 455, deleteOnDispose: false))
+        {
+            var incoming = CreateBatch(scope, 1, 2, 1, namespaceId, 242,
+                1, 1, 0, 243, Operation(3, 244, 245, 246));
+            first.BeginPendingApply(incoming, token);
+        }
+
+        using (var reopened = new StorageMetadataStore(directory, 455, deleteOnDispose: false))
+        {
+            Assert.Throws<InvalidOperationException>(() =>
+                reopened.FreezeOutbound(scope, local, namespaceId, author,
+                    new[] { FrozenOperation(247, 248) }));
+            Assert.Empty(reopened.ReadOutboundAuthors(scope, local, namespaceId));
+            Assert.Empty(reopened.ReadRelayAuthors(scope, local, namespaceId));
+        }
+    }
+
 }
