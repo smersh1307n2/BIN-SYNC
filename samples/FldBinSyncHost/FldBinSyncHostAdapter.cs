@@ -71,6 +71,71 @@ public sealed class FldBinSyncHostAdapter
         => _coordinator.AcquireFullReplaceCommitGuard(_database.AcquireCommitGuard);
 
     /// <summary>
+    /// Reclaim FLD field and record tombstones only when the exact signed namespace
+    /// retention checkpoint proves the tombstone safe. The composite lease keeps
+    /// Metadata writers and FLD writers fenced while both reference indexes and the
+    /// replacement Run are processed. The namespace-GC feature flag remains the
+    /// final fail-closed switch.
+    /// </summary>
+    public int CompactTombstones(
+        StorageNamespaceGcStore gcStore, TrustStore trustStore, int limit = 256)
+    {
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        if (limit <= 0 || limit > 4096)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        if (!_coordinator.UsesNamespaceGcStore(gcStore) ||
+            !_coordinator.UsesNamespaceGcTrustStore(trustStore))
+            throw new InvalidOperationException(
+                "FLD tombstone GC requires the exact namespace-GC store and TrustStore attached to this coordinator.");
+        if (!gcStore.IsTombstoneGcProofEnabled)
+            return 0;
+
+        using TombstoneGcCommitLease commitLease =
+            _coordinator.AcquireTombstoneGcCommitGuard(_database.AcquireCommitGuard);
+        IReadOnlySet<RecordId>? liveRecordReferences = commitLease.LiveRecordReferences;
+        if (liveRecordReferences is null)
+            return 0; // Unknown payloads or a pending immutable peer reservation block the pass.
+
+        using FldReferenceSnapshot references = _database.OpenReferenceSnapshot();
+        FldDraftHorizon draftHorizon = references.UnpublishedLocalDraftHorizon;
+        if (references.HasSnapshotPin || draftHorizon.Count != 0 ||
+            draftHorizon.MaxHlcWall != 0 || draftHorizon.MaxHlcLogical != 0)
+            return 0;
+
+        int namespaceId = _coordinator.NamespaceId;
+        if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+            roster is null ||
+            !gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? checkpoint) ||
+            checkpoint is null || !checkpoint.FullReplaceGeneration.HasValue ||
+            checkpoint.FullReplaceDigest is null ||
+            checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
+            return 0;
+
+        Guid generation = checkpoint.FullReplaceGeneration.Value;
+        byte[] digest = checkpoint.FullReplaceDigest;
+        return _database.CompactTombstones(candidate =>
+        {
+            if (candidate.RecordId.Length != 16 || candidate.ChangeId.Length != 16 ||
+                candidate.AuthorNodeId.Length != 16 || candidate.OriginAuthorEpoch == 0 ||
+                candidate.OriginSequence == 0)
+                return false;
+
+            RecordId recordId = RecordId.From(candidate.RecordId.Span);
+            if (liveRecordReferences.Contains(recordId) ||
+                references.HasChangeIdReference(candidate.ChangeId.Span) ||
+                references.HasRecordReference(candidate.RecordId.Span, candidate.ChangeId.Span))
+                return false;
+
+            NodeId author = NodeId.From(candidate.AuthorNodeId.Span);
+            return !author.IsZero && gcStore.HasProtocolTombstoneGcProof(
+                roster, trustStore, author, candidate.OriginAuthorEpoch,
+                candidate.OriginSequence, candidate.HlcWall, candidate.HlcLogical,
+                generation, digest);
+        }, limit);
+    }
+
+    /// <summary>
     /// Freeze the provider's currently pending local feed into the active outbound
     /// authority (Node Outbox before cutover, Metadata Store after cutover). Call
     /// before startup recovery/publication and before each later outbound gate run.
