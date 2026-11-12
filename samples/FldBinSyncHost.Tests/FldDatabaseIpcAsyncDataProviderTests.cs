@@ -5,6 +5,7 @@ using System.Reflection;
 using BinSync.FldHost;
 using BinSync.Storage;
 using Fld1.Engine.Db;
+using Fld1.Engine.Sync;
 using Fld1.Storage;
 using Fld1.Storage.Engine;
 using Fld1.Storage.Ipc;
@@ -14,6 +15,82 @@ namespace BinSync.FldHost.Tests;
 
 public sealed class FldDatabaseIpcAsyncDataProviderTests
 {
+    [Fact]
+    public async Task Async_provider_reclaims_only_host_revalidated_tombstones_across_ipc()
+    {
+        string hostRoot = Path.Combine(Path.GetTempPath(), "fld-binsync-host-tombstone-gc-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x536;
+        byte[] authorBytes = Id(0x65);
+        NodeId author = NodeId.From(authorBytes);
+        Guid clientId = Guid.NewGuid();
+        Guid ownerId = Guid.Empty;
+        Process? host = null;
+        FldDatabaseIpcAsyncDataProvider? provider = null;
+        byte[] recordId = FldDatabase.NewRecordId();
+        try
+        {
+            using (var database = FldDatabase.Open(hostRoot, namespaceId, authorBytes))
+            {
+                var tombstone = new RemoteFieldWrite(
+                    recordId, 7, Array.Empty<byte>(), 100, 1, authorBytes, Id(0x76),
+                    keyEpoch: 0, isTombstone: true, originAuthorEpoch: 8, originSequence: 9);
+                var batch = new RemoteBatchCommit(
+                    senderPeer: Id(0x71),
+                    senderEpoch: 6,
+                    namespaceId: checked((int)namespaceId),
+                    issuerNodeId: Id(0x72),
+                    issuerEpoch: 8,
+                    batchId: Id(0x73),
+                    cursorStart: 9,
+                    cursorEnd: 9,
+                    previousBatchDigest: Id(0x74),
+                    batchDigest: Id(0x75),
+                    recordsRoot: Id(0x77),
+                    writes: [tombstone],
+                    relayWrites: [],
+                    protocolStateDelta: [0xA1]);
+                Assert.False(database.ApplyRemoteBatch(batch).IsDuplicate);
+                Assert.NotEqual(0UL, database.Checkpoint());
+            }
+
+            host = StartDatabaseHost(hostRoot, namespaceId, authorBytes);
+            StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
+                hostRoot, host, TimeSpan.FromSeconds(45));
+            ownerId = endpoint.OwnerId;
+            provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 8);
+
+            IReadOnlyList<ProviderMutation> candidates =
+                await provider.ReadTombstoneGcCandidatesAsync(16);
+            ProviderMutation candidate = Assert.Single(candidates);
+            Assert.True(candidate.IsTombstone);
+            Assert.Equal(9UL, candidate.OriginSequence);
+
+            Assert.Equal(1, await provider.CompactTombstonesAsync(candidates, 16));
+            Assert.Null(await provider.ReadCurrentAsync(RecordId.From(recordId), 7));
+
+            await provider.DisposeAsync();
+            provider = null;
+            await StopDatabaseHostAsync(host);
+            host = null;
+            await WaitForDatabaseWriterReleaseAsync(
+                hostRoot, namespaceId, authorBytes, TimeSpan.FromSeconds(15));
+
+            using var reopened = FldDatabase.Open(hostRoot, namespaceId, authorBytes);
+            Assert.False(reopened.TryResolve(recordId, 7, out _));
+        }
+        finally
+        {
+            if (provider is not null)
+                await provider.DisposeAsync();
+            if (host is not null)
+                await StopDatabaseHostAsync(host);
+            if (ownerId != Guid.Empty)
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, namespaceId, ownerId);
+            try { Directory.Delete(hostRoot, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public async Task Async_storage_coordinator_publishes_through_real_database_host_and_survives_host_restart()
     {
