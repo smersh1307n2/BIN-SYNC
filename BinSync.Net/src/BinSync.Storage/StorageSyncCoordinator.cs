@@ -279,9 +279,11 @@ public sealed class StorageSyncCoordinator
     {
         if (_metadataStore is not StorageMetadataStore storageMetadata)
             throw new NotSupportedException("Namespace-GC replay fencing requires the durable StorageMetadataStore implementation.");
+        string scopeId = _scopeId
+            ?? throw new InvalidOperationException("Namespace-GC replay fencing requires a stable Metadata scope.");
         lock (_gate)
         {
-            storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore, _scopeId, _node.NodeId);
+            storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore, scopeId, _node.NodeId);
             _namespaceGcStore = gcStore;
             _namespaceGcTrustStore = trustStore;
         }
