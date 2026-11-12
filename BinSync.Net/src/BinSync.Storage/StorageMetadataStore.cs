@@ -4108,9 +4108,22 @@ private static bool ValidateIncomingBatchForStaging(
         }
 
         foreach (var pair in state.ReceiveChains)
-            Add(EncodeReceiveChainKey(partitionKey, pair.Key), pair.Value.LastBatchDigest.ToArray());
+        {
+            byte[] suffix = new byte[38];
+            pair.Key.Sender.WriteTo(suffix);
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(22));
+            Add(StorageKey(root, 25, suffix), pair.Value.LastBatchDigest.ToArray());
+        }
         foreach (var pair in state.LegacyReceiveChains)
-            Add(EncodeLegacyReceiveChainKey(partitionKey, pair.Key), pair.Value.LastBatchDigest.ToArray());
+        {
+            byte[] suffix = new byte[22];
+            pair.Key.Sender.WriteTo(suffix);
+            BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
+            BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            Add(StorageKey(root, 14, suffix), pair.Value.LastBatchDigest.ToArray());
+        }
 
         foreach (var pair in state.ChangeLedger)
         {
