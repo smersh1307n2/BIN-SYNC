@@ -323,6 +323,9 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                 byte[] priorSnapshotDigest = priorBytes.AsSpan(62, MetadataBaselineReportProtocol.DigestSize).ToArray();
                 MetadataBaselineReport prior = MetadataBaselineReportProtocol.DecodeAndVerify(
                     priorBytes, acceptedRoster, priorGeneration, priorSnapshotDigest);
+                if (!key.AsSpan().SequenceEqual(BaselineReportKey(
+                        prior.NamespaceId, prior.RosterGeneration, prior.MemberNodeId)))
+                    throw new InvalidDataException("Stored MBR1 report key/value identity mismatch.");
 
                 if (report.ReportSequence < prior.ReportSequence)
                     throw new InvalidDataException("MBR1 report sequence regressed.");
@@ -357,15 +360,25 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                     !row.Value.AsSpan(0, 4).SequenceEqual("MBR1"u8))
                     throw new InvalidDataException("Stored MBR1 report is corrupt.");
                 Guid storedGeneration = new(row.Value.AsSpan(46, 16), bigEndian: true);
-                if (storedGeneration != generation ||
-                    !row.Value.AsSpan(62, MetadataBaselineReportProtocol.DigestSize).SequenceEqual(snapshotDigest))
-                    continue; // A member may already have reported a newer FULL_REPLACE generation.
-                if (row.Key.Length != prefix.Length + 16 ||
-                    !row.Key.AsSpan(prefix.Length).SequenceEqual(row.Value.AsSpan(118, 16)))
-                    throw new InvalidDataException("MBR1 report key/value identity mismatch.");
+                byte[] storedDigest = row.Value.AsSpan(62, MetadataBaselineReportProtocol.DigestSize).ToArray();
                 MetadataBaselineReport report = MetadataBaselineReportProtocol.DecodeAndVerify(
-                    row.Value, acceptedRoster, generation, snapshotDigest);
-                reports.Add(report);
+                    row.Value, acceptedRoster, storedGeneration, storedDigest);
+                if (row.Key.Length != prefix.Length + 16 ||
+                    !row.Key.AsSpan(prefix.Length).SequenceEqual(report.MemberNodeId.ToArray()))
+                    throw new InvalidDataException("MBR1 report key/value identity mismatch.");
+
+                byte[] ackBytes = ReadValue(FullReplaceAckKey(
+                    report.NamespaceId, report.RosterGeneration, report.FullReplaceGeneration, report.MemberNodeId))
+                    ?? throw new InvalidDataException("Stored MBR1 report has no durable FULL_REPLACE installation ACK.");
+                FullReplaceInstalledAck ack = FullReplaceInstalledAckProtocol.DecodeAndVerify(ackBytes, acceptedRoster);
+                if (!ack.Installed || ack.MemberTransportEpoch != report.MemberTransportEpoch ||
+                    ack.Generation != report.FullReplaceGeneration ||
+                    !ack.Digest.AsSpan().SequenceEqual(report.SnapshotDigest) ||
+                    ack.HlcWallFloor != report.HlcWallFloor || ack.HlcLogicalFloor != report.HlcLogicalFloor)
+                    throw new InvalidDataException("Stored MBR1 report no longer matches its installed FULL_REPLACE ACK.");
+
+                if (storedGeneration == generation && storedDigest.AsSpan().SequenceEqual(snapshotDigest))
+                    reports.Add(report);
             }
             reports.Sort((a, b) => CompareNodeIds(a.MemberNodeId, b.MemberNodeId));
             return reports;
