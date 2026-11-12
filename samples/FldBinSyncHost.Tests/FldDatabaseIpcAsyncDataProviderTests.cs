@@ -526,6 +526,17 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1, relaySent);
             Assert.Equal(1, relayApplied.Applied);
 
+            // Verify the exact relay author stream was delivered and ACKed by C.
+            // A successful send count alone is insufficient: the ACK must advance
+            // the durable peer cursor used by the relay compaction horizon.
+            MetadataPeerStreamState relayPeerState = metadataB.GetPeerStreamState(
+                scope, nodeB.NodeId, relayNode.NodeId,
+                checked((uint)relayInitiator.PeerEpoch), namespaceId, authorA);
+            Assert.Equal(1UL, relayPeerState.AckedCursor + relayPeerState.StreamOffset);
+            Assert.Null(relayPeerState.PendingBatch);
+            Assert.Equal(1UL, metadataB.GetSafePeerStreamCompactionCursor(
+                scope, nodeB.NodeId, namespaceId, authorA));
+
             // Compact only after the actual peer ACKs have advanced the per-stream
             // safe cursors. The signed namespace proof alone never deletes payloads.
             metadataA.CompactOutboundThrough(scope, nodeA.NodeId, namespaceId, authorA, 1);
