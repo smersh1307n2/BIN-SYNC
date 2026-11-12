@@ -128,6 +128,7 @@ For a previously stored report, the store enforces:
 - every previously reported feed/receive stream must remain present;
 - feed kind cannot change for an existing peer/author stream;
 - feed offset and receive cursor cannot regress;
+- an increased feed issuer epoch must reset its digest anchor to all zeroes;
 - an equal feed offset or receive cursor must retain the exact digest anchor.
 
 The row is committed before the acceptance API returns. Reopen revalidates
