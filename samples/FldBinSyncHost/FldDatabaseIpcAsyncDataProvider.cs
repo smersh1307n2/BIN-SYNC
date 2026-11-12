@@ -15,7 +15,7 @@ namespace BinSync.FldHost;
 /// namespace-scoped. Reconnects must reuse that ClientId. Async commit guards,
 /// author-epoch closure, FULL_REPLACE and GC capabilities are not emulated.
 /// </summary>
-public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore, IAsyncProviderOperationReceiptStore, IAsyncProviderPublicationMode
+public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore, IAsyncProviderOperationReceiptStore, IAsyncProviderPublicationMode, IAsyncProviderTombstoneGc
 {
     private readonly FldDatabaseIpcClient _client;
     private readonly FldDatabaseIpcOutboxLease _outboxLease;
@@ -386,6 +386,110 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             entries[i] = ToProviderMutation(metadata, value);
         }
         return new ProviderSnapshotPage(entries, page.NextIndex, !page.HasMore);
+    }
+
+    public async ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
+        int limit, CancellationToken cancellationToken = default)
+    {
+        ThrowIfUnavailable(cancellationToken);
+        if (limit is < 1 or > FldDatabaseIpcProtocol.MaxTombstoneGcCandidates)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+
+        ProviderSnapshotHandle snapshot = await OpenSnapshotAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            FldDatabaseIpcSnapshotHandle ipcHandle;
+            lock (_gate)
+            {
+                ThrowIfDisposed();
+                if (!_snapshots.TryGetValue(snapshot.SnapshotToken, out ipcHandle!))
+                    throw new InvalidOperationException("The FLD tombstone-candidate snapshot was not registered.");
+            }
+
+            var candidates = new List<ProviderMutation>(Math.Min(limit, 256));
+            int cursor = 0;
+            while (candidates.Count < limit)
+            {
+                int pageLimit = Math.Min(
+                    FldDatabaseIpcProtocol.MaxSnapshotPageEntries,
+                    Math.Max(1, limit - candidates.Count));
+                FldProviderSnapshotMetadataPage page = await _client.ReadSnapshotPageAsync(
+                    ipcHandle, cursor, pageLimit, cancellationToken).ConfigureAwait(false);
+                foreach (FldProviderSnapshotEntryMetadata metadata in page.Entries)
+                {
+                    if (!metadata.IsTombstone && !metadata.IsRecordTombstone)
+                        continue;
+                    if (metadata.AuthorNodeId.Length != 16 || metadata.ChangeId.Length != 16)
+                        continue;
+
+                    candidates.Add(new ProviderMutation
+                    {
+                        RecordId = _recordIdResolver(metadata.RecordId),
+                        FieldId = _fieldIdResolver(metadata.FieldId),
+                        IsTombstone = metadata.IsTombstone,
+                        IsRecordTombstone = metadata.IsRecordTombstone,
+                        HlcWall = metadata.HlcWall,
+                        HlcLogical = metadata.HlcLogical,
+                        AuthorNodeId = NodeId.From(metadata.AuthorNodeId),
+                        KeyEpoch = metadata.KeyEpoch,
+                        Value = Array.Empty<byte>(),
+                        ChangeId = BatchId.From(metadata.ChangeId),
+                        OriginAuthorEpoch = metadata.OriginAuthorEpoch,
+                        OriginSequence = metadata.OriginSequence
+                    });
+                    if (candidates.Count == limit)
+                        break;
+                }
+
+                if (candidates.Count == limit || !page.HasMore)
+                    break;
+                if (page.NextIndex <= cursor)
+                    throw new InvalidDataException("FLD tombstone-candidate snapshot cursor did not advance.");
+                cursor = page.NextIndex;
+            }
+            return candidates;
+        }
+        finally
+        {
+            // Releasing the persisted snapshot pin is part of the read operation.
+            // If release fails, propagate the error and leave final Host GC fail-closed.
+            await ReleaseSnapshotAsync(snapshot.SnapshotToken, CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    public async ValueTask<int> CompactTombstonesAsync(
+        IReadOnlyList<ProviderMutation> approvedCandidates,
+        int limit, CancellationToken cancellationToken = default)
+    {
+        ThrowIfUnavailable(cancellationToken);
+        ArgumentNullException.ThrowIfNull(approvedCandidates);
+        if (limit is < 1 or > FldDatabaseIpcProtocol.MaxTombstoneGcCandidates ||
+            approvedCandidates.Count > limit)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+
+        var candidates = new FldTombstoneGcCandidate[approvedCandidates.Count];
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            ProviderMutation mutation = approvedCandidates[i]
+                ?? throw new ArgumentException("Approved tombstone candidate cannot be null.", nameof(approvedCandidates));
+            if (mutation.IsRecordTombstone == mutation.IsTombstone)
+                throw new ArgumentException("Only record or field tombstones may be approved for GC.", nameof(approvedCandidates));
+
+            byte[] recordId = new byte[16];
+            byte[] changeId = new byte[16];
+            byte[] authorNodeId = new byte[16];
+            mutation.RecordId.WriteTo(recordId);
+            mutation.ChangeId.WriteTo(changeId);
+            mutation.AuthorNodeId.WriteTo(authorNodeId);
+            candidates[i] = new FldTombstoneGcCandidate(
+                recordId, mutation.FieldId, changeId, authorNodeId,
+                mutation.HlcWall, mutation.HlcLogical,
+                mutation.OriginAuthorEpoch, mutation.OriginSequence,
+                mutation.IsRecordTombstone, mutation.IsTombstone);
+        }
+
+        return await _client.CompactTombstonesAsync(candidates, limit, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async ValueTask ReleaseSnapshotAsync(
