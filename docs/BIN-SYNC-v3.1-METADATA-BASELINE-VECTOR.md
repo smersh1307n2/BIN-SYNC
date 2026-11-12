@@ -165,3 +165,19 @@ the peer may have accepted relay batches after the snapshot cut. A zero
 receive cursor still requires a zero receive digest. A fixed snapshot offset
 does not freeze the post-baseline digest chain; digest progress is accepted
 only when the target member's signed receive report carries the same digest.
+
+
+## 10. RCP2 checkpoint fence for Metadata application
+
+Persisting the aggregate MBR1 evidence into a Metadata host requires the
+currently accepted, authority-signed RCP2 checkpoint for the same namespace
+roster generation, FULL_REPLACE generation and snapshot digest. Its HLC floor
+must cover every member's installed FRA2 snapshot floor. The checkpoint itself
+must already have passed the normal active-member OFR2 frontier validation;
+a locally assembled or unsigned frontier is not sufficient.
+
+The baseline transaction rechecks this checkpoint under the shared Storage
+gate together with the roster, all Active-member installed ACKs and the
+complete MBR1 report set. This binds cursor installation to the same
+retention decision without authorizing payload deletion. Payload compaction
+still requires its own later proof and transaction.
