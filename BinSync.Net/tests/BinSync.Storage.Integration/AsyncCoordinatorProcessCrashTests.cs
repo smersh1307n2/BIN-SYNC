@@ -8,8 +8,8 @@ namespace BinSync.Storage.Integration;
 
 /// <summary>
 /// Real process-death coverage for the async coordinator's durable receive path.
-/// The provider commit is durable before the child is killed, while Metadata
-/// finalization and the transport ACK have not yet happened.
+/// Each test kills the child at a distinct durability boundary, then reopens the
+/// same Storage partition and proves recovery or duplicate replay before ACK.
 /// </summary>
 public sealed class AsyncCoordinatorProcessCrashTests
 {
@@ -94,7 +94,7 @@ public sealed class AsyncCoordinatorProcessCrashTests
     [InlineData("after-node-checkpoint")]
     [InlineData("after-provider-commit")]
     [InlineData("after-metadata-finalized-before-ack")]
-    public async Task Async_coordinator_process_death_at_receive_cut_recovers_pending_apply(string crashCut)
+    public async Task Async_coordinator_process_death_at_receive_cut_preserves_durable_state(string crashCut)
     {
         string directory = Path.Combine(Path.GetTempPath(),
             "binsync-async-coordinator-crash-" + Guid.NewGuid().ToString("N"));
