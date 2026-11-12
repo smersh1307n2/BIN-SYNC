@@ -549,6 +549,25 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record));
             Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record));
 
+            // Distinguish a conservative Metadata reservation block from provider
+            // candidate/proof rejection before invoking physical GC.
+            metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
+            using (metadataA.AcquireTombstoneGcCommitGuard(
+                scope, nodeA.NodeId, namespaceId, gcA, trust,
+                out IReadOnlySet<RecordId>? referencesA))
+                Assert.NotNull(referencesA);
+            IReadOnlyList<ProviderMutation> candidatesA =
+                await providerA.ReadTombstoneGcCandidatesAsync(16);
+            Assert.Single(candidatesA);
+            ProviderMutation candidateA = candidatesA[0];
+            Assert.True(gcA.HasProtocolTombstoneGcProof(
+                gcA.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? rosterA)
+                    ? rosterA! : throw new InvalidOperationException("Host A roster disappeared."),
+                trust, candidateA.AuthorNodeId, candidateA.OriginAuthorEpoch,
+                candidateA.OriginSequence, candidateA.HlcWall, candidateA.HlcLogical,
+                fullReplaceGeneration, fullReplaceDigest),
+                "Host A provider tombstone identity must match the accepted signed proof.");
+
             Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 16));
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 16));
             Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
