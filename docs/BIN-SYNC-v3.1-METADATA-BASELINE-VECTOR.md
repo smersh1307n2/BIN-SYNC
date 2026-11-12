@@ -104,3 +104,37 @@ A peer ACK alone is not a baseline. A FULL_REPLACE installed ACK alone is not a 
 ## 7. Release rule
 
 This contract is an implementation prerequisite, not a GC authorization. Production receipt, ChangeId, record-tombstone and field-tombstone GC remain disabled until the writer barrier, two-sided baseline transaction, two-independent-Host proof, async Host reference-snapshot/revalidation, crash/rejoin/resurrection matrix, physical-compaction crash tests, byte/cardinality audit, performance validation and exact-head platform CI are complete.
+
+
+## 8. Durable member-report acceptance
+
+The namespace GC metadata store persists one latest MBR1 report per
+(namespace, accepted roster generation, member). Acceptance is serialized by
+the same Storage transaction gate as roster, frontier, FULL_REPLACE ACK and
+retention-checkpoint updates.
+
+A report is accepted only when the exact member has a durable installed FRA2
+ACK for the same FULL_REPLACE generation and snapshot digest, and the report's
+transport epoch and HLC floor equal that ACK. The MBR1 signature still proves
+ownership of the member-local cursor claims; the ACK proves that this member
+installed the exact snapshot to which those claims are bound.
+
+For a previously stored report, the store enforces:
+
+- lower report sequence: reject;
+- same report sequence and byte-identical signed envelope: idempotent success;
+- same report sequence with different bytes: reject as a member fork;
+- higher sequence: provider watermark and HLC floor cannot regress;
+- every previously reported feed/receive stream must remain present;
+- feed kind cannot change for an existing peer/author stream;
+- feed offset and receive cursor cannot regress;
+- an equal feed offset or receive cursor must retain the exact digest anchor.
+
+The row is committed before the acceptance API returns. Reopen revalidates
+the stored signature, roster binding, key/member identity and requested
+FULL_REPLACE generation/digest. Reports for superseded FULL_REPLACE generations
+are not returned when collecting the current generation's vector.
+
+This is still an evidence-collection step. It does not update
+PeerStreamState, ReceiveState, digest-chain rows or initial-sync markers;
+it does not compact payloads and does not authorize physical GC.
