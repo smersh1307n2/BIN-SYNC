@@ -40,6 +40,23 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
+    /// Attach the signed namespace retention checkpoint guard to the exact local
+    /// Metadata scope and replica used by this coordinator.
+    /// </summary>
+    public void AttachNamespaceGcGuard(
+        StorageNamespaceGcStore gcStore, TrustStore trustStore,
+        string scopeId, NodeId localReplica)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ArgumentNullException.ThrowIfNull(gcStore);
+        if (localReplica.IsZero || !gcStore.IsBoundTo(_storage, scopeId, localReplica))
+            throw new ArgumentException(
+                "Namespace GC state must be bound to this Metadata Store, scope and local replica.",
+                nameof(gcStore));
+        AttachNamespaceGcGuard(gcStore, trustStore);
+    }
+
+    /// <summary>
     /// Attach the signed namespace retention checkpoint guard. The GC store must share
     /// this exact StorageDatabase so replay checks and metadata commits serialize on
     /// the same transaction gate.
