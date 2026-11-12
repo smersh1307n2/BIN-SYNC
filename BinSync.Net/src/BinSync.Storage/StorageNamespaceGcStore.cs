@@ -403,7 +403,10 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
                 current.FeedKind != oldEntry.FeedKind ||
                 current.IssuerEpoch < oldEntry.IssuerEpoch ||
                 current.AbsoluteFeedOffset < oldEntry.AbsoluteFeedOffset ||
-                (current.AbsoluteFeedOffset == oldEntry.AbsoluteFeedOffset &&
+                (current.IssuerEpoch > oldEntry.IssuerEpoch &&
+                 current.DigestAnchor.Any(value => value != 0)) ||
+                (current.IssuerEpoch == oldEntry.IssuerEpoch &&
+                 current.AbsoluteFeedOffset == oldEntry.AbsoluteFeedOffset &&
                  !current.DigestAnchor.AsSpan().SequenceEqual(oldEntry.DigestAnchor)))
                 throw new InvalidDataException("MBR1 feed vector regressed, dropped a stream, or changed an equal-offset digest anchor.");
         }
