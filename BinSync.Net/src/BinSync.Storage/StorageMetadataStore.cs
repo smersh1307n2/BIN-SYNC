@@ -1384,6 +1384,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
                     continue;
                 }
+                if (operation.AuthorNodeId == incoming.LocalReplica)
+                    throw new InvalidDataException("An incoming route cannot introduce a new operation authored by the local replica.");
                 newLedger.Add((ledgerKey,
                     new ChangeLedgerValue(operation.Fingerprint.ToArray(), false, operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence)));
                 if (!operation.RelayEligible) continue;
@@ -1696,9 +1698,12 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new InvalidDataException("ChangeId was reused with different fingerprint or Origin provenance within one incoming batch.");
             batchIdentities[key] = operation;
 
-            if (state.ChangeLedger.TryGetValue(key, out var priorLedger) &&
-                !LedgerMatches(priorLedger, operation))
+            bool hasLedgerIdentity = state.ChangeLedger.TryGetValue(key, out var priorLedger);
+            if (hasLedgerIdentity && !LedgerMatches(priorLedger!, operation))
                 throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
+            if (operation.AuthorNodeId == batch.LocalReplica &&
+                (!hasLedgerIdentity || !priorLedger!.IsLocalOutbound))
+                throw new InvalidDataException("An incoming route cannot introduce a new operation authored by the local replica.");
 
             if (pendingIdentities.TryGetValue(key, out var pendingOperation))
             {
@@ -1764,6 +1769,8 @@ private static bool ValidateIncomingBatchForStaging(
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint within one incoming batch.");
                 continue;
             }
+            if (operation.AuthorNodeId == batch.LocalReplica)
+                throw new InvalidDataException("An incoming route cannot introduce a new operation authored by the local replica.");
 
             newLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), false, operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence));
             if (!operation.RelayEligible)
