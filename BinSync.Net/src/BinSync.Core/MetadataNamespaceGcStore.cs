@@ -21,6 +21,13 @@ public interface IMetadataNamespaceGcStore
 
     FullReplaceInstalledAck AcceptFullReplaceInstalledAck(
         ReadOnlySpan<byte> encoded, NamespaceRosterCertificate acceptedRoster);
+
+    /// <summary>Durably accepts one member-owned MBR1 report after its exact FULL_REPLACE installation ACK.</summary>
+    MetadataBaselineReport AcceptMetadataBaselineReport(
+        ReadOnlySpan<byte> encoded, NamespaceRosterCertificate acceptedRoster,
+        Guid expectedGeneration, ReadOnlySpan<byte> expectedSnapshotDigest);
+    IReadOnlyList<MetadataBaselineReport> ReadMetadataBaselineReports(
+        NamespaceRosterCertificate acceptedRoster, Guid generation, ReadOnlySpan<byte> snapshotDigest);
     IReadOnlyList<FullReplaceInstalledAck> ReadFullReplaceInstalledAcks(
         NamespaceRosterCertificate acceptedRoster, Guid generation);
 
