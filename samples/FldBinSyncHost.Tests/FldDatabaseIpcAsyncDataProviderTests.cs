@@ -558,9 +558,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 [new MetadataPeerStreamBaseline(authorA, 0, 17)]);
 
             Task<BatchResult> relayReceive = relayAcceptor.ReceiveBatchAsync(relayNode);
-            int relaySent = await adapterB.RunOutboundRoundAsync([relayInitiator])
-                .WaitAsync(TimeSpan.FromSeconds(60));
-            BatchResult relayApplied = await relayReceive.WaitAsync(TimeSpan.FromSeconds(60));
+            Task<int> relaySend = adapterB.RunOutboundRoundAsync([relayInitiator]);
+            // Observe receive failures immediately instead of waiting for the sender's
+            // transport-ACK timeout; C's WAL-backed APPLY must complete before ACK.
+            await Task.WhenAll(relayReceive, relaySend).WaitAsync(TimeSpan.FromSeconds(60));
+            int relaySent = await relaySend;
+            BatchResult relayApplied = await relayReceive;
             Assert.Equal(1, relaySent);
             Assert.Equal(1, relayApplied.Applied);
 
