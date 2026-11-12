@@ -172,4 +172,72 @@ public sealed class MetadataBaselineReportProtocolTests
         };
         Assert.Throws<ArgumentException>(() => MetadataBaselineReportProtocol.Sign(invalid, keys[0].Seed));
     }
+    [Fact]
+    public void MBR1_rejects_feed_and_receive_epochs_not_fenced_by_the_roster()
+    {
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var roster = CreateRoster(keys);
+        byte[] digest = new byte[32];
+        Guid generation = Guid.Parse("00112233-4455-6677-8899-aabbccddeeff");
+        var report = CreateReport(roster, digest);
+        var feed = Assert.Single(report.FeedEntries);
+        var wrongFeedEpoch = new MetadataBaselineReport
+        {
+            NamespaceId = report.NamespaceId,
+            RosterGeneration = report.RosterGeneration,
+            RosterDigest = report.RosterDigest,
+            FullReplaceGeneration = report.FullReplaceGeneration,
+            SnapshotDigest = report.SnapshotDigest,
+            SnapshotEntryCount = report.SnapshotEntryCount,
+            ProviderChangeFeedWatermark = report.ProviderChangeFeedWatermark,
+            HlcWallFloor = report.HlcWallFloor,
+            HlcLogicalFloor = report.HlcLogicalFloor,
+            MemberNodeId = report.MemberNodeId,
+            MemberTransportEpoch = report.MemberTransportEpoch,
+            ReportSequence = report.ReportSequence,
+            FeedEntries = new[] { new MetadataBaselineFeedEntry
+            {
+                TargetPeer = feed.TargetPeer,
+                TargetTransportEpoch = feed.TargetTransportEpoch + 1,
+                AuthorStream = feed.AuthorStream,
+                FeedKind = feed.FeedKind,
+                IssuerEpoch = feed.IssuerEpoch,
+                AbsoluteFeedOffset = feed.AbsoluteFeedOffset,
+                DigestAnchor = feed.DigestAnchor
+            }},
+            ReceiveEntries = report.ReceiveEntries
+        };
+        byte[] encoded = MetadataBaselineReportProtocol.Sign(wrongFeedEpoch, keys[0].Seed);
+        Assert.Throws<InvalidDataException>(() => MetadataBaselineReportProtocol.DecodeAndVerify(
+            encoded, roster, generation, digest));
+
+        var nonzeroEmptyDigest = new MetadataBaselineReport
+        {
+            NamespaceId = report.NamespaceId,
+            RosterGeneration = report.RosterGeneration,
+            RosterDigest = report.RosterDigest,
+            FullReplaceGeneration = report.FullReplaceGeneration,
+            SnapshotDigest = report.SnapshotDigest,
+            SnapshotEntryCount = report.SnapshotEntryCount,
+            ProviderChangeFeedWatermark = report.ProviderChangeFeedWatermark,
+            HlcWallFloor = report.HlcWallFloor,
+            HlcLogicalFloor = report.HlcLogicalFloor,
+            MemberNodeId = report.MemberNodeId,
+            MemberTransportEpoch = report.MemberTransportEpoch,
+            ReportSequence = report.ReportSequence,
+            FeedEntries = new[] { new MetadataBaselineFeedEntry
+            {
+                TargetPeer = feed.TargetPeer,
+                TargetTransportEpoch = feed.TargetTransportEpoch,
+                AuthorStream = feed.AuthorStream,
+                FeedKind = feed.FeedKind,
+                IssuerEpoch = feed.IssuerEpoch,
+                AbsoluteFeedOffset = 0,
+                DigestAnchor = Enumerable.Repeat((byte)1, 16).ToArray()
+            }}
+        };
+        Assert.Throws<ArgumentException>(() =>
+            MetadataBaselineReportProtocol.Sign(nonzeroEmptyDigest, keys[0].Seed));
+    }
+
 }
