@@ -2654,7 +2654,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             var newB = Assert.Single(chains, row =>
                 NodeId.From(row.Key.AsSpan(root.Length + 1 + 22, 16)) == authorB);
             Assert.Equal(legacyDigest, migratedA.Value);
-            Assert.Equal(Bytes(82), newB.Value);
+            byte[] expectedNewAuthorDigest = new byte[16];
+            expectedNewAuthorDigest[^1] = 82;
+            Assert.Equal(expectedNewAuthorDigest, newB.Value);
         }
 
         using (var reopened = new StorageMetadataStore(directory, 457, deleteOnDispose: false))
