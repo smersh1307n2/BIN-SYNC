@@ -3049,7 +3049,7 @@ private static bool ValidateIncomingBatchForStaging(
         }
     }
 
-    public void AcknowledgeOutboundBatch(string scopeId, NodeId localReplica,
+    public void AcknowledgePeerBatch(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         BatchId batchId, ulong cursorEnd, byte[] batchDigest)
     {
