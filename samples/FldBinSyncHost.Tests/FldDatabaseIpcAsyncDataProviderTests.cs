@@ -697,8 +697,21 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // The provider committed its ApplyToken, while Metadata finalization
             // did not run because the IPC response was deliberately lost. Reopen
             // the Host and let coordinator startup recovery replay the same token.
-            await providerB.DisposeAsync();
+            FldDatabaseIpcAsyncDataProvider crashedAfterApplyProviderB = providerB
+                ?? throw new InvalidOperationException("Expected the restarted Host provider to remain attached.");
             providerB = null;
+            try
+            {
+                await crashedAfterApplyProviderB.DisposeAsync();
+            }
+            catch (AggregateException error) when (
+                error.Flatten().InnerExceptions.Count > 0 &&
+                error.Flatten().InnerExceptions.All(inner => inner is IOException))
+            {
+                // The second deliberate Host crash also invalidates the IPC
+                // lease-release request. DisposeAsync still closes the client
+                // connection and feed gate after collecting that expected IO error.
+            }
             await remoteB.DisposeAsync();
             remoteB = null;
             await StopDatabaseHostAsync(hostB);
