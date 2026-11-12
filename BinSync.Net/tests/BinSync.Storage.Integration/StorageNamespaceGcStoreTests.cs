@@ -102,6 +102,35 @@ public sealed class StorageNamespaceGcStoreTests
         }, keys[memberIndex].Seed);
 
     [Fact]
+    public void Physical_gc_domains_are_disabled_by_default_and_require_explicit_options()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-gc-flags-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 19);
+            NodeId local = NodeId.From(Id(0x7F));
+            var defaults = new StorageNamespaceGcStore(storage, "gc-flags", local);
+            Assert.False(defaults.IsTombstoneGcProofEnabled);
+            Assert.False(defaults.IsChangeIdGcProofEnabled);
+            Assert.False(defaults.IsReceiptGcProofEnabled);
+
+            var enabled = new StorageNamespaceGcStore(
+                storage, "gc-flags", local,
+                new StorageNamespaceGcFeatureOptions(
+                    EnableTombstoneGc: true,
+                    EnableChangeIdGc: true,
+                    EnableReceiptGc: true));
+            Assert.True(enabled.IsTombstoneGcProofEnabled);
+            Assert.True(enabled.IsChangeIdGcProofEnabled);
+            Assert.True(enabled.IsReceiptGcProofEnabled);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Signed_roster_frontiers_acks_and_checkpoint_survive_restart_and_prove_only_the_safe_horizon()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-gc-" + Guid.NewGuid().ToString("N"));
