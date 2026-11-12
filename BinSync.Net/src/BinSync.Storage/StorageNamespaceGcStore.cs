@@ -353,11 +353,18 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             var reports = new List<MetadataBaselineReport>(rows.Count);
             foreach (StorageEntry row in rows)
             {
+                if (row.Value.Length < 118 + BatchSignature.SignatureSize ||
+                    !row.Value.AsSpan(0, 4).SequenceEqual("MBR1"u8))
+                    throw new InvalidDataException("Stored MBR1 report is corrupt.");
+                Guid storedGeneration = new(row.Value.AsSpan(46, 16), bigEndian: true);
+                if (storedGeneration != generation ||
+                    !row.Value.AsSpan(62, MetadataBaselineReportProtocol.DigestSize).SequenceEqual(snapshotDigest))
+                    continue; // A member may already have reported a newer FULL_REPLACE generation.
+                if (row.Key.Length != prefix.Length + 16 ||
+                    !row.Key.AsSpan(prefix.Length).SequenceEqual(row.Value.AsSpan(118, 16)))
+                    throw new InvalidDataException("MBR1 report key/value identity mismatch.");
                 MetadataBaselineReport report = MetadataBaselineReportProtocol.DecodeAndVerify(
                     row.Value, acceptedRoster, generation, snapshotDigest);
-                if (row.Key.Length != prefix.Length + 16 ||
-                    !row.Key.AsSpan(prefix.Length).SequenceEqual(report.MemberNodeId.ToArray()))
-                    throw new InvalidDataException("MBR1 report key/value identity mismatch.");
                 reports.Add(report);
             }
             reports.Sort((a, b) => CompareNodeIds(a.MemberNodeId, b.MemberNodeId));
