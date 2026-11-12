@@ -165,6 +165,22 @@ public static class MetadataBaselineReportProtocol
         };
         Validate(report);
         ValidateRosterBinding(report, acceptedRoster);
+        foreach (MetadataBaselineFeedEntry feed in report.FeedEntries)
+        {
+            NamespaceRosterMember target = FindMember(acceptedRoster, feed.TargetPeer);
+            if (target.Status != NamespaceMemberStatus.Active ||
+                target.TransportPeerEpoch != feed.TargetTransportEpoch)
+                throw new InvalidDataException("MBR1 feed target is not Active at the reported transport epoch.");
+        }
+        foreach (MetadataBaselineReceiveEntry receive in report.ReceiveEntries)
+        {
+            NamespaceRosterMember sender = FindMember(acceptedRoster, receive.SenderPeer);
+            bool epochValid = sender.Status == NamespaceMemberStatus.Retired
+                ? receive.SenderTransportEpoch <= sender.RetiredThroughEpoch
+                : receive.SenderTransportEpoch == sender.TransportPeerEpoch;
+            if (!epochValid)
+                throw new InvalidDataException("MBR1 receive sender transport epoch is not covered by the accepted roster.");
+        }
         if (report.FullReplaceGeneration != expectedGeneration ||
             !CryptographicOperations.FixedTimeEquals(report.SnapshotDigest, expectedSnapshotDigest))
             throw new InvalidDataException("MBR1 report is bound to a different FULL_REPLACE generation or snapshot digest.");
@@ -245,7 +261,8 @@ public static class MetadataBaselineReportProtocol
             if (entry.TargetPeer.IsZero || entry.TargetPeer == report.MemberNodeId ||
                 entry.TargetTransportEpoch == 0 || entry.AuthorStream.IsZero || entry.IssuerEpoch == 0 ||
                 entry.FeedKind is not (MetadataBaselineFeedKind.Outbound or MetadataBaselineFeedKind.Relay) ||
-                entry.DigestAnchor is null || entry.DigestAnchor.Length != ChainDigestSize)
+                entry.DigestAnchor is null || entry.DigestAnchor.Length != ChainDigestSize ||
+                (entry.AbsoluteFeedOffset == 0 && !IsZero(entry.DigestAnchor)))
                 throw new ArgumentException("MBR1 feed entry identity or digest is invalid.", nameof(report));
             if (previousFeed is not null && CompareFeed(previousFeed, entry) >= 0)
                 throw new ArgumentException("MBR1 feed entries must be strictly sorted and unique by peer/epoch/author.", nameof(report));
