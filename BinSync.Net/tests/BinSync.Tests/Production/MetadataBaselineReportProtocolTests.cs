@@ -266,8 +266,38 @@ public sealed class MetadataBaselineReportProtocolTests
                 DigestAnchor = Enumerable.Repeat((byte)1, 16).ToArray()
             }}
         };
+        byte[] nonzeroOffsetZeroEncoded = MetadataBaselineReportProtocol.Sign(
+            nonzeroEmptyDigest, keys[0].Seed);
+        MetadataBaselineReport decodedOffsetZero = MetadataBaselineReportProtocol.DecodeAndVerify(
+            nonzeroOffsetZeroEncoded, roster, generation, digest);
+        Assert.Equal(Enumerable.Repeat((byte)1, 16), decodedOffsetZero.FeedEntries[0].DigestAnchor);
+
+        var nonzeroEmptyReceiveDigest = new MetadataBaselineReport
+        {
+            NamespaceId = report.NamespaceId,
+            RosterGeneration = report.RosterGeneration,
+            RosterDigest = report.RosterDigest,
+            FullReplaceGeneration = report.FullReplaceGeneration,
+            SnapshotDigest = report.SnapshotDigest,
+            SnapshotEntryCount = report.SnapshotEntryCount,
+            ProviderChangeFeedWatermark = report.ProviderChangeFeedWatermark,
+            HlcWallFloor = report.HlcWallFloor,
+            HlcLogicalFloor = report.HlcLogicalFloor,
+            MemberNodeId = report.MemberNodeId,
+            MemberTransportEpoch = report.MemberTransportEpoch,
+            ReportSequence = report.ReportSequence,
+            ReceiveEntries = new[] { new MetadataBaselineReceiveEntry
+            {
+                SenderPeer = roster.Members[1].NodeId,
+                SenderTransportEpoch = roster.Members[1].TransportPeerEpoch,
+                AuthorStream = NodeId.From(Id(3)),
+                IssuerEpoch = 7,
+                ReceiveCursor = 0,
+                LastBatchDigest = Enumerable.Repeat((byte)1, 16).ToArray()
+            }}
+        };
         Assert.Throws<ArgumentException>(() =>
-            MetadataBaselineReportProtocol.Sign(nonzeroEmptyDigest, keys[0].Seed));
+            MetadataBaselineReportProtocol.Sign(nonzeroEmptyReceiveDigest, keys[0].Seed));
     }
 
 }
