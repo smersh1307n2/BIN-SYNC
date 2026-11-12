@@ -290,7 +290,7 @@ public static class MetadataBaselineReportProtocol
         result = left.TargetTransportEpoch.CompareTo(right.TargetTransportEpoch);
         if (result != 0) return result;
         result = CompareNode(left.AuthorStream, right.AuthorStream);
-        return result != 0 ? result : ((byte)left.FeedKind).CompareTo((byte)right.FeedKind);
+        return result; // One peer/author stream cannot be both outbound and relay.
     }
 
     private static int CompareReceive(MetadataBaselineReceiveEntry left, MetadataBaselineReceiveEntry right)
