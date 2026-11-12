@@ -3516,4 +3516,16 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added round-trip/signature, tamper, wrong generation/snapshot, joining signer and duplicate source-kind regression tests.
 - [!] This is the signed wire/data contract only. It is not yet persisted or consumed by FULL_REPLACE, and does not advance Metadata send/receive state. No payload compaction or GC is authorized.
 - [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD Storage Integration Ubuntu/Windows/macOS must pass before this codec is treated as verified.
-- [ ] Next: persist monotonically accepted member reports under the namespace GC store's shared transaction gate, then implement the single-transaction Metadata baseline application with pending-apply/reservation/epoch checks. Do not compact payloads in that first transaction.
+- [x C/T] Persisted monotonically accepted member reports under the namespace GC store's shared transaction gate. Acceptance requires the exact member's durable FULL_REPLACE installed ACK, matching generation/digest, transport epoch and HLC floor; report sequence forks, watermark/HLC regressions, dropped streams, cursor regressions and equal-cursor digest changes fail closed. Added restart, missing-ACK, idempotency, fork and cursor-regression tests.
+- [ ] Next: implement the single-transaction Metadata baseline application with pending-apply/reservation/epoch checks. Do not compact payloads in that first transaction.
+
+
+## 1.136. Durable MBR1 report persistence — 2026-11-12
+
+- [x C] Extended IMetadataNamespaceGcStore with explicit accept/read operations for member-signed MBR1 baseline reports.
+- [x C] Added a dedicated namespace-GC key kind for the latest report per member and accepted roster generation; no ChangeId, receipt, payload or peer cursor rows are duplicated.
+- [x C] Acceptance is under the shared Storage transaction gate and requires the member's exact durable FRA2 installed ACK, including generation, snapshot digest, transport epoch and HLC floor.
+- [x C] Enforced monotonic report sequence, exact-byte idempotency, same-sequence fork rejection, provider watermark/HLC non-regression, feed/receive stream retention, cursor non-regression and equal-cursor digest-anchor stability.
+- [x T] Added durable reopen, missing-ACK, duplicate acceptance, report fork, outbound-feed regression, receive-cursor regression and equal-cursor digest-fork tests.
+- [!] This persists signed evidence only. It does not yet update peer send/receive cursors, digest chains or InitialSyncComplete, does not compact payloads, and does not authorize any physical GC.
+- [ ] C/T Next major block: implement one atomic Metadata baseline transaction that validates the complete active-member report set against the exact roster/FULL_REPLACE/checkpoint, rejects PendingApply and immutable reservations, updates send and receive vectors plus one idempotency marker, and survives crash/reopen. Keep payload compaction as a separate later commit/retry step.
