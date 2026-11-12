@@ -2449,4 +2449,44 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.NotNull(store.GetPendingOutboundBatch(scope, local, peer, 1, 7, author));
     }
 
+
+    [Fact]
+    public void Outbound_and_relay_payloads_cannot_share_an_author_stream()
+    {
+        NodeId local = Node(1), upstream = Node(2), author = Node(3);
+        const int namespaceId = 7;
+
+        using (var outboundFirst = new StorageMetadataStore(
+            Path.Combine(_root, "exclusive-author-outbound-first"), 451))
+        {
+            const string scope = "exclusive-author-outbound-first";
+            outboundFirst.FreezeOutbound(scope, local, namespaceId, author,
+                new[] { FrozenOperation(201, 202) });
+
+            var relayAttempt = CreateBatch(scope, 1, 2, 1, namespaceId, 203,
+                1, 1, 0, 204, Operation(3, 205, 206, 207));
+            Assert.Throws<InvalidDataException>(() => outboundFirst.AcceptIncomingBatch(relayAttempt));
+            Assert.Equal(0UL, outboundFirst.GetRelayHighWatermark(scope, local, namespaceId, author));
+
+            // An exact echo of the already-frozen local ChangeId remains idempotent.
+            var exactEcho = CreateBatch(scope, 1, 2, 1, namespaceId, 208,
+                1, 1, 0, 209, Operation(3, 201, 202, 202, originSequence: 1));
+            Assert.False(outboundFirst.AcceptIncomingBatch(exactEcho).IsDuplicate);
+            Assert.Equal(0UL, outboundFirst.GetRelayHighWatermark(scope, local, namespaceId, author));
+        }
+
+        using (var relayFirst = new StorageMetadataStore(
+            Path.Combine(_root, "exclusive-author-relay-first"), 452))
+        {
+            const string scope = "exclusive-author-relay-first";
+            var incoming = CreateBatch(scope, 1, 2, 1, namespaceId, 210,
+                1, 1, 0, 211, Operation(3, 212, 213, 214));
+            Assert.False(relayFirst.AcceptIncomingBatch(incoming).IsDuplicate);
+            Assert.Throws<InvalidDataException>(() =>
+                relayFirst.FreezeOutbound(scope, local, namespaceId, author,
+                    new[] { FrozenOperation(215, 216) }));
+            Assert.Equal(1UL, relayFirst.GetRelayHighWatermark(scope, local, namespaceId, author));
+        }
+    }
+
 }
