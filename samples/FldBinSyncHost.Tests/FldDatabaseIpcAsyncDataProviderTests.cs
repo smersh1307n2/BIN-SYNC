@@ -20,6 +20,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     public async Task Async_coordinator_reclaims_only_signed_safe_tombstones_through_real_host_ipc()
     {
         string hostRoot = Path.Combine(Path.GetTempPath(), "fld-binsync-host-tombstone-gc-" + Guid.NewGuid().ToString("N"));
+        string nodeRoot = Path.Combine(Path.GetTempPath(), "binsync-host-tombstone-gc-metadata-" + Guid.NewGuid().ToString("N"));
         const uint namespaceId = 0x536;
         byte[] authorBytes = Id(0x65);
         NodeId author = NodeId.From(authorBytes);
@@ -61,7 +62,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 8);
 
-            string nodeRoot = Path.Combine(Path.GetTempPath(), "binsync-host-tombstone-gc-metadata-" + Guid.NewGuid().ToString("N"));
             const string scope = "fld-host-tombstone-gc";
             using (var nodeStorage = StorageDatabase.Open(nodeRoot, 902))
             using (var metadata = new StorageMetadataStore(nodeStorage))
@@ -212,6 +212,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (ownerId != Guid.Empty)
                 StorageIpcEndpoint.DeleteIfOwned(hostRoot, namespaceId, ownerId);
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
+            try { Directory.Delete(nodeRoot, recursive: true); } catch { }
         }
     }
 
