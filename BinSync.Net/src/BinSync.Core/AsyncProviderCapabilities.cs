@@ -60,6 +60,20 @@ public interface IAsyncProviderAuthorEpochClosureStore
         uint authorEpoch, CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Optional provider-side physical tombstone GC boundary. Candidate discovery is a
+/// disposable snapshot; the final Host operation must revalidate exact candidate
+/// identities and its own reference/pin state atomically before deleting anything.
+/// </summary>
+public interface IAsyncProviderTombstoneGc
+{
+    ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
+        int limit, CancellationToken cancellationToken = default);
+    ValueTask<int> CompactTombstonesAsync(
+        IReadOnlyList<ProviderMutation> approvedCandidates,
+        int limit, CancellationToken cancellationToken = default);
+}
+
 /// <summary>Asynchronous authenticated authoritative FULL_REPLACE capability.</summary>
 public interface IAsyncProviderFullReplace
 {
