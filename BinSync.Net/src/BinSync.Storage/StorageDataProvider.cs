@@ -1092,8 +1092,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
     /// <summary>
     /// Tombstone cleanup implementation. v3.1 deliberately returns zero until the signed checkpoint proves
     /// every Active member installed the exact active generation and the global
-    /// causal horizon is closed. The caller must hold a cross-store lease that
-    /// excludes PendingApply, relay/outbound reservations and external reader pins.
+    /// causal horizon is closed. The caller must pass
+    /// StorageSyncCoordinator.AcquireTombstoneGcCommitGuard: its typed lease holds
+    /// the Metadata mutation gate from the live-reference scan through this delete,
+    /// in addition to the coordinator, Node, host and provider commit barriers.
     /// </summary>
     public int CompactRecordTombstones(
         string scopeId, NodeId localReplica, int namespaceId,
@@ -1118,6 +1120,12 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         IDisposable? lease = acquireGcLease();
         if (lease is null)
             throw new InvalidOperationException("Cross-store tombstone GC proof is unavailable; no tombstones were reclaimed.");
+        if (lease is not TombstoneGcCommitLease)
+        {
+            lease.Dispose();
+            throw new InvalidOperationException(
+                "Provider tombstone GC requires the typed StorageSyncCoordinator tombstone-GC commit guard.");
+        }
         using (lease)
         lock (_gate)
         {
