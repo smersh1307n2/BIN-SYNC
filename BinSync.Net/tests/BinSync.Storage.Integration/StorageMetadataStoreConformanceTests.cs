@@ -1604,7 +1604,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             };
 
         var epochBound = MakeBatch(authorA, 5, 200, 201, 1);
-        var legacyUnbound = MakeBatch(authorB, 5, 202, 203, 0, epochBound.BatchDigest);
+        var legacyUnbound = MakeBatch(authorB, 5, 202, 203, 0);
         Assert.False(store.AcceptIncomingBatch(epochBound).IsDuplicate);
         Assert.False(store.AcceptIncomingBatch(legacyUnbound).IsDuplicate);
 
@@ -2234,7 +2234,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Directory.CreateDirectory(directory);
         var first = CreateBatch("durable-scope", 1, 2, 1, 7, 10, 1, 1, 0, 10,
             Operation(20, 30, 40, 50));
-        var pending = CreateBatch("durable-scope", 1, 2, 1, 7, 11, 1, 1, 10, 11,
+        var pending = CreateBatch("durable-scope", 1, 2, 1, 7, 11, 1, 1, 0, 11,
             Operation(21, 31, 41, 51));
         var token = Guid.Parse("00000000-0000-0000-0000-000000000901");
         var consumer = Guid.Parse("00000000-0000-0000-0000-000000000902");

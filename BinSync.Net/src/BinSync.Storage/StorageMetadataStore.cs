@@ -1670,7 +1670,7 @@ private static bool ValidateIncomingBatchForStaging(
         var chain = GetReceiveChainStateForAuthor(state, receiveKey, out _);
         if (batch.CursorStart != checked(receive.CursorEnd + 1) ||
             !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
-            throw new InvalidDataException("Incoming batch does not continue its author cursor and sender digest chain.");
+            throw new InvalidDataException("Incoming batch does not continue its author cursor and author-stream digest chain.");
 
         // Index pending identities once. The durable identity key is
         // (namespace, ChangeId), not ChangeId alone; scanning every pending batch
@@ -1742,7 +1742,7 @@ private static bool ValidateIncomingBatchForStaging(
         var chain = GetReceiveChainStateForAuthor(current, receiveKey, out var legacyChainKey);
         if (batch.CursorStart != checked(receive.CursorEnd + 1) ||
             !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
-            throw new InvalidDataException("Incoming batch does not continue its author cursor and sender digest chain.");
+            throw new InvalidDataException("Incoming batch does not continue its author cursor and author-stream digest chain.");
 
         var newLedger = new Dictionary<LedgerKey, ChangeLedgerValue>();
         var newRelay = new Dictionary<RelayKey, List<MetadataRelayItem>>();

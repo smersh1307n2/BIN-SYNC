@@ -2445,12 +2445,12 @@ public sealed class StorageSyncCoordinatorTests
         byte[] digestA1 = Enumerable.Repeat((byte)0xA1, 16).ToArray();
         byte[] digestB1 = Enumerable.Repeat((byte)0xB1, 16).ToArray();
         store.AcceptIncomingBatch(Create(authorA, 1, 1, zero, digestA1));
-        store.AcceptIncomingBatch(Create(authorB, 2, 1, digestA1, digestB1));
+        store.AcceptIncomingBatch(Create(authorB, 2, 1, zero, digestB1));
 
         byte[] digestA2 = Enumerable.Repeat((byte)0xA2, 16).ToArray();
         byte[] digestB2 = Enumerable.Repeat((byte)0xB2, 16).ToArray();
-        store.AcceptIncomingBatch(Create(authorA, 3, 2, digestB1, digestA2));
-        store.AcceptIncomingBatch(Create(authorB, 4, 2, digestA2, digestB2));
+        store.AcceptIncomingBatch(Create(authorA, 3, 2, digestA1, digestA2));
+        store.AcceptIncomingBatch(Create(authorB, 4, 2, digestB1, digestB2));
 
         Assert.Equal(2UL, store.GetReceiveCursor("author-stream-test", local, sender, 1, 1, authorA));
         Assert.Equal(2UL, store.GetReceiveCursor("author-stream-test", local, sender, 1, 1, authorB));

@@ -133,7 +133,7 @@ public abstract class MetadataStoreConformanceSuite
         using var store = CreateStore();
         store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 10, 1, 1, 0, 10,
             Operation(20, 30, 40, 50)));
-        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 11, 1, 1, 10, 11,
+        store.AcceptIncomingBatch(CreateBatch("scope-a", 1, 2, 1, 7, 11, 1, 1, 0, 11,
             Operation(21, 31, 41, 51)));
 
         store.AcknowledgeRelay("scope-a", Node(1), 7, Node(20), 1);
@@ -505,7 +505,7 @@ public abstract class MetadataStoreConformanceSuite
         store.FinalizePendingApply("scope-a", Node(1),
             new MetadataProviderApplyReceipt(newIntent.ApplyToken, newAuthor.BatchDigest.ToArray()));
 
-        var afterFinalize = CreateBatch("scope-a", 1, 4, 1, 7, 14, 1, 1, 12, 14,
+        var afterFinalize = CreateBatch("scope-a", 1, 4, 1, 7, 14, 1, 1, 0, 14,
             Operation(22, 32, 42, 52));
         var nextIntent = store.BeginPendingApply(afterFinalize,
             Guid.Parse("00000000-0000-0000-0000-000000000129"));
