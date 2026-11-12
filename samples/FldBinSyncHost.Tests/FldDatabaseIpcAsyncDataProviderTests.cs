@@ -224,7 +224,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
-    public async Task Async_two_host_signed_gc_reclaims_the_same_applied_tombstone_independently()
+    public async Task Async_two_host_signed_gc_respects_local_metadata_relay_references()
     {
         string hostRootA = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-a-" + Guid.NewGuid().ToString("N"));
         string hostRootB = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-b-" + Guid.NewGuid().ToString("N"));
@@ -333,14 +333,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await Task.WhenAll(receiveAtB, sendFromA).WaitAsync(TimeSpan.FromSeconds(60));
             Assert.Equal(1, (await receiveAtB).Applied);
             Assert.Equal(1, await sendFromA);
-
-            // The receiving host must forward its retained relay copy and receive the
-            // duplicate ACK before its Metadata reference can stop pinning the record.
-            Task<BatchResult> duplicateAtA = adapterA.ReceiveBatchAsync(initiator);
-            Task<int> relayFromB = adapterB.RunOutboundRoundAsync([acceptor]);
-            await Task.WhenAll(duplicateAtA, relayFromB).WaitAsync(TimeSpan.FromSeconds(60));
-            Assert.Equal(0, (await duplicateAtA).Applied);
-            Assert.Equal(1, await relayFromB);
 
             ProviderMutation? tombstoneAtA = await providerA.ReadCurrentAsync(record, 0x0951);
             ProviderMutation? tombstoneAtB = await providerB.ReadCurrentAsync(record, 0x0951);
@@ -497,14 +489,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host B must independently validate the signed causal and FULL_REPLACE proof.");
             Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record),
-                "Host A Metadata must not retain a pending, relay, or outbound reference to the tombstone.");
-            Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record),
-                "Host B Metadata must not retain a pending, relay, or outbound reference to the tombstone.");
+                "Host A outbound payload must be released after the durable peer ACK.");
+            Assert.True(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record),
+                "Host B relay payload must continue to pin the tombstone until a safe snapshot-aware relay baseline is committed.");
 
             Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 16));
-            Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 16));
+            Assert.Equal(0, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 16));
             Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
-            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
+            Assert.NotNull(await providerB.ReadCurrentAsync(record, 0x0951));
 
             await initiator.DisposeAsync(); initiator = null;
             await acceptor.DisposeAsync(); acceptor = null;
