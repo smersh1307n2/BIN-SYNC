@@ -90,20 +90,31 @@ public sealed class StorageMetadataBaselineCommitTests
                     Installed = true
                 }, keys[i].Seed), roster);
         }
-        gc.AcceptRetentionCheckpoint(NamespaceRetentionCheckpointProtocol.Sign(
-            new NamespaceRetentionCheckpoint
+        var frontierReports = new List<AppliedOriginFrontierReport>();
+        for (int i = 0; i < keys.Length; i++)
+        {
+            byte[] encodedFrontier = OriginFrontierProtocol.Sign(new AppliedOriginFrontierReport
             {
                 NamespaceId = NamespaceId,
                 RosterGeneration = roster.RosterGeneration,
                 RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
-                CheckpointSequence = 1,
-                PreviousCheckpointDigest = new byte[NamespaceRosterProtocol.DigestSize],
-                SafeFrontier = Array.Empty<RetentionFrontierEntry>(),
-                FullReplaceGeneration = generation,
-                FullReplaceDigest = snapshotDigest,
-                FullReplaceHlcWallFloor = 100,
-                FullReplaceHlcLogicalFloor = 2
-            }, keys[0].Seed), roster, trust);
+                MemberNodeId = roster.Members[i].NodeId,
+                MemberTransportEpoch = roster.Members[i].TransportPeerEpoch,
+                ReportSequence = 1,
+                FinalForAuthor = false,
+                UnpublishedDraftCount = 0,
+                MaxUnpublishedDraftHlcWall = 0,
+                MaxUnpublishedDraftHlcLogical = 0,
+                Entries = Array.Empty<AppliedOriginFrontierEntry>(),
+                IssuedOrigins = Array.Empty<IssuedOriginFrontierEntry>()
+            }, keys[i].Seed);
+            frontierReports.Add(gc.AcceptOriginFrontier(encodedFrontier, roster));
+        }
+        NamespaceRetentionCheckpoint checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+            roster, 1, new byte[NamespaceRosterProtocol.DigestSize], frontierReports,
+            generation, snapshotDigest, 100, 2);
+        gc.AcceptRetentionCheckpoint(NamespaceRetentionCheckpointProtocol.Sign(
+            checkpoint, keys[0].Seed), roster, trust);
 
         metadata.RegisterInterestedPeer(Scope, local, peer, 11, NamespaceId);
         metadata.FreezeOutbound(Scope, local, NamespaceId, local, new[]
