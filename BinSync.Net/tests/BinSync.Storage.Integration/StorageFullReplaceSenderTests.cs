@@ -23,7 +23,7 @@ public sealed class StorageFullReplaceSenderTests
         return bytes;
     }
 
-    private sealed class DurableSnapshotProvider : IDataProvider, IProviderDurableSnapshotStore
+    private sealed class DurableSnapshotProvider : IDataProvider, IProviderDurableSnapshotStore, IProviderCommitGuard
     {
         private const byte SnapshotPrefix = 0xF0;
         private readonly StorageDataProvider _inner;
@@ -45,6 +45,7 @@ public sealed class StorageFullReplaceSenderTests
         public void AcknowledgeLocalChanges(ulong safeThroughSequence) =>
             _inner.AcknowledgeLocalChanges(safeThroughSequence);
         public ulong LocalChangeHighWatermark => _inner.LocalChangeHighWatermark;
+        public IDisposable AcquireCommitGuard() => _inner.AcquireCommitGuard();
         public ProviderApplyReceipt ApplyRemoteBatch(Guid applyToken, IReadOnlyList<ProviderMutation> mutations) =>
             _inner.ApplyRemoteBatch(applyToken, mutations);
         public bool TryReadCurrent(RecordId recordId, ushort fieldId, out ProviderMutation? mutation) =>
