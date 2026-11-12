@@ -3386,14 +3386,14 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [ ] A remaining limitation is process scope: the registry coordinates coordinator instances in one process, not multiple processes. Cross-process coordination remains the responsibility of the single-owner Host/partition lease and durable Metadata transactions.
 
 
-## 1.127. Async PendingApply recovery after real FLD Host process death — 2026-11-12
+## 1.127. Async PendingApply recovery after real FLD Host and coordinator process death — 2026-11-12
 
-- [x C/T] Extended the two-independent-Host async composition test with a second fault boundary: after Node has durably checkpointed the incoming batch and Metadata has staged PendingApply, the real FLD Database Host commits the contextual provider APPLY and exits before the IPC response is delivered.
-- [x T] The test requires the caller to observe response loss and the Host process to exit with the injected code. It then restarts the same FLD database, reconnects fresh IPC clients, and runs the async coordinator's startup recovery before accepting another session.
-- [x T] Startup recovery must replay the exact immutable ApplyToken against the provider journal, receive the duplicate durable receipt, finalize the existing PendingApply exactly once, preserve the Node/FLD value and ChangeId, and clear the pending intent. The sender's unacknowledged immutable batch is then replayed over a fresh session; the receiver must answer duplicate/no-op and only then may the sender ACK cursor advance.
-- [!] This is a real FLD provider-host process-death proof at the durable APPLY → Metadata-finalization boundary. The BIN-SYNC coordinator process and its Node/Metadata partition remain alive in this test; it does not yet prove coordinator-process death/reopen at every receive cut.
-- [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository builds/tests must pass before marking this proof verified.
-- [ ] Continue the independent coordinator-process crash matrix for PendingApply-before-Node, Node-checkpoint-before-provider, and Metadata-finalized-before-transport-ACK. Keep physical GC and FULL_REPLACE disabled until all crash/rejoin/resurrection proofs are complete.
+- [x C/T] The two-independent-Host async composition test proves the real FLD Database Host can commit contextual provider APPLY and terminate before the IPC response is delivered. The coordinator restarts the same FLD database, reconnects fresh IPC clients, and runs startup recovery before accepting another session.
+- [x C/T] Added a separate async coordinator process-kill matrix for three receive cuts: after durable PendingApply staging but before Node apply; after the Node checkpoint but before provider APPLY; and after provider APPLY commits but before Metadata finalization. Each cut kills the actual child test-host process, reopens the same Storage partition, and checks the durable state before recovery.
+- [x C/T] Recovery replays the exact immutable ApplyToken and wire payload, preserves Node/provider state, finalizes the existing PendingApply exactly once, and advances the receive cursor only after provider durability. The provider-before-finalize cut must observe a duplicate durable provider receipt; the earlier cuts must apply the provider mutation during recovery.
+- [!] The new async coordinator matrix is source/test implemented in commit 00e367f, but its exact-head CI result is pending. Do not mark the matrix verified until BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository workflows pass on that commit.
+- [ ] Add the async Metadata-finalized-before-transport-ACK process-kill cut and prove durable duplicate/no-op replay over a fresh session. The synchronous coordinator has a four-cut reference matrix; async coverage must reach the same boundary before this roadmap item is complete.
+- [ ] Continue independent crash/reopen and rejoin/resurrection proofs. Keep physical GC and FULL_REPLACE disabled until all required proofs are complete.
 
 ## 1.126. Two-Host FLD transport ACK loss and retry — 2026-11-11
 
