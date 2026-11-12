@@ -229,7 +229,8 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         var receive = next.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0);
-        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId);
+        var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch,
+            batch.NamespaceId, receiveKey.AuthorStream);
         var chain = next.ReceiveChains.TryGetValue(chainKey, out var priorChain)
             ? priorChain
             : new ReceiveChainState(new byte[16]);
@@ -237,7 +238,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
         ulong expectedStart = checked(receive.CursorEnd + 1);
         if (batch.CursorStart != expectedStart ||
             !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
-            throw new InvalidDataException("Incoming batch does not continue the durable author cursor and sender digest chain.");
+            throw new InvalidDataException("Incoming batch does not continue the durable author cursor and author-stream digest chain.");
 
         int relayAdded = 0;
         foreach (var operation in batch.Operations)
@@ -941,7 +942,7 @@ public sealed class VolatileMetadataStoreAdapter : IMetadataStoreConformanceAdap
     private readonly record struct PartitionKey(string ScopeId, NodeId LocalReplica);
     private readonly record struct ReceiptKey(NodeId Sender, uint Epoch, int NamespaceId, BatchId BatchId);
     private readonly record struct ReceiveKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
-    private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
+    private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private sealed record ChangeIdentity(
         byte[] Fingerprint,
