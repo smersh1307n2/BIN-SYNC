@@ -519,8 +519,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             using var reopenedA = FldDatabase.Open(hostRootA, namespaceId, authorABytes);
             using var reopenedB = FldDatabase.Open(hostRootB, namespaceId, authorBBytes);
-            Assert.False(reopenedA.TryResolve(record.ToArray(), 0x0951, out _));
-            Assert.False(reopenedB.TryResolve(record.ToArray(), 0x0951, out _));
+            Assert.True(reopenedA.TryResolve(record.ToArray(), 0x0951, out _),
+                "Host A must retain the Tombstone across restart while its immutable outbound Metadata payload is not compacted.");
+            Assert.True(reopenedB.TryResolve(record.ToArray(), 0x0951, out _),
+                "Host B must retain the Tombstone across restart while its relay Metadata payload is not compacted.");
         }
         finally
         {
