@@ -101,6 +101,64 @@ public sealed class StorageNamespaceGcStoreTests
             Installed = true
         }, keys[memberIndex].Seed);
 
+    private static byte[] SignedBaselineReport(
+        NamespaceRosterCertificate roster, int memberIndex,
+        (byte[] Seed, byte[] PublicKey)[] keys, Guid generation, byte[] snapshotDigest,
+        ulong reportSequence, ulong feedOffset, ulong receiveCursor, byte anchor)
+    {
+        int peerIndex = memberIndex == 0 ? 1 : 0;
+        byte[] feedDigest = Enumerable.Repeat(anchor, MetadataBaselineReportProtocol.ChainDigestSize).ToArray();
+        byte[] receiveDigest = Enumerable.Repeat((byte)(anchor + 1), MetadataBaselineReportProtocol.ChainDigestSize).ToArray();
+        return MetadataBaselineReportProtocol.Sign(new MetadataBaselineReport
+        {
+            NamespaceId = roster.NamespaceId,
+            RosterGeneration = roster.RosterGeneration,
+            RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+            FullReplaceGeneration = generation,
+            SnapshotDigest = snapshotDigest,
+            SnapshotEntryCount = 4,
+            ProviderChangeFeedWatermark = 40,
+            HlcWallFloor = 100,
+            HlcLogicalFloor = 2,
+            MemberNodeId = roster.Members[memberIndex].NodeId,
+            MemberTransportEpoch = roster.Members[memberIndex].TransportPeerEpoch,
+            ReportSequence = reportSequence,
+            FeedEntries = new[]
+            {
+                new MetadataBaselineFeedEntry
+                {
+                    TargetPeer = roster.Members[peerIndex].NodeId,
+                    TargetTransportEpoch = roster.Members[peerIndex].TransportPeerEpoch,
+                    AuthorStream = NodeId.From(Id(0x31)),
+                    FeedKind = MetadataBaselineFeedKind.Outbound,
+                    IssuerEpoch = 7,
+                    AbsoluteFeedOffset = feedOffset,
+                    DigestAnchor = feedOffset == 0 ? new byte[MetadataBaselineReportProtocol.ChainDigestSize] : feedDigest
+                }
+            },
+            ReceiveEntries = new[]
+            {
+                new MetadataBaselineReceiveEntry
+                {
+                    SenderPeer = roster.Members[peerIndex].NodeId,
+                    SenderTransportEpoch = roster.Members[peerIndex].TransportPeerEpoch,
+                    AuthorStream = NodeId.From(Id(0x32)),
+                    IssuerEpoch = 8,
+                    ReceiveCursor = receiveCursor,
+                    LastBatchDigest = receiveCursor == 0 ? new byte[MetadataBaselineReportProtocol.ChainDigestSize] : receiveDigest
+                }
+            }
+        }, keys[memberIndex].Seed);
+    }
+
+    private static void AcceptInstalledAcks(
+        StorageNamespaceGcStore gc, NamespaceRosterCertificate roster,
+        (byte[] Seed, byte[] PublicKey)[] keys, Guid generation, byte[] digest)
+    {
+        for (int i = 0; i < keys.Length; i++)
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, i, keys, generation, digest), roster);
+    }
+
     [Fact]
     public void Physical_gc_domains_are_disabled_by_default_and_require_explicit_options()
     {
@@ -1030,6 +1088,105 @@ public sealed class StorageNamespaceGcStoreTests
                 Assert.False(gc.AreAllActiveMembersInstalled(current, generation, replaceDigest));
                 Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(current, trust, rejoining, 3, 40));
             }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Member_baseline_reports_require_installed_ack_and_survive_reopen()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-store-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        NamespaceRosterCertificate roster = Roster(1, new byte[32], keys);
+        Guid generation = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("mbr1 snapshot"));
+        byte[] member0 = SignedBaselineReport(roster, 0, keys, generation, digest, 1, 10, 11, 0x21);
+        byte[] member1 = SignedBaselineReport(roster, 1, keys, generation, digest, 1, 20, 21, 0x41);
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 905))
+            {
+                var gc = new StorageNamespaceGcStore(storage, "fld-db/mbr1", NodeId.From(Id(99)));
+                roster = gc.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+                Assert.Throws<InvalidDataException>(() =>
+                    gc.AcceptMetadataBaselineReport(member0, roster, generation, digest));
+
+                AcceptInstalledAcks(gc, roster, keys, generation, digest);
+                var accepted0 = gc.AcceptMetadataBaselineReport(member0, roster, generation, digest);
+                Assert.Equal(roster.Members[0].NodeId, accepted0.MemberNodeId);
+                Assert.Equal(member0, MetadataBaselineReportProtocol.Sign(accepted0, keys[0].Seed));
+                gc.AcceptMetadataBaselineReport(member0, roster, generation, digest);
+                gc.AcceptMetadataBaselineReport(member1, roster, generation, digest);
+
+                var reports = gc.ReadMetadataBaselineReports(roster, generation, digest);
+                Assert.Equal(2, reports.Count);
+                Assert.Equal(new[] { roster.Members[0].NodeId, roster.Members[1].NodeId },
+                    reports.Select(report => report.MemberNodeId).ToArray());
+            }
+
+            using (var reopened = StorageDatabase.Open(directory, 905))
+            {
+                var gc = new StorageNamespaceGcStore(reopened, "fld-db/mbr1", NodeId.From(Id(99)));
+                Assert.True(gc.TryReadNamespaceRoster(19, trust, out var restoredRoster));
+                Assert.NotNull(restoredRoster);
+                var reports = gc.ReadMetadataBaselineReports(restoredRoster!, generation, digest);
+                Assert.Equal(2, reports.Count);
+                Assert.Equal(1UL, reports[0].ReportSequence);
+                Assert.Equal(10UL, reports[0].FeedEntries[0].AbsoluteFeedOffset);
+                Assert.Equal(11UL, reports[0].ReceiveEntries[0].ReceiveCursor);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Member_baseline_reports_reject_sequence_forks_and_cursor_regressions()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-fence-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        NamespaceRosterCertificate roster = Roster(1, new byte[32], keys);
+        Guid generation = Guid.Parse("bbbbbbbb-cccc-dddd-eeee-ffffffffffff");
+        byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes("mbr1 monotonic snapshot"));
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 906);
+            var gc = new StorageNamespaceGcStore(storage, "fld-db/mbr1-fence", NodeId.From(Id(99)));
+            roster = gc.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+            AcceptInstalledAcks(gc, roster, keys, generation, digest);
+            byte[] initial = SignedBaselineReport(roster, 0, keys, generation, digest, 1, 10, 10, 0x31);
+            gc.AcceptMetadataBaselineReport(initial, roster, generation, digest);
+
+            byte[] fork = SignedBaselineReport(roster, 0, keys, generation, digest, 1, 10, 10, 0x51);
+            Assert.Throws<InvalidDataException>(() =>
+                gc.AcceptMetadataBaselineReport(fork, roster, generation, digest));
+
+            byte[] feedRegression = SignedBaselineReport(roster, 0, keys, generation, digest, 2, 9, 11, 0x31);
+            Assert.Throws<InvalidDataException>(() =>
+                gc.AcceptMetadataBaselineReport(feedRegression, roster, generation, digest));
+
+            byte[] receiveRegression = SignedBaselineReport(roster, 0, keys, generation, digest, 2, 11, 9, 0x31);
+            Assert.Throws<InvalidDataException>(() =>
+                gc.AcceptMetadataBaselineReport(receiveRegression, roster, generation, digest));
+
+            byte[] equalCursorDigestFork = SignedBaselineReport(roster, 0, keys, generation, digest, 2, 10, 10, 0x71);
+            Assert.Throws<InvalidDataException>(() =>
+                gc.AcceptMetadataBaselineReport(equalCursorDigestFork, roster, generation, digest));
+
+            var only = Assert.Single(gc.ReadMetadataBaselineReports(roster, generation, digest));
+            Assert.Equal(1UL, only.ReportSequence);
+            Assert.Equal(10UL, only.FeedEntries[0].AbsoluteFeedOffset);
         }
         finally
         {
