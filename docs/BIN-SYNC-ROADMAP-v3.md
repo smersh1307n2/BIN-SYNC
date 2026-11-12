@@ -1,3 +1,11 @@
+## 1.93. Two-independent-Host signed tombstone-GC integration — 2026-11-12
+
+- [x C/T] Added `Async_two_host_signed_gc_reclaims_the_same_applied_tombstone_independently` in `FldDatabaseIpcAsyncDataProviderTests`. It creates a tombstone on Host A, publishes it through the async BIN-SYNC session and durable remote APPLY on Host B, installs the same signed two-member roster/frontier/FULL_REPLACE/retention proof independently in each replica's Metadata database, and invokes the physical GC pass through both real FLD Database Host IPC adapters.
+- [x T] The test also checks both providers no longer expose the tombstone and both databases remain compacted after Host shutdown and durable reopen.
+- [~ CI] Exact-head validation for this new test is pending. Do not count the two-host GC proof as complete until BIN-SYNC CI and FLD Storage Integration workflows pass on the exact commit.
+- [!] This test exercises the signed safe-horizon path with two independent Hosts and durable APPLY. It does not yet prove concurrent roster/frontier mutation, crash cuts between each proof/GC commit boundary, lost FULL_REPLACE ACK/rejoin behavior, or the complete shared async metadata-writer exclusion contract. Production GC remains disabled by default.
+- [ ] Next: run exact-head CI and fix any failures; then add negative/recovery cuts (missing or lost member ACK, stale/rejoined member, frontier regression, restart between proof acceptance and GC, and concurrent reference/pin changes). Audit and enforce one shared namespace admission/commit barrier for every metadata writer before considering release authorization.
+
 ## 1.92. Process-isolated signed tombstone-GC pass — 2026-11-12
 
 - [x C] Corrected the IPC provider snapshot-handle mapping to use the durable provider handle's `Token`; candidate discovery still releases its snapshot pin before the Host compaction request, and the Host performs the final exact-candidate/reference/pin revalidation under its commit boundary.
