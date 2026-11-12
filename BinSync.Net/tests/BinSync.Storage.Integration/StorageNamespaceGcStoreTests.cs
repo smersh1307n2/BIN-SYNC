@@ -104,7 +104,7 @@ public sealed class StorageNamespaceGcStoreTests
     private static byte[] SignedBaselineReport(
         NamespaceRosterCertificate roster, int memberIndex,
         (byte[] Seed, byte[] PublicKey)[] keys, Guid generation, byte[] snapshotDigest,
-        ulong reportSequence, ulong feedOffset, ulong receiveCursor, byte anchor)
+        ulong reportSequence, ulong feedOffset, ulong receiveCursor, byte anchor, uint issuerEpoch = 7)
     {
         int peerIndex = memberIndex == 0 ? 1 : 0;
         byte[] feedDigest = Enumerable.Repeat(anchor, MetadataBaselineReportProtocol.ChainDigestSize).ToArray();
@@ -131,7 +131,7 @@ public sealed class StorageNamespaceGcStoreTests
                     TargetTransportEpoch = roster.Members[peerIndex].TransportPeerEpoch,
                     AuthorStream = NodeId.From(Id(0x31)),
                     FeedKind = MetadataBaselineFeedKind.Outbound,
-                    IssuerEpoch = 7,
+                    IssuerEpoch = issuerEpoch,
                     AbsoluteFeedOffset = feedOffset,
                     DigestAnchor = feedOffset == 0 ? new byte[MetadataBaselineReportProtocol.ChainDigestSize] : feedDigest
                 }
@@ -1184,8 +1184,18 @@ public sealed class StorageNamespaceGcStoreTests
             Assert.Throws<InvalidDataException>(() =>
                 gc.AcceptMetadataBaselineReport(equalCursorDigestFork, roster, generation, digest));
 
+            byte[] epochChangeWithOldDigest = SignedBaselineReport(
+                roster, 0, keys, generation, digest, 2, 11, 11, 0x31, issuerEpoch: 8);
+            Assert.Throws<InvalidDataException>(() =>
+                gc.AcceptMetadataBaselineReport(epochChangeWithOldDigest, roster, generation, digest));
+
+            byte[] epochChangeWithResetDigest = SignedBaselineReport(
+                roster, 0, keys, generation, digest, 2, 11, 11, 0x00, issuerEpoch: 8);
+            gc.AcceptMetadataBaselineReport(epochChangeWithResetDigest, roster, generation, digest);
+
             var only = Assert.Single(gc.ReadMetadataBaselineReports(roster, generation, digest));
-            Assert.Equal(1UL, only.ReportSequence);
+            Assert.Equal(2UL, only.ReportSequence);
+            Assert.Equal(8U, only.FeedEntries[0].IssuerEpoch);
             Assert.Equal(10UL, only.FeedEntries[0].AbsoluteFeedOffset);
         }
         finally
