@@ -1150,6 +1150,46 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
+    /// Hold the durable Metadata transaction gate across provider tombstone reclamation.
+    /// The provider must capture live PendingApply/relay/outbound references and finish
+    /// its physical delete while this lease is held; otherwise a direct Metadata writer
+    /// could add a new reference after the scan but before the provider transaction.
+    /// Lock order is coordinator → Node → host → Metadata → provider.
+    /// </summary>
+    public IDisposable AcquireTombstoneGcCommitGuard(
+        string scopeId, NodeId localReplica, int namespaceId,
+        StorageNamespaceGcStore gcStore, TrustStore trustStore)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if ((uint)namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
+
+        Monitor.Enter(_gate);
+        try
+        {
+            ThrowIfDisposed();
+            if (!ReferenceEquals(_namespaceGcStore, gcStore) ||
+                !ReferenceEquals(_namespaceGcTrustStore, trustStore))
+                throw new InvalidOperationException(
+                    "Tombstone GC requires the exact namespace-GC store and TrustStore attached to this Metadata Store.");
+            if (!gcStore.IsBoundTo(_storage, scopeId, localReplica))
+                throw new InvalidOperationException(
+                    "Tombstone GC namespace state is not bound to the exact Metadata Store scope and local replica.");
+
+            return new FullReplaceCommitLease(_gate);
+        }
+        catch
+        {
+            Monitor.Exit(_gate);
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Hold the durable metadata transaction gate across FULL_REPLACE and fail closed
     /// while the namespace has an unresolved receive apply or outbound/relay reservation.
     /// Completed receipts are deliberately retained: they are idempotency history, not
