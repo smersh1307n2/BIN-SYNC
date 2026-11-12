@@ -184,7 +184,6 @@ public sealed class AsyncCoordinatorProcessCrashTests
             Encoding.UTF8.GetBytes("async-provider-commit"), new Hlc(8800, 0)));
         var coordinator = new AsyncStorageSyncCoordinator(
             receiver, metadata, "async-process-crash", NamespaceId);
-        StorageRemoteApplyPlan? plan = null;
         Action signalAndBlock = () =>
         {
             File.WriteAllText(pidPath, Environment.ProcessId.ToString(
@@ -193,26 +192,8 @@ public sealed class AsyncCoordinatorProcessCrashTests
             Thread.Sleep(Timeout.Infinite);
         };
         var remote = new StorageAsyncRemoteBatchStore(provider, signalAndBlock);
-        Task<BatchResult> receive = acceptor.ReceiveBatchAsync(
-            receiver,
-            beforeApply: null,
-            beforeAck: null,
-            ct: default,
-            receiveStateOwnedByMetadataStore: true,
-            beforeApplyWithOperationDecisions: (batch, payload, peer) =>
-            {
-                plan = coordinator.BeginRemoteBatchBeforeNodeApply(
-                    batch, payload.ToArray(), peer, checked((uint)acceptor.PeerEpoch));
-                return plan.ApplyOperations;
-            },
-            beforeAckAsync: async (batch, _) =>
-            {
-                StorageRemoteApplyPlan accepted = plan
-                    ?? throw new InvalidOperationException("Async PendingApply was not staged.");
-                await coordinator.ApplyRemoteBatchAfterNodeApplyAsync(
-                    batch, accepted, remote,
-                    node => StorageNodePersistence.Save(storage, node));
-            });
+        Task<BatchResult> receive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
+            acceptor, remote, node => StorageNodePersistence.Save(storage, node));
         Task<bool> send = initiator.PushBatchAsync(sender, NamespaceId);
         await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
     }
