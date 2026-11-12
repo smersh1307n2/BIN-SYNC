@@ -497,12 +497,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteB = null;
         SyncSession? acceptor = null;
         SyncSession? initiator = null;
+        Guid hostOwnerA = Guid.Empty;
+        Guid hostOwnerB = Guid.Empty;
         try
         {
             hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes);
             hostB = StartDatabaseHost(hostRootB, namespaceId, authorBBytes);
-            _ = await WaitForHostEndpointAsync(hostRootA, hostA, TimeSpan.FromSeconds(45));
-            _ = await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45));
+            hostOwnerA = (await WaitForHostEndpointAsync(hostRootA, hostA, TimeSpan.FromSeconds(45))).OwnerId;
+            hostOwnerB = (await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45))).OwnerId;
 
             nodeStorageA = StorageDatabase.Open(nodeRootA, nodeStorageNamespace);
             nodeStorageB = StorageDatabase.Open(nodeRootB, nodeStorageNamespace);
@@ -664,8 +666,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes);
             hostB = StartDatabaseHost(hostRootB, namespaceId, authorBBytes);
-            _ = await WaitForHostEndpointAsync(hostRootA, hostA, TimeSpan.FromSeconds(45));
-            _ = await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45));
+            hostOwnerA = (await WaitForHostEndpointAsync(
+                hostRootA, hostA, TimeSpan.FromSeconds(45), hostOwnerA)).OwnerId;
+            hostOwnerB = (await WaitForHostEndpointAsync(
+                hostRootB, hostB, TimeSpan.FromSeconds(45), hostOwnerB)).OwnerId;
 
             nodeStorageA = StorageDatabase.Open(nodeRootA, nodeStorageNamespace);
             nodeStorageB = StorageDatabase.Open(nodeRootB, nodeStorageNamespace);
@@ -862,7 +866,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             hostB = StartDatabaseHost(
                 hostRootB, namespaceId, authorBBytes, dropRemoteApplyResponseForTest: true);
-            _ = await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45));
+            hostOwnerB = (await WaitForHostEndpointAsync(
+                hostRootB, hostB, TimeSpan.FromSeconds(45), hostOwnerB)).OwnerId;
 
             providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRootB, clientB, TimeSpan.FromSeconds(15), authorB, () => 17);
@@ -928,7 +933,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await WaitForDatabaseWriterReleaseAsync(
                 hostRootB, namespaceId, authorBBytes, TimeSpan.FromSeconds(15));
             hostB = StartDatabaseHost(hostRootB, namespaceId, authorBBytes);
-            _ = await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45));
+            hostOwnerB = (await WaitForHostEndpointAsync(
+                hostRootB, hostB, TimeSpan.FromSeconds(45), hostOwnerB)).OwnerId;
 
             providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRootB, clientB, TimeSpan.FromSeconds(15), authorB, () => 17);
