@@ -62,6 +62,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             ownerId = endpoint.OwnerId;
             provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 8);
+            remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRoot, Guid.NewGuid(), checked((ushort)namespaceId), TimeSpan.FromSeconds(15));
 
             const string scope = "fld-host-tombstone-gc";
             using (var nodeStorage = StorageDatabase.Open(nodeRoot, 902))
