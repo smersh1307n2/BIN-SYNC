@@ -488,14 +488,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 trust, authorA, 17, 1, tombstoneAtB.HlcWall, tombstoneAtB.HlcLogical,
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host B must independently validate the signed causal and FULL_REPLACE proof.");
-            Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record),
-                "Host A outbound payload must be released after the durable peer ACK.");
+            Assert.True(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record),
+                "Host A's immutable outbound payload remains retained until a proof-bound Metadata baseline compacts it.");
             Assert.True(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record),
-                "Host B relay payload must continue to pin the tombstone until a safe snapshot-aware relay baseline is committed.");
+                "Host B's relay payload remains retained until a proof-bound Metadata baseline compacts it.");
 
-            Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 16));
+            Assert.Equal(0, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 16));
             Assert.Equal(0, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 16));
-            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
+            Assert.NotNull(await providerA.ReadCurrentAsync(record, 0x0951));
             Assert.NotNull(await providerB.ReadCurrentAsync(record, 0x0951));
 
             await initiator.DisposeAsync(); initiator = null;
