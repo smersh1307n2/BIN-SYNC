@@ -198,7 +198,10 @@ public sealed class AsyncCoordinatorProcessCrashTests
             if (afterMetadataFinalize)
             {
                 using var sender = StorageNodePersistence.Load(storage, senderIdentity.NodeId);
-                Assert.Equal(0L, sender.PeerStates[(receiver.NodeId, NamespaceId)].AckedFor(sender.NodeId));
+                // A peer cursor may not exist until the first outbound session is persisted.
+                // Absence is equivalent to an unadvanced ACK cursor; never manufacture one here.
+                Assert.True(!sender.PeerStates.TryGetValue((receiver.NodeId, NamespaceId), out var senderPeerState) ||
+                    senderPeerState.AckedFor(sender.NodeId) == 0L);
                 var (senderPipe, receiverPipe) = PipeTransport.CreatePair();
                 var accept = SyncSession.AcceptAsync(receiver, receiverPipe);
                 await using var initiator = await SyncSession.ConnectAsync(sender, senderPipe);
