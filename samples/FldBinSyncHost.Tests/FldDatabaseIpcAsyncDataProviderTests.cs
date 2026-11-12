@@ -2,6 +2,7 @@ using BinSync;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
+using System.Security.Cryptography;
 using BinSync.FldHost;
 using BinSync.Storage;
 using Fld1.Engine.Db;
@@ -16,7 +17,7 @@ namespace BinSync.FldHost.Tests;
 public sealed class FldDatabaseIpcAsyncDataProviderTests
 {
     [Fact]
-    public async Task Async_provider_reclaims_only_host_revalidated_tombstones_across_ipc()
+    public async Task Async_coordinator_reclaims_only_signed_safe_tombstones_through_real_host_ipc()
     {
         string hostRoot = Path.Combine(Path.GetTempPath(), "fld-binsync-host-tombstone-gc-" + Guid.NewGuid().ToString("N"));
         const uint namespaceId = 0x536;
@@ -60,13 +61,136 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRoot, clientId, TimeSpan.FromSeconds(15), author, () => 8);
 
-            IReadOnlyList<ProviderMutation> candidates =
-                await provider.ReadTombstoneGcCandidatesAsync(16);
-            ProviderMutation candidate = Assert.Single(candidates);
-            Assert.True(candidate.IsTombstone);
-            Assert.Equal(9UL, candidate.OriginSequence);
+            string nodeRoot = Path.Combine(Path.GetTempPath(), "binsync-host-tombstone-gc-metadata-" + Guid.NewGuid().ToString("N"));
+            const string scope = "fld-host-tombstone-gc";
+            using (var nodeStorage = StorageDatabase.Open(nodeRoot, 902))
+            using (var metadata = new StorageMetadataStore(nodeStorage))
+            using (var node = new NodeBuilder().WithNodeId(author).WithEpoch(8).Build())
+            {
+                var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+                NodeId authority = NodeId.From(Id(0x11));
+                var trust = new TrustStore();
+                trust.Allow(authority, keys[0].PublicKey, TrustMode.PreShared);
+                var roster = new NamespaceRosterCertificate
+                {
+                    NamespaceId = checked((int)namespaceId),
+                    RosterGeneration = 1,
+                    PreviousRosterDigest = new byte[32],
+                    AuthorityNodeId = authority,
+                    Members =
+                    [
+                        new NamespaceRosterMember
+                        {
+                            NodeId = authority,
+                            PublicKey = keys[0].PublicKey,
+                            TransportPeerEpoch = 10,
+                            Status = NamespaceMemberStatus.Active
+                        },
+                        new NamespaceRosterMember
+                        {
+                            NodeId = author,
+                            PublicKey = keys[1].PublicKey,
+                            TransportPeerEpoch = 11,
+                            Status = NamespaceMemberStatus.Active
+                        }
+                    ]
+                };
+                var gc = new StorageNamespaceGcStore(
+                    nodeStorage, scope, author,
+                    new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+                roster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+                byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(roster);
+                var report0 = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                    new AppliedOriginFrontierReport
+                    {
+                        NamespaceId = checked((int)namespaceId),
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        MemberNodeId = authority,
+                        MemberTransportEpoch = 10,
+                        ReportSequence = 1,
+                        Entries =
+                        [
+                            new AppliedOriginFrontierEntry
+                            {
+                                OriginAuthorNodeId = author,
+                                OriginAuthorEpoch = 8,
+                                ContiguousAppliedOriginSequence = 9
+                            }
+                        ]
+                    }, keys[0].Seed), roster);
+                var report1 = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                    new AppliedOriginFrontierReport
+                    {
+                        NamespaceId = checked((int)namespaceId),
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        MemberNodeId = author,
+                        MemberTransportEpoch = 11,
+                        ReportSequence = 1,
+                        Entries =
+                        [
+                            new AppliedOriginFrontierEntry
+                            {
+                                OriginAuthorNodeId = author,
+                                OriginAuthorEpoch = 8,
+                                ContiguousAppliedOriginSequence = 9
+                            }
+                        ],
+                        IssuedOrigins =
+                        [
+                            new IssuedOriginFrontierEntry
+                            {
+                                OriginAuthorEpoch = 8,
+                                IssuedOriginSequence = 9,
+                                MaxIssuedHlcWall = 100,
+                                MaxIssuedHlcLogical = 1
+                            }
+                        ]
+                    }, keys[1].Seed), roster);
+                Guid fullReplaceGeneration = Guid.Parse("12345678-1234-5678-9abc-def012345678");
+                byte[] fullReplaceDigest = SHA256.HashData("fld tombstone gc snapshot"u8);
+                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                    new FullReplaceInstalledAck
+                    {
+                        NamespaceId = checked((int)namespaceId),
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        Generation = fullReplaceGeneration,
+                        Digest = fullReplaceDigest,
+                        MemberNodeId = authority,
+                        MemberTransportEpoch = 10,
+                        HlcWallFloor = 100,
+                        HlcLogicalFloor = 1,
+                        Installed = true
+                    }, keys[0].Seed), roster);
+                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                    new FullReplaceInstalledAck
+                    {
+                        NamespaceId = checked((int)namespaceId),
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        Generation = fullReplaceGeneration,
+                        Digest = fullReplaceDigest,
+                        MemberNodeId = author,
+                        MemberTransportEpoch = 11,
+                        HlcWallFloor = 100,
+                        HlcLogicalFloor = 1,
+                        Installed = true
+                    }, keys[1].Seed), roster);
+                var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    roster, 1, new byte[32], new[] { report0, report1 },
+                    fullReplaceGeneration, fullReplaceDigest,
+                    fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 1);
+                gc.AcceptRetentionCheckpoint(
+                    NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
-            Assert.Equal(1, await provider.CompactTombstonesAsync(candidates, 16));
+                var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, checked((int)namespaceId));
+                coordinator.AttachNamespaceGcGuard(gc, trust);
+                Assert.Equal(1, await coordinator.CompactTombstonesAsync(provider, 16));
+            }
+
             Assert.Null(await provider.ReadCurrentAsync(RecordId.From(recordId), 7));
 
             await provider.DisposeAsync();
