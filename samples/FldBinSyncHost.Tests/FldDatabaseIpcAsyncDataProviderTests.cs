@@ -620,6 +620,137 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.NotNull(afterReplay);
             Assert.Equal(ackLossValue, afterReplay!.Value);
             Assert.Equal(BatchId.From(Id(0x78)), afterReplay.ChangeId);
+
+            // Crash the real FLD Host after its next durable APPLY but before the
+            // IPC response reaches the async coordinator. PendingApply and the
+            // Node checkpoint belong to BIN-SYNC's storage and must survive this
+            // independent provider-process failure.
+            await initiator.DisposeAsync();
+            initiator = null;
+            await acceptor.DisposeAsync();
+            acceptor = null;
+            await providerB.DisposeAsync();
+            providerB = null;
+            await remoteB.DisposeAsync();
+            remoteB = null;
+            await StopDatabaseHostAsync(hostB);
+            hostB = null;
+            await WaitForDatabaseWriterReleaseAsync(
+                hostRootB, namespaceId, authorBBytes, TimeSpan.FromSeconds(15));
+
+            hostB = StartDatabaseHost(
+                hostRootB, namespaceId, authorBBytes, dropRemoteApplyResponseForTest: true);
+            _ = await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45));
+
+            providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRootB, clientB, TimeSpan.FromSeconds(15), authorB, () => 17);
+            remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+            recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
+                recoveredCoordinatorB, providerB, remoteB,
+                current => StorageNodePersistence.Save(nodeStorageB, current));
+
+            RecordId processCrashRecord = RecordId.From(Id(0x79));
+            byte[] processCrashValue = "host-b-crash-after-durable-apply"u8.ToArray();
+            await providerA.AppendLocalChangeWithReceiptAsync(new ProviderMutation
+            {
+                RecordId = processCrashRecord,
+                FieldId = 0x0754,
+                AuthorNodeId = authorA,
+                OriginAuthorEpoch = 17,
+                HlcWall = 74_100,
+                HlcLogical = 4,
+                Value = processCrashValue,
+                ChangeId = BatchId.From(Id(0x7A))
+            });
+
+            var (processCrashToA, processCrashToB) = PipeTransport.CreatePair();
+            Task<SyncSession> processCrashAcceptTask = SyncSession.AcceptAsync(nodeB, processCrashToB);
+            Task<SyncSession> processCrashConnectTask = SyncSession.ConnectAsync(nodeA, processCrashToA);
+            acceptor = await processCrashAcceptTask;
+            initiator = await processCrashConnectTask;
+
+            Task<BatchResult> processCrashReceive =
+                recoveredAdapterB.ReceiveBatchAsync(acceptor);
+            Task<int> processCrashSend =
+                recoveredAdapterA.RunOutboundRoundAsync([initiator]);
+            await Assert.ThrowsAnyAsync<Exception>(async () =>
+                await processCrashReceive.WaitAsync(TimeSpan.FromSeconds(60)));
+            await Assert.ThrowsAnyAsync<Exception>(async () =>
+                await processCrashSend.WaitAsync(TimeSpan.FromSeconds(60)));
+            await hostB.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(86, hostB.ExitCode);
+
+            // The provider committed its ApplyToken, while Metadata finalization
+            // did not run because the IPC response was deliberately lost. Reopen
+            // the Host and let coordinator startup recovery replay the same token.
+            await providerB.DisposeAsync();
+            providerB = null;
+            await remoteB.DisposeAsync();
+            remoteB = null;
+            await StopDatabaseHostAsync(hostB);
+            hostB = null;
+            await WaitForDatabaseWriterReleaseAsync(
+                hostRootB, namespaceId, authorBBytes, TimeSpan.FromSeconds(15));
+            hostB = StartDatabaseHost(hostRootB, namespaceId, authorBBytes);
+            _ = await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45));
+
+            providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRootB, clientB, TimeSpan.FromSeconds(15), authorB, () => 17);
+            remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+            recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
+                recoveredCoordinatorB, providerB, remoteB,
+                current => StorageNodePersistence.Save(nodeStorageB, current));
+
+            AsyncStorageStartupRecoveryResult processCrashRecovery =
+                await recoveredAdapterB.RecoverBeforeAcceptingSessionsAsync();
+            Assert.Equal(new AsyncStorageStartupRecoveryResult(1, 0), processCrashRecovery);
+            Assert.Empty(metadataB.ReadPendingApplyIntents(
+                "two-host-b", nodeB.NodeId));
+            ProviderMutation? afterProcessRecovery =
+                await providerB.ReadCurrentAsync(processCrashRecord, 0x0754);
+            Assert.NotNull(afterProcessRecovery);
+            Assert.Equal(processCrashValue, afterProcessRecovery!.Value);
+            Assert.Equal(BatchId.From(Id(0x7A)), afterProcessRecovery.ChangeId);
+            Assert.True(nodeB.TryGetField(
+                checked((int)namespaceId), processCrashRecord, 0x0754, out var recoveredCrashNodeValue));
+            Assert.Equal(processCrashValue, recoveredCrashNodeValue!.Value);
+            Assert.Equal(3UL, metadataB.GetReceiveCursor(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(2UL, Assert.Single(metadataA.ReadPeerStreamStates(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, checked((uint)initiator.PeerEpoch),
+                checked((int)namespaceId))).State.AckedCursor);
+
+            await initiator.DisposeAsync();
+            initiator = null;
+            await acceptor.DisposeAsync();
+            acceptor = null;
+            var (processRetryToA, processRetryToB) = PipeTransport.CreatePair();
+            Task<SyncSession> processRetryAcceptTask = SyncSession.AcceptAsync(nodeB, processRetryToB);
+            Task<SyncSession> processRetryConnectTask = SyncSession.ConnectAsync(nodeA, processRetryToA);
+            acceptor = await processRetryAcceptTask;
+            initiator = await processRetryConnectTask;
+
+            Task<BatchResult> processRetryReceive =
+                recoveredAdapterB.ReceiveBatchAsync(acceptor);
+            Task<int> processRetrySend =
+                recoveredAdapterA.RunOutboundRoundAsync([initiator]);
+            await Task.WhenAll(processRetryReceive, processRetrySend)
+                .WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.True((await processRetryReceive).Duplicate);
+            Assert.Equal(0, (await processRetryReceive).Applied);
+            Assert.Equal(1, await processRetrySend);
+            Assert.Equal(3UL, metadataB.GetReceiveCursor(
+                "two-host-b", nodeB.NodeId, nodeA.NodeId, 17, checked((int)namespaceId)));
+            Assert.Equal(3UL, Assert.Single(metadataA.ReadPeerStreamStates(
+                "two-host-a", nodeA.NodeId, nodeB.NodeId, checked((uint)initiator.PeerEpoch),
+                checked((int)namespaceId))).State.AckedCursor);
+            ProviderMutation? afterProcessReplay =
+                await providerB.ReadCurrentAsync(processCrashRecord, 0x0754);
+            Assert.NotNull(afterProcessReplay);
+            Assert.Equal(processCrashValue, afterProcessReplay!.Value);
+            Assert.Equal(BatchId.From(Id(0x7A)), afterProcessReplay.ChangeId);
         }
         finally
         {
