@@ -2569,23 +2569,23 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         using (var first = new StorageMetadataStore(directory, 456, deleteOnDispose: false))
         {
-            Assert.False(first.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 301,
-                1, 1, 0, 401, Operation(3, 51, 61, 71, originSequence: 1))).IsDuplicate);
-            Assert.False(first.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 302,
-                1, 1, 0, 402, Operation(4, 52, 62, 72, originSequence: 1))).IsDuplicate);
+            Assert.False(first.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 31,
+                1, 1, 0, 41, Operation(3, 51, 61, 71, originSequence: 1))).IsDuplicate);
+            Assert.False(first.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 32,
+                1, 1, 0, 42, Operation(4, 52, 62, 72, originSequence: 1))).IsDuplicate);
 
-            Assert.False(first.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 303,
-                2, 2, 401, 403, Operation(3, 53, 63, 73, originSequence: 2))).IsDuplicate);
-            Assert.False(first.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 304,
-                2, 2, 402, 404, Operation(4, 54, 64, 74, originSequence: 2))).IsDuplicate);
+            Assert.False(first.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 33,
+                2, 2, 41, 43, Operation(3, 53, 63, 73, originSequence: 2))).IsDuplicate);
+            Assert.False(first.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 34,
+                2, 2, 42, 44, Operation(4, 54, 64, 74, originSequence: 2))).IsDuplicate);
         }
 
         using (var reopened = new StorageMetadataStore(directory, 456, deleteOnDispose: false))
         {
-            Assert.False(reopened.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 305,
-                3, 3, 403, 405, Operation(3, 55, 65, 75, originSequence: 3))).IsDuplicate);
-            Assert.False(reopened.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 306,
-                3, 3, 404, 406, Operation(4, 56, 66, 76, originSequence: 3))).IsDuplicate);
+            Assert.False(reopened.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 35,
+                3, 3, 43, 45, Operation(3, 55, 65, 75, originSequence: 3))).IsDuplicate);
+            Assert.False(reopened.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 36,
+                3, 3, 44, 46, Operation(4, 56, 66, 76, originSequence: 3))).IsDuplicate);
         }
     }
 
