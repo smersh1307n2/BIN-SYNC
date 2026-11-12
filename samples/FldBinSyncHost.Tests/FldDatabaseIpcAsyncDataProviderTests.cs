@@ -53,7 +53,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 Assert.NotEqual(0UL, database.Checkpoint());
             }
 
-            host = StartDatabaseHost(hostRoot, namespaceId, authorBytes);
+            host = StartDatabaseHost(hostRoot, namespaceId, authorBytes, enableTombstoneGc: true);
             StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
                 hostRoot, host, TimeSpan.FromSeconds(45));
             ownerId = endpoint.OwnerId;
@@ -920,7 +920,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     private static Process StartDatabaseHost(
-        string root, uint namespaceId, byte[] localAuthor, bool dropRemoteApplyResponseForTest = false)
+        string root, uint namespaceId, byte[] localAuthor,
+        bool dropRemoteApplyResponseForTest = false, bool enableTombstoneGc = false)
     {
         AssemblyMetadataAttribute repositoryMetadata = typeof(FldDatabaseIpcAsyncDataProviderTests)
             .Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -949,6 +950,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         start.ArgumentList.Add(root);
         start.ArgumentList.Add(namespaceId.ToString(CultureInfo.InvariantCulture));
         start.ArgumentList.Add(Convert.ToHexString(localAuthor));
+        if (enableTombstoneGc)
+            start.ArgumentList.Add("--enable-tombstone-gc");
         if (dropRemoteApplyResponseForTest)
             start.ArgumentList.Add("--test-drop-remote-apply-response");
         return Process.Start(start)
