@@ -3386,6 +3386,15 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [ ] A remaining limitation is process scope: the registry coordinates coordinator instances in one process, not multiple processes. Cross-process coordination remains the responsibility of the single-owner Host/partition lease and durable Metadata transactions.
 
 
+## 1.127. Async PendingApply recovery after real FLD Host process death — 2026-11-12
+
+- [x C/T] Extended the two-independent-Host async composition test with a second fault boundary: after Node has durably checkpointed the incoming batch and Metadata has staged PendingApply, the real FLD Database Host commits the contextual provider APPLY and exits before the IPC response is delivered.
+- [x T] The test requires the caller to observe response loss and the Host process to exit with the injected code. It then restarts the same FLD database, reconnects fresh IPC clients, and runs the async coordinator's startup recovery before accepting another session.
+- [x T] Startup recovery must replay the exact immutable ApplyToken against the provider journal, receive the duplicate durable receipt, finalize the existing PendingApply exactly once, preserve the Node/FLD value and ChangeId, and clear the pending intent. The sender's unacknowledged immutable batch is then replayed over a fresh session; the receiver must answer duplicate/no-op and only then may the sender ACK cursor advance.
+- [!] This is a real FLD provider-host process-death proof at the durable APPLY → Metadata-finalization boundary. The BIN-SYNC coordinator process and its Node/Metadata partition remain alive in this test; it does not yet prove coordinator-process death/reopen at every receive cut.
+- [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD cross-repository builds/tests must pass before marking this proof verified.
+- [ ] Continue the independent coordinator-process crash matrix for PendingApply-before-Node, Node-checkpoint-before-provider, and Metadata-finalized-before-transport-ACK. Keep physical GC and FULL_REPLACE disabled until all crash/rejoin/resurrection proofs are complete.
+
 ## 1.126. Two-Host FLD transport ACK loss and retry — 2026-11-11
 
 - [x C/T] Extended `Async_host_composition_exchanges_changes_bidirectionally_between_two_database_host_processes` after both Hosts and their Node/WAL/Metadata state have been restarted and recovered. A new local change is published from Host A; Host B durably applies it through the real IPC provider and finalizes its Metadata receive cursor, while the transport wrapper deliberately drops the ACK and closes the session channel.
