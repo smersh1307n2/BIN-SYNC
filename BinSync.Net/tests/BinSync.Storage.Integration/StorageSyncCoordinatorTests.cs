@@ -1388,7 +1388,7 @@ public sealed class StorageSyncCoordinatorTests
             local.NodeId, oldEpochBatch);
         metadata.MarkOutboundBatchPushed(scope, local.NodeId, peer.NodeId, 1, 1,
             local.NodeId, oldEpochBatch.BatchId);
-        metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 1, 1,
+        metadata.AcknowledgePeerBatch(scope, local.NodeId, peer.NodeId, 1, 1,
             local.NodeId, oldEpochBatch.BatchId, 1, oldEpochBatch.BatchDigest);
         Assert.Equal(1UL, metadata.GetPeerStreamState(scope, local.NodeId,
             peer.NodeId, 1, 1, local.NodeId).AckedCursor);
@@ -2054,7 +2054,7 @@ public sealed class StorageSyncCoordinatorTests
             checked((uint)receiver.Epoch), 1, sender.NodeId, priorLocalReservation);
         metadata.MarkOutboundBatchPushed(scope, sender.NodeId, receiver.NodeId,
             checked((uint)receiver.Epoch), 1, sender.NodeId, priorLocalReservation.BatchId);
-        metadata.AcknowledgeOutboundBatch(scope, sender.NodeId, receiver.NodeId,
+        metadata.AcknowledgePeerBatch(scope, sender.NodeId, receiver.NodeId,
             checked((uint)receiver.Epoch), 1, sender.NodeId, priorLocalReservation.BatchId,
             4, priorLocalReservation.BatchDigest);
 
@@ -3965,9 +3965,9 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(1UL, pendingRelay.State.PushedCursor);
         Assert.NotNull(pendingRelay.State.PendingBatch);
 
-        metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1,
+        metadata.AcknowledgePeerBatch(scope, local.NodeId, peer.NodeId, 7, 1,
             local.NodeId, reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest.ToArray());
-        metadata.AcknowledgeOutboundBatch(scope, local.NodeId, peer.NodeId, 7, 1,
+        metadata.AcknowledgePeerBatch(scope, local.NodeId, peer.NodeId, 7, 1,
             relayAuthor.NodeId, relayReservation.BatchId, relayReservation.CursorEnd,
             relayReservation.BatchDigest.ToArray());
         using (coordinator.AcquireFullReplaceCommitGuard(() =>
