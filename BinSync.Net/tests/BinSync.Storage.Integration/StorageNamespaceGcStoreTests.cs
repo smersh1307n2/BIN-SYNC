@@ -1196,7 +1196,8 @@ public sealed class StorageNamespaceGcStoreTests
             var only = Assert.Single(gc.ReadMetadataBaselineReports(roster, generation, digest));
             Assert.Equal(2UL, only.ReportSequence);
             Assert.Equal(8U, only.FeedEntries[0].IssuerEpoch);
-            Assert.Equal(10UL, only.FeedEntries[0].AbsoluteFeedOffset);
+            Assert.Equal(11UL, only.FeedEntries[0].AbsoluteFeedOffset);
+            Assert.Equal(11UL, only.ReceiveEntries[0].ReceiveCursor);
         }
         finally
         {
