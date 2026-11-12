@@ -383,6 +383,9 @@ public sealed class StorageSyncCoordinator
             _node.NodeId.IsZero || string.IsNullOrWhiteSpace(_scopeId))
             throw new InvalidOperationException(
                 "Tombstone GC requires a non-zero local replica, namespace and stable Metadata scope.");
+        if (_namespaceGcStore is null || _namespaceGcTrustStore is null)
+            throw new NotSupportedException(
+                "Tombstone GC requires the coordinator to be attached to its exact namespace-GC store and TrustStore.");
         return new TombstoneGcCommitLease(AcquireApplicationCommitGuardCore(
             acquireHostCommitLease,
             requireFullReplaceMetadataProof: false,
