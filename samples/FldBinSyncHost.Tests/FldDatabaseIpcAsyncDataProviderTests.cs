@@ -537,8 +537,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1UL, metadataB.GetSafePeerStreamCompactionCursor(
                 scope, nodeB.NodeId, namespaceId, authorA));
 
-            // Compact only after the actual peer ACKs have advanced the per-stream
-            // safe cursors. The signed namespace proof alone never deletes payloads.
+            // B is also the local durable consumer of the applied relay change.
+            // Its local relay-consumer ACK is independent from C's transport ACK.
+            metadataB.AcknowledgeRelay(scope, nodeB.NodeId, namespaceId, authorA, 1);
+
+            // Compact only after both the local apply consumer and every interested
+            // downstream peer have acknowledged the immutable relay prefix.
+            // The signed namespace proof alone never deletes payloads.
             metadataA.CompactOutboundThrough(scope, nodeA.NodeId, namespaceId, authorA, 1);
             metadataB.CompactRelayThrough(scope, nodeB.NodeId, namespaceId, authorA, 1);
             Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record));
