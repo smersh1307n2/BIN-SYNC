@@ -36,6 +36,8 @@ public sealed class AsyncStorageSyncCoordinator
     private readonly NamespaceAdmissionGates _admissionGates;
     private readonly SemaphoreSlim _asyncAdmissionGate;
     private readonly object _metadataGate;
+    private StorageNamespaceGcStore? _namespaceGcStore;
+    private TrustStore? _namespaceGcTrustStore;
 
     public AsyncStorageSyncCoordinator(
         Node node, IMetadataStore metadataStore, string scopeId, int namespaceId)
@@ -54,6 +56,105 @@ public sealed class AsyncStorageSyncCoordinator
             (node.NodeId, namespaceId), static _ => new NamespaceAdmissionGates());
         _asyncAdmissionGate = _admissionGates.Admission;
         _metadataGate = _admissionGates.MetadataGate;
+    }
+
+    /// <summary>
+    /// Attach the exact signed namespace-GC store used by this Metadata partition.
+    /// Physical tombstone GC remains disabled unless its independent proof flag is enabled.
+    /// </summary>
+    public void AttachNamespaceGcGuard(StorageNamespaceGcStore gcStore, TrustStore trustStore)
+    {
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("Async physical GC requires the durable StorageMetadataStore.");
+        if (_namespaceGcStore is not null &&
+            (!ReferenceEquals(_namespaceGcStore, gcStore) ||
+             !ReferenceEquals(_namespaceGcTrustStore, trustStore)))
+            throw new InvalidOperationException("Async namespace-GC binding cannot be replaced.");
+        storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore);
+        _namespaceGcStore = gcStore;
+        _namespaceGcTrustStore = trustStore;
+    }
+
+    /// <summary>
+    /// Run one bounded, process-isolated FLD tombstone-GC pass. The shared async
+    /// admission semaphore excludes every coordinator writer across candidate discovery
+    /// and the final Host RPC; the Host independently revalidates exact tombstone
+    /// identities, snapshot pins, Outbox drafts and ApplyJournal references atomically.
+    /// Host composition must keep the StorageMetadataStore writer capability private:
+    /// direct Metadata mutations outside this coordinator are not covered by Admission.
+    /// </summary>
+    public async Task<int> CompactTombstonesAsync(
+        IAsyncProviderTombstoneGc providerGc,
+        int limit = 256,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(providerGc);
+        if (limit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("Async tombstone GC requires the durable StorageMetadataStore.");
+        StorageNamespaceGcStore gcStore = _namespaceGcStore
+            ?? throw new InvalidOperationException("Async namespace-GC guard has not been attached.");
+        TrustStore trustStore = _namespaceGcTrustStore
+            ?? throw new InvalidOperationException("Async namespace-GC TrustStore has not been attached.");
+        if (!gcStore.IsTombstoneGcProofEnabled)
+            return 0;
+
+        await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            HashSet<RecordId> liveRecordReferences;
+            lock (_metadataGate)
+            {
+                if (!storageMetadata.TryBuildLiveRecordReferenceSet(
+                    _scopeId, _node.NodeId, _namespaceId, out liveRecordReferences))
+                    return 0; // Unknown payload or pending immutable peer reservation.
+            }
+
+            if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null ||
+                !gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? checkpoint) ||
+                checkpoint is null || !checkpoint.FullReplaceGeneration.HasValue ||
+                checkpoint.FullReplaceDigest is null ||
+                checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
+                return 0;
+
+            IReadOnlyList<ProviderMutation> candidates =
+                await providerGc.ReadTombstoneGcCandidatesAsync(limit, ct).ConfigureAwait(false);
+            if (candidates.Count == 0)
+                return 0;
+
+            Guid generation = checkpoint.FullReplaceGeneration.Value;
+            byte[] digest = checkpoint.FullReplaceDigest;
+            var approved = new List<ProviderMutation>(candidates.Count);
+            foreach (ProviderMutation candidate in candidates)
+            {
+                if ((!candidate.IsTombstone && !candidate.IsRecordTombstone) ||
+                    candidate.RecordId.IsZero || candidate.ChangeId.IsZero ||
+                    candidate.AuthorNodeId.IsZero || candidate.OriginAuthorEpoch == 0 ||
+                    candidate.OriginSequence == 0 || candidate.HlcWall == 0 ||
+                    liveRecordReferences.Contains(candidate.RecordId))
+                    continue;
+
+                if (gcStore.HasProtocolTombstoneGcProof(
+                    roster, trustStore, candidate.AuthorNodeId,
+                    candidate.OriginAuthorEpoch, candidate.OriginSequence,
+                    candidate.HlcWall, candidate.HlcLogical, generation, digest))
+                    approved.Add(candidate);
+                if (approved.Count == limit)
+                    break;
+            }
+
+            if (approved.Count == 0)
+                return 0;
+            return await providerGc.CompactTombstonesAsync(approved, limit, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _asyncAdmissionGate.Release();
+        }
     }
 
     /// <summary>
