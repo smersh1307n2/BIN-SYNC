@@ -129,7 +129,8 @@ For a previously stored report, the store enforces:
 - feed kind cannot change for an existing peer/author stream;
 - feed offset and receive cursor cannot regress;
 - an increased feed issuer epoch must reset its digest anchor to all zeroes;
-- an equal feed offset or receive cursor must retain the exact digest anchor.
+- feed digest anchors may advance while the snapshot feed offset remains fixed, but the complete baseline apply must match the target member's signed receive digest for the same sender/transport epoch/author/issuer stream;
+- an equal receive cursor must retain the exact digest anchor.
 
 The row is committed before the acceptance API returns. Reopen revalidates
 the stored signature, roster binding, key/member identity and requested
@@ -139,3 +140,28 @@ are not returned when collecting the current generation's vector.
 This is still an evidence-collection step. It does not update
 PeerStreamState, ReceiveState, digest-chain rows or initial-sync markers;
 it does not compact payloads and does not authorize physical GC.
+
+
+## 9. Two-sided digest reconciliation semantics
+
+The feed offset is the source sequence cut covered by the FULL_REPLACE snapshot.
+The receive cursor is the relative post-baseline DELTA_BATCH cursor. They are
+different coordinates and must never be compared directly. For each active
+source-to-target author stream, the aggregate report set pairs the source's
+feed row with the target's receive row by source member, source transport
+epoch, target member/transport epoch, author stream and issuer epoch.
+
+The feed digest anchor and paired receive last-batch digest must match. The
+receiver cursor is the source peer stream's post-baseline ACK cursor; the
+source peer stream's absolute position is therefore
+`feed.AbsoluteFeedOffset + receive.ReceiveCursor`. The source must prove
+that this position does not exceed the corresponding local outbound/relay
+high-watermark. Relay feed offset remains zero because FULL_REPLACE does not
+replace relay history; relay cursor progress is represented by the paired
+receive cursor.
+
+A feed digest may be non-zero even when the snapshot feed offset is zero:
+the peer may have accepted relay batches after the snapshot cut. A zero
+receive cursor still requires a zero receive digest. A fixed snapshot offset
+does not freeze the post-baseline digest chain; digest progress is accepted
+only when the target member's signed receive report carries the same digest.
