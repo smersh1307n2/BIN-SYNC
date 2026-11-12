@@ -281,7 +281,7 @@ public sealed class StorageSyncCoordinator
             throw new NotSupportedException("Namespace-GC replay fencing requires the durable StorageMetadataStore implementation.");
         lock (_gate)
         {
-            storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore);
+            storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore, _scopeId, _node.NodeId);
             _namespaceGcStore = gcStore;
             _namespaceGcTrustStore = trustStore;
         }
