@@ -271,10 +271,10 @@ public sealed class AsyncCoordinatorProcessCrashTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
         StorageNodePersistence.Save(storage, receiver);
-        StorageNodePersistence.Save(storage, sender);
 
         Assert.True(sender.WriteField(NamespaceId, Record, 0x088B,
             Encoding.UTF8.GetBytes("async-provider-commit"), new Hlc(8800, 0)));
+        StorageNodePersistence.Save(storage, sender);
         var coordinator = new AsyncStorageSyncCoordinator(
             receiver, metadata, "async-process-crash", NamespaceId);
         Task<BatchResult> receive;
