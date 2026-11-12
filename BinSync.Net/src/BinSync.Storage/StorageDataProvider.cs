@@ -1120,7 +1120,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
         IDisposable? lease = acquireGcLease();
         if (lease is null)
             throw new InvalidOperationException("Cross-store tombstone GC proof is unavailable; no tombstones were reclaimed.");
-        if (lease is not TombstoneGcCommitLease)
+        if (lease is not TombstoneGcCommitLease tombstoneGcLease)
         {
             lease.Dispose();
             throw new InvalidOperationException(
@@ -1148,8 +1148,8 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             if (tombstoneProof is null)
                 return 0;
 
-            if (!metadataStore.TryBuildLiveRecordReferenceSet(
-                    scopeId, localReplica, namespaceId, out HashSet<RecordId> liveRecordReferences))
+            IReadOnlySet<RecordId>? liveRecordReferences = tombstoneGcLease.LiveRecordReferences;
+            if (liveRecordReferences is null)
                 return 0; // Unknown payloads or pending reservations block the whole pass.
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
