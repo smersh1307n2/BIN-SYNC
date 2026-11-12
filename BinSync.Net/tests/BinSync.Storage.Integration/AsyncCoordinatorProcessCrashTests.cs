@@ -255,8 +255,18 @@ public sealed class AsyncCoordinatorProcessCrashTests
         using var metadata = new StorageMetadataStore(storage);
         using var sender = NewNode(SenderSeed);
         using var receiver = NewNode(ReceiverSeed);
+        Action signalAndBlock = () =>
+        {
+            File.WriteAllText(pidPath, Environment.ProcessId.ToString(
+                System.Globalization.CultureInfo.InvariantCulture));
+            File.WriteAllText(readyPath, "reached-" + crashCut);
+            Thread.Sleep(Timeout.Infinite);
+        };
         var (toSender, toReceiver) = PipeTransport.CreatePair();
-        Task<SyncSession> acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+        ISyncTransport inboundTransport = crashCut == "after-metadata-finalized-before-ack"
+            ? new BlockBeforeTransportAck(toReceiver, signalAndBlock)
+            : toReceiver;
+        Task<SyncSession> acceptTask = SyncSession.AcceptAsync(receiver, inboundTransport);
         Task<SyncSession> connectTask = SyncSession.ConnectAsync(sender, toSender);
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
@@ -267,13 +277,6 @@ public sealed class AsyncCoordinatorProcessCrashTests
             Encoding.UTF8.GetBytes("async-provider-commit"), new Hlc(8800, 0)));
         var coordinator = new AsyncStorageSyncCoordinator(
             receiver, metadata, "async-process-crash", NamespaceId);
-        Action signalAndBlock = () =>
-        {
-            File.WriteAllText(pidPath, Environment.ProcessId.ToString(
-                System.Globalization.CultureInfo.InvariantCulture));
-            File.WriteAllText(readyPath, "reached-" + crashCut);
-            Thread.Sleep(Timeout.Infinite);
-        };
         Task<BatchResult> receive;
         if (crashCut == "after-pending-apply")
         {
@@ -289,26 +292,6 @@ public sealed class AsyncCoordinatorProcessCrashTests
                 },
                 beforeAck: null,
                 receiveStateOwnedByMetadataStore: true);
-        }
-        else if (crashCut == "after-metadata-finalized-before-ack")
-        {
-            var blockingTransport = new BlockBeforeTransportAck(toReceiver, signalAndBlock);
-            // Rebuild the acceptor over the ACK-intercepting transport. Handshake is
-            // performed on that wrapper too, but only established DELTA ACK frames block.
-            await acceptor.DisposeAsync();
-            await initiator.DisposeAsync();
-            var (retrySenderPipe, retryReceiverPipe) = PipeTransport.CreatePair();
-            var wrappedReceiver = new BlockBeforeTransportAck(retryReceiverPipe, signalAndBlock);
-            Task<SyncSession> wrappedAccept = SyncSession.AcceptAsync(receiver, wrappedReceiver);
-            Task<SyncSession> wrappedConnect = SyncSession.ConnectAsync(sender, retrySenderPipe);
-            var ackAcceptor = await wrappedAccept;
-            var ackInitiator = await wrappedConnect;
-            // The original sessions are no longer used; keep the wrapped pair alive
-            // until the parent kills this process at the ACK boundary.
-            _ = ackInitiator;
-            var remote = new StorageAsyncRemoteBatchStore(provider);
-            receive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
-                ackAcceptor, remote, node => StorageNodePersistence.Save(storage, node));
         }
         else
         {
