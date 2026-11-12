@@ -295,9 +295,18 @@ public sealed class AsyncCoordinatorProcessCrashTests
         }
         else
         {
-            var remote = crashCut == "after-node-checkpoint"
-                ? new StorageAsyncRemoteBatchStore(provider, beforeCommit: signalAndBlock)
-                : new StorageAsyncRemoteBatchStore(provider, afterCommit: signalAndBlock);
+            var remote = crashCut switch
+            {
+                "after-node-checkpoint" =>
+                    new StorageAsyncRemoteBatchStore(provider, beforeCommit: signalAndBlock),
+                "after-provider-commit" =>
+                    new StorageAsyncRemoteBatchStore(provider, afterCommit: signalAndBlock),
+                // The fourth cut must pass provider commit and Metadata finalization;
+                // BlockBeforeTransportAck is the only crash barrier for this case.
+                "after-metadata-finalized-before-ack" =>
+                    new StorageAsyncRemoteBatchStore(provider),
+                _ => throw new InvalidOperationException($"Unknown crash cut: {crashCut}")
+            };
             receive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
                 acceptor, remote, node => StorageNodePersistence.Save(storage, node));
         }
