@@ -224,6 +224,304 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
+    public async Task Async_two_host_signed_gc_reclaims_the_same_applied_tombstone_independently()
+    {
+        string hostRootA = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-a-" + Guid.NewGuid().ToString("N"));
+        string hostRootB = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-b-" + Guid.NewGuid().ToString("N"));
+        string nodeRootA = Path.Combine(Path.GetTempPath(), "binsync-two-host-gc-node-a-" + Guid.NewGuid().ToString("N"));
+        string nodeRootB = Path.Combine(Path.GetTempPath(), "binsync-two-host-gc-node-b-" + Guid.NewGuid().ToString("N"));
+        const ushort namespaceId = 0x539;
+        const uint nodeStorageNamespace = 703;
+        const string scope = "two-host-signed-tombstone-gc";
+        byte[] authorABytes = Id(0x91);
+        byte[] authorBBytes = Id(0x92);
+        NodeId authorA = NodeId.From(authorABytes);
+        NodeId authorB = NodeId.From(authorBBytes);
+        RecordId record = RecordId.From(Id(0x93));
+        Process? hostA = null;
+        Process? hostB = null;
+        StorageDatabase? nodeStorageA = null;
+        StorageDatabase? nodeStorageB = null;
+        StorageMetadataStore? metadataA = null;
+        StorageMetadataStore? metadataB = null;
+        Wal? walA = null;
+        Wal? walB = null;
+        Node? nodeA = null;
+        Node? nodeB = null;
+        FldDatabaseIpcAsyncDataProvider? providerA = null;
+        FldDatabaseIpcAsyncDataProvider? providerB = null;
+        FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteA = null;
+        FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteB = null;
+        SyncSession? acceptor = null;
+        SyncSession? initiator = null;
+        Guid ownerA = Guid.Empty;
+        Guid ownerB = Guid.Empty;
+        try
+        {
+            hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes, enableTombstoneGc: true);
+            hostB = StartDatabaseHost(hostRootB, namespaceId, authorBBytes, enableTombstoneGc: true);
+            ownerA = (await WaitForHostEndpointAsync(hostRootA, hostA, TimeSpan.FromSeconds(45))).OwnerId;
+            ownerB = (await WaitForHostEndpointAsync(hostRootB, hostB, TimeSpan.FromSeconds(45))).OwnerId;
+
+            nodeStorageA = StorageDatabase.Open(nodeRootA, nodeStorageNamespace);
+            nodeStorageB = StorageDatabase.Open(nodeRootB, nodeStorageNamespace);
+            metadataA = new StorageMetadataStore(nodeStorageA);
+            metadataB = new StorageMetadataStore(nodeStorageB);
+            walA = Wal.Open(Path.Combine(nodeRootA, "node.wal"));
+            walB = Wal.Open(Path.Combine(nodeRootB, "node.wal"));
+            nodeA = new NodeBuilder().WithNodeId(authorA).WithEpoch(17).Build();
+            nodeB = new NodeBuilder().WithNodeId(authorB).WithEpoch(18).Build();
+            nodeA.AttachWal(walA);
+            nodeB.AttachWal(walB);
+
+            providerA = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15), authorA, () => 17);
+            providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRootB, Guid.NewGuid(), TimeSpan.FromSeconds(15), authorB, () => 18);
+            remoteA = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRootA, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+            remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+            await providerA.EnableMetadataStoreOwnedPublicationAsync(0);
+            await providerB.EnableMetadataStoreOwnedPublicationAsync(0);
+
+            var coordinatorA = new AsyncStorageSyncCoordinator(nodeA, metadataA, scope, namespaceId);
+            var coordinatorB = new AsyncStorageSyncCoordinator(nodeB, metadataB, scope, namespaceId);
+            var adapterA = new FldBinSyncAsyncHostAdapter(
+                coordinatorA, providerA, remoteA,
+                current => StorageNodePersistence.Save(nodeStorageA, current));
+            var adapterB = new FldBinSyncAsyncHostAdapter(
+                coordinatorB, providerB, remoteB,
+                current => StorageNodePersistence.Save(nodeStorageB, current));
+            Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
+                await adapterA.RecoverBeforeAcceptingSessionsAsync());
+            Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
+                await adapterB.RecoverBeforeAcceptingSessionsAsync());
+
+            await providerA.AppendLocalChangeWithReceiptAsync(new ProviderMutation
+            {
+                RecordId = record,
+                FieldId = 0x0951,
+                AuthorNodeId = authorA,
+                OriginAuthorEpoch = 17,
+                HlcWall = 100,
+                HlcLogical = 1,
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(Id(0x94)),
+                IsTombstone = true
+            });
+
+            var (toA, toB) = PipeTransport.CreatePair();
+            Task<SyncSession> acceptTask = SyncSession.AcceptAsync(nodeB, toB);
+            Task<SyncSession> connectTask = SyncSession.ConnectAsync(nodeA, toA);
+            acceptor = await acceptTask;
+            initiator = await connectTask;
+
+            metadataA.RegisterInterestedPeer(scope, nodeA.NodeId, nodeB.NodeId,
+                checked((uint)initiator.PeerEpoch), namespaceId);
+            metadataA.CompletePeerInitialSync(scope, nodeA.NodeId, nodeB.NodeId,
+                checked((uint)initiator.PeerEpoch), namespaceId,
+                [new MetadataPeerStreamBaseline(nodeA.NodeId, 0, 17)]);
+            metadataB.RegisterInterestedPeer(scope, nodeB.NodeId, nodeA.NodeId,
+                checked((uint)acceptor.PeerEpoch), namespaceId);
+            metadataB.CompletePeerInitialSync(scope, nodeB.NodeId, nodeA.NodeId,
+                checked((uint)acceptor.PeerEpoch), namespaceId,
+                [new MetadataPeerStreamBaseline(nodeB.NodeId, 0, 18)]);
+
+            Task<BatchResult> receiveAtB = adapterB.ReceiveBatchAsync(acceptor);
+            Task<int> sendFromA = adapterA.RunOutboundRoundAsync([initiator]);
+            await Task.WhenAll(receiveAtB, sendFromA).WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.Equal(1, (await receiveAtB).Applied);
+            Assert.Equal(1, await sendFromA);
+            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
+            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
+
+            var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+            var trust = new TrustStore();
+            trust.Allow(authorA, keys[0].PublicKey, TrustMode.PreShared);
+            var roster = new NamespaceRosterCertificate
+            {
+                NamespaceId = namespaceId,
+                RosterGeneration = 1,
+                PreviousRosterDigest = new byte[32],
+                AuthorityNodeId = authorA,
+                Members =
+                [
+                    new NamespaceRosterMember
+                    {
+                        NodeId = authorA,
+                        PublicKey = keys[0].PublicKey,
+                        TransportPeerEpoch = 10,
+                        Status = NamespaceMemberStatus.Active
+                    },
+                    new NamespaceRosterMember
+                    {
+                        NodeId = authorB,
+                        PublicKey = keys[1].PublicKey,
+                        TransportPeerEpoch = 11,
+                        Status = NamespaceMemberStatus.Active
+                    }
+                ]
+            };
+            Guid fullReplaceGeneration = Guid.Parse("22345678-1234-5678-9abc-def012345678");
+            byte[] fullReplaceDigest = SHA256.HashData("two-host signed tombstone gc snapshot"u8);
+            void InstallSignedProof(StorageNamespaceGcStore gc)
+            {
+                NamespaceRosterCertificate acceptedRoster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+                byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(acceptedRoster);
+                var reportA = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                    new AppliedOriginFrontierReport
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        MemberNodeId = authorA,
+                        MemberTransportEpoch = 10,
+                        ReportSequence = 1,
+                        Entries =
+                        [
+                            new AppliedOriginFrontierEntry
+                            {
+                                OriginAuthorNodeId = authorA,
+                                OriginAuthorEpoch = 17,
+                                ContiguousAppliedOriginSequence = 1
+                            }
+                        ],
+                        IssuedOrigins =
+                        [
+                            new IssuedOriginFrontierEntry
+                            {
+                                OriginAuthorEpoch = 17,
+                                IssuedOriginSequence = 1,
+                                MaxIssuedHlcWall = 100,
+                                MaxIssuedHlcLogical = 1
+                            }
+                        ]
+                    }, keys[0].Seed), acceptedRoster);
+                var reportB = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                    new AppliedOriginFrontierReport
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        MemberNodeId = authorB,
+                        MemberTransportEpoch = 11,
+                        ReportSequence = 1,
+                        Entries =
+                        [
+                            new AppliedOriginFrontierEntry
+                            {
+                                OriginAuthorNodeId = authorA,
+                                OriginAuthorEpoch = 17,
+                                ContiguousAppliedOriginSequence = 1
+                            }
+                        ]
+                    }, keys[1].Seed), acceptedRoster);
+
+                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                    new FullReplaceInstalledAck
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        Generation = fullReplaceGeneration,
+                        Digest = fullReplaceDigest,
+                        MemberNodeId = authorA,
+                        MemberTransportEpoch = 10,
+                        HlcWallFloor = 100,
+                        HlcLogicalFloor = 1,
+                        Installed = true
+                    }, keys[0].Seed), acceptedRoster);
+                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                    new FullReplaceInstalledAck
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        Generation = fullReplaceGeneration,
+                        Digest = fullReplaceDigest,
+                        MemberNodeId = authorB,
+                        MemberTransportEpoch = 11,
+                        HlcWallFloor = 100,
+                        HlcLogicalFloor = 1,
+                        Installed = true
+                    }, keys[1].Seed), acceptedRoster);
+                var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    acceptedRoster, 1, new byte[32], [reportA, reportB],
+                    fullReplaceGeneration, fullReplaceDigest,
+                    fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 1);
+                gc.AcceptRetentionCheckpoint(
+                    NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed),
+                    acceptedRoster, trust);
+            }
+
+            var gcA = new StorageNamespaceGcStore(
+                nodeStorageA, scope, authorA,
+                new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+            var gcB = new StorageNamespaceGcStore(
+                nodeStorageB, scope, authorB,
+                new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+            InstallSignedProof(gcA);
+            InstallSignedProof(gcB);
+
+            Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 16));
+            Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 16));
+            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
+            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
+
+            await initiator.DisposeAsync(); initiator = null;
+            await acceptor.DisposeAsync(); acceptor = null;
+            await remoteA.DisposeAsync(); remoteA = null;
+            await remoteB.DisposeAsync(); remoteB = null;
+            await providerA.DisposeAsync(); providerA = null;
+            await providerB.DisposeAsync(); providerB = null;
+            nodeA.Dispose(); nodeA = null;
+            nodeB.Dispose(); nodeB = null;
+            walA.Dispose(); walA = null;
+            walB.Dispose(); walB = null;
+            metadataA.Dispose(); metadataA = null;
+            metadataB.Dispose(); metadataB = null;
+            nodeStorageA.Dispose(); nodeStorageA = null;
+            nodeStorageB.Dispose(); nodeStorageB = null;
+            await StopDatabaseHostAsync(hostA); hostA = null;
+            await StopDatabaseHostAsync(hostB); hostB = null;
+            await WaitForDatabaseWriterReleaseAsync(hostRootA, namespaceId, authorABytes, TimeSpan.FromSeconds(15));
+            await WaitForDatabaseWriterReleaseAsync(hostRootB, namespaceId, authorBBytes, TimeSpan.FromSeconds(15));
+
+            using var reopenedA = FldDatabase.Open(hostRootA, namespaceId, authorABytes);
+            using var reopenedB = FldDatabase.Open(hostRootB, namespaceId, authorBBytes);
+            Assert.False(reopenedA.TryResolve(record.ToArray(), 0x0951, out _));
+            Assert.False(reopenedB.TryResolve(record.ToArray(), 0x0951, out _));
+        }
+        finally
+        {
+            if (initiator is not null) await initiator.DisposeAsync();
+            if (acceptor is not null) await acceptor.DisposeAsync();
+            if (remoteA is not null) await remoteA.DisposeAsync();
+            if (remoteB is not null) await remoteB.DisposeAsync();
+            if (providerA is not null) await providerA.DisposeAsync();
+            if (providerB is not null) await providerB.DisposeAsync();
+            nodeA?.Dispose();
+            nodeB?.Dispose();
+            walA?.Dispose();
+            walB?.Dispose();
+            metadataA?.Dispose();
+            metadataB?.Dispose();
+            nodeStorageA?.Dispose();
+            nodeStorageB?.Dispose();
+            if (hostA is not null) await StopDatabaseHostAsync(hostA);
+            if (hostB is not null) await StopDatabaseHostAsync(hostB);
+            if (ownerA != Guid.Empty) StorageIpcEndpoint.DeleteIfOwned(hostRootA, namespaceId, ownerA);
+            if (ownerB != Guid.Empty) StorageIpcEndpoint.DeleteIfOwned(hostRootB, namespaceId, ownerB);
+            try { Directory.Delete(hostRootA, recursive: true); } catch { }
+            try { Directory.Delete(hostRootB, recursive: true); } catch { }
+            try { Directory.Delete(nodeRootA, recursive: true); } catch { }
+            try { Directory.Delete(nodeRootB, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Async_storage_coordinator_publishes_through_real_database_host_and_survives_host_restart()
     {
         string hostRoot = Path.Combine(Path.GetTempPath(), "fld-binsync-host-process-" + Guid.NewGuid().ToString("N"));
