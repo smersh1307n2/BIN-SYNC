@@ -3530,3 +3530,16 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added durable reopen, missing-ACK, duplicate acceptance, report fork, outbound-feed regression, receive-cursor regression and equal-cursor digest-fork tests.
 - [!] This persists signed evidence only. It does not yet update peer send/receive cursors, digest chains or InitialSyncComplete, does not compact payloads, and does not authorize any physical GC.
 - [ ] C/T Next major block: implement one atomic Metadata baseline transaction that validates the complete active-member report set against the exact roster/FULL_REPLACE/checkpoint, rejects PendingApply and immutable reservations, updates send and receive vectors plus one idempotency marker, and survives crash/reopen. Keep payload compaction as a separate later commit/retry step.
+
+
+## 1.137. Atomic two-sided FULL_REPLACE baseline application — 2026-11-13
+
+- [x C] Added the optional `IMetadataBaselineCommitStore` capability for a durable Metadata implementation to apply a complete signed MBR1 report set.
+- [x C] Implemented `StorageMetadataStore.ApplyFullReplaceBaseline`: it revalidates the current accepted roster, all Active-member FRA2 installation ACKs and exactly one MBR1 report per Active member while holding the shared Storage transaction gate.
+- [x C] The transaction binds source feed rows to target receive rows by member, transport epoch, author and issuer epoch; it validates outbound/relay domain identity, exact stream coverage, feed high-watermarks and digest agreement.
+- [x C] Applies peer send cursors, receive cursors, per-author digest chains, Active-peer initial-sync markers and a generation/evidence-digest idempotency marker in one Storage WriteBatch.
+- [x C] Rejects unresolved PendingApply, immutable send reservations, stale peer epochs, incomplete report sets, conflicting receive chains, ambiguous legacy sender-wide digest state, cursor/digest forks and reuse of one FULL_REPLACE generation with different evidence.
+- [x C] Persists roster retirement fences without deleting historical payload/receipt state. Payload compaction remains a separate later stage.
+- [x T] Added integration coverage for outbound + relay + receive vector application, one-commit atomicity, duplicate replay, post-baseline receive-chain continuation, durable reopen, PendingApply blocking and same-generation evidence fork rejection.
+- [!] This stage installs baseline metadata only. It does not compact outbound/relay payloads, receipts, ChangeIds, tombstones or ghosts and does not enable production GC.
+- [ ] Next: harden cross-report progress/rejoin cases, add immutable-reservation and epoch-rollover matrices, verify host-side FULL_REPLACE orchestration calls the new capability on every durable Metadata host, then implement bounded post-marker payload compaction with crash/reopen retry tests.
