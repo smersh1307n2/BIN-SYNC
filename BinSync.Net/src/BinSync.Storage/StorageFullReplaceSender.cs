@@ -154,7 +154,8 @@ public static class StorageFullReplaceSender
 
         using IFullReplaceCommitLease commitLease =
             coordinator.AcquireFullReplaceCommitGuard(acquireHostCommitLease);
-        if (commitLease.NamespaceId != roster.NamespaceId ||
+        if (commitLease.ScopeId != scopeId ||
+            commitLease.NamespaceId != roster.NamespaceId ||
             commitLease.LocalReplica != localReplica)
             throw new InvalidOperationException("Acquired FULL_REPLACE lease is bound to a different namespace or local replica.");
 
