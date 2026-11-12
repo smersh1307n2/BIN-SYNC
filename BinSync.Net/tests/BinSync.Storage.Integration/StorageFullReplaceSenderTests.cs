@@ -220,6 +220,73 @@ public sealed class StorageFullReplaceSenderTests
     }
 
     [Fact]
+    public void Source_snapshot_preparation_requires_and_holds_typed_full_replace_commit_guard()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-full-replace-admission-" + Guid.NewGuid().ToString("N"));
+        const string scope = "full-replace-source-admission";
+        const int partition = 904;
+        var (seed, publicKey) = BatchSignature.GenerateKeyPair();
+        NodeId localId = NodeId.From(Id(44));
+        var trust = new TrustStore();
+        trust.Allow(localId, publicKey, TrustMode.PreShared);
+        var unsignedRoster = new NamespaceRosterCertificate
+        {
+            NamespaceId = 23,
+            RosterGeneration = 1,
+            PreviousRosterDigest = new byte[32],
+            AuthorityNodeId = localId,
+            Members = new[]
+            {
+                new NamespaceRosterMember
+                {
+                    NodeId = localId,
+                    PublicKey = publicKey,
+                    TransportPeerEpoch = 7,
+                    Status = NamespaceMemberStatus.Active
+                }
+            }
+        };
+        NamespaceRosterCertificate roster = NamespaceRosterProtocol.DecodeAndVerify(
+            NamespaceRosterProtocol.Sign(unsignedRoster, seed), trust);
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, partition);
+            using var provider = new StorageDataProvider(storage);
+            using var metadata = new StorageMetadataStore(storage);
+            using var node = new Node(localId);
+            var gcStore = new StorageNamespaceGcStore(storage, scope, localId);
+            var coordinator = new StorageSyncCoordinator(node, provider, 23, metadata, scope);
+            coordinator.AttachNamespaceGcGuard(gcStore, trust);
+
+            int acquired = 0;
+            int released = 0;
+            using PreparedFullReplaceSnapshot prepared =
+                StorageFullReplaceSender.PrepareSnapshotAndPersistUnderCommitGuard(
+                    provider, trust, roster, localId,
+                    Guid.Parse("90400000-0000-0000-0000-000000000001"), seed,
+                    metadata, scope, localId, coordinator,
+                    () =>
+                    {
+                        Interlocked.Increment(ref acquired);
+                        return new CallbackLease(() => Interlocked.Increment(ref released));
+                    });
+
+            Assert.Equal(23, prepared.NamespaceId);
+            Assert.Equal(0UL, prepared.SourceChangeFeedWatermark);
+            Assert.Equal(1, acquired);
+            Assert.Equal(1, released);
+            Assert.True(metadata.TryGetPreparedFullReplaceSnapshot(
+                scope, localId, 23, prepared.Generation, out PreparedFullReplaceSnapshotState? state));
+            Assert.NotNull(state);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Prepared_sender_snapshot_survives_provider_and_metadata_reopen_and_rejects_stale_roster()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-full-replace-sender-" + Guid.NewGuid().ToString("N"));
