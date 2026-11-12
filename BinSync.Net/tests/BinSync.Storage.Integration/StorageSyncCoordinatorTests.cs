@@ -4082,6 +4082,56 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
+    public async Task Tombstone_gc_commit_guard_blocks_direct_metadata_writers_until_provider_delete_finishes()
+    {
+        const string scope = "tombstone-gc-metadata-writer";
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "tombstone-gc-metadata-writer"), 484);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(92);
+        var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        var trust = new TrustStore();
+        var coordinator = new StorageSyncCoordinator(local, provider, 1, metadata, scope);
+        coordinator.AttachNamespaceGcGuard(gcStore, trust);
+
+        using var writerStarted = new ManualResetEventSlim();
+        using var writerCompleted = new ManualResetEventSlim();
+        int hostAcquires = 0;
+        int hostReleases = 0;
+        TombstoneGcCommitLease lease = coordinator.AcquireTombstoneGcCommitGuard(() =>
+        {
+            Interlocked.Increment(ref hostAcquires);
+            return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
+        });
+
+        Task writer = Task.Run(() =>
+        {
+            writerStarted.Set();
+            metadata.BindProviderReceiptStream(scope, local.NodeId, 1, Guid.NewGuid());
+            writerCompleted.Set();
+        });
+
+        bool started;
+        bool blockedByLease;
+        try
+        {
+            started = writerStarted.Wait(TimeSpan.FromSeconds(5));
+            blockedByLease = started && !writerCompleted.Wait(TimeSpan.FromMilliseconds(150));
+        }
+        finally
+        {
+            lease.Dispose();
+        }
+
+        Assert.True(writerCompleted.Wait(TimeSpan.FromSeconds(5)));
+        await writer.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(started);
+        Assert.True(blockedByLease);
+        Assert.Equal(1, hostAcquires);
+        Assert.Equal(1, hostReleases);
+    }
+
+    [Fact]
     public void Full_replace_commit_guard_requires_exact_namespace_gc_binding_and_releases_host_lease()
     {
         const string scope = "full-replace-gc-binding";
