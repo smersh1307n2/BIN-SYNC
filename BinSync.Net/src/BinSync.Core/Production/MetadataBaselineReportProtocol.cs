@@ -109,7 +109,7 @@ public static class MetadataBaselineReportProtocol
         ulong reportSequence = reader.ReadUInt64();
 
         int feedCount = reader.ReadUInt16();
-        if (feedCount > MaxEntries || feedCount > (stream.Length - stream.Position - 2) / 61)
+        if (feedCount > MaxEntries || feedCount > (stream.Length - stream.Position - 2) / 65)
             throw new InvalidDataException("MBR1 feed entry count exceeds the bounded payload.");
         var feeds = new MetadataBaselineFeedEntry[feedCount];
         for (int i = 0; i < feedCount; i++)
@@ -127,7 +127,7 @@ public static class MetadataBaselineReportProtocol
         }
 
         int receiveCount = reader.ReadUInt16();
-        if (receiveCount > MaxEntries || receiveCount > (stream.Length - stream.Position) / 60)
+        if (receiveCount > MaxEntries || receiveCount > (stream.Length - stream.Position) / 64)
             throw new InvalidDataException("MBR1 receive entry count exceeds the bounded payload.");
         var receives = new MetadataBaselineReceiveEntry[receiveCount];
         for (int i = 0; i < receiveCount; i++)
