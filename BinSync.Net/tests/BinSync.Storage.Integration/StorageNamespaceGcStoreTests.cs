@@ -130,6 +130,106 @@ public sealed class StorageNamespaceGcStoreTests
         }
     }
 
+    private sealed class RecordingTombstoneGc : IAsyncProviderTombstoneGc
+    {
+        private readonly IReadOnlyList<ProviderMutation> _candidates;
+
+        public RecordingTombstoneGc(IReadOnlyList<ProviderMutation> candidates)
+            => _candidates = candidates;
+
+        public int ReadCalls { get; private set; }
+        public int CompactCalls { get; private set; }
+        public IReadOnlyList<ProviderMutation>? Approved { get; private set; }
+
+        public ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
+            int limit, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReadCalls++;
+            return ValueTask.FromResult<IReadOnlyList<ProviderMutation>>(_candidates.Take(limit).ToArray());
+        }
+
+        public ValueTask<int> CompactTombstonesAsync(
+            IReadOnlyList<ProviderMutation> approvedCandidates,
+            int limit, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CompactCalls++;
+            Approved = approvedCandidates.ToArray();
+            return ValueTask.FromResult(Approved.Count);
+        }
+    }
+
+    [Theory]
+    [InlineData(true, 90UL, 1)]
+    [InlineData(true, 91UL, 0)]
+    [InlineData(false, 90UL, 0)]
+    public async Task Async_tombstone_gc_coordinator_requires_opt_in_and_signed_safe_horizon(
+        bool enabled, ulong originSequence, int expectedCompacted)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-async-tombstone-gc-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        const string scope = "async-tombstone-gc-coordinator";
+        const int namespaceId = 19;
+        Guid generation = Guid.Parse("12345678-1234-5678-9abc-def012345678");
+        byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("authoritative snapshot"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 909);
+            using var metadata = new StorageMetadataStore(storage);
+            using var node = new NodeBuilder().WithNodeId(Id(99)).WithEpoch(1).Build();
+            var gc = new StorageNamespaceGcStore(
+                storage, scope, node.NodeId,
+                new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: enabled));
+            var roster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(Roster(1, new byte[32], keys), keys[0].Seed), trust);
+            var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+            var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 0, keys, generation, replaceDigest), roster);
+            gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 1, keys, generation, replaceDigest), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { report0, report1 }, generation, replaceDigest,
+                fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+            var candidate = new ProviderMutation
+            {
+                RecordId = RecordId.From(Id(0x55)),
+                FieldId = 7,
+                IsTombstone = true,
+                IsRecordTombstone = false,
+                HlcWall = 100,
+                HlcLogical = 2,
+                AuthorNodeId = NodeId.From(Id(2)),
+                KeyEpoch = 0,
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(Id(0x56)),
+                OriginAuthorEpoch = 3,
+                OriginSequence = originSequence
+            };
+            var provider = new RecordingTombstoneGc(new[] { candidate });
+            var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, namespaceId);
+            coordinator.AttachNamespaceGcGuard(gc, trust);
+
+            int compacted = await coordinator.CompactTombstonesAsync(provider, 16);
+
+            Assert.Equal(expectedCompacted, compacted);
+            Assert.Equal(enabled ? 1 : 0, provider.ReadCalls);
+            Assert.Equal(expectedCompacted == 1 ? 1 : 0, provider.CompactCalls);
+            if (expectedCompacted == 1)
+                Assert.Equal(candidate, Assert.Single(provider.Approved!));
+            else
+                Assert.Null(provider.Approved);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public void Signed_roster_frontiers_acks_and_checkpoint_survive_restart_and_prove_only_the_safe_horizon()
     {
