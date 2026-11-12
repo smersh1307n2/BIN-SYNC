@@ -20,6 +20,49 @@ public sealed class AsyncCoordinatorProcessCrashTests
     private static readonly RecordId Record =
         RecordId.From(Guid.Parse("8b000000-0000-0000-0000-00000000008b").ToByteArray());
 
+    private sealed class BlockBeforeTransportAck : IPeerAwareSyncTransport
+    {
+        private readonly ISyncTransport _inner;
+        private readonly Action _onAck;
+        private NodeId _peerNodeId;
+
+        public BlockBeforeTransportAck(ISyncTransport inner, Action onAck)
+        {
+            _inner = inner;
+            _onAck = onAck;
+        }
+
+        public NodeId PeerNodeId
+        {
+            get => _peerNodeId;
+            set
+            {
+                _peerNodeId = value;
+                if (_inner is IPeerAwareSyncTransport aware)
+                    aware.PeerNodeId = value;
+            }
+        }
+
+        public SyncTransportCapabilities Capabilities => _inner.Capabilities;
+        public int? MaxPacketSize => _inner.MaxPacketSize;
+
+        public ValueTask SendAsync(ReadOnlyMemory<byte> packet, CancellationToken ct = default)
+        {
+            var (frame, _) = FrameCodec.ParseFrame(packet.ToArray());
+            if (frame.FrameType == 0x0B)
+            {
+                _onAck();
+                throw new IOException("Process terminated at the durable Metadata-finalized / transport-ACK boundary.");
+            }
+            return _inner.SendAsync(packet, ct);
+        }
+
+        public ValueTask<byte[]?> ReceiveAsync(CancellationToken ct = default) =>
+            _inner.ReceiveAsync(ct);
+
+        public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
     private sealed class StorageAsyncRemoteBatchStore : IAsyncProviderRemoteBatchCommitStore
     {
         private readonly IDataProvider _provider;
@@ -50,6 +93,7 @@ public sealed class AsyncCoordinatorProcessCrashTests
     [InlineData("after-pending-apply")]
     [InlineData("after-node-checkpoint")]
     [InlineData("after-provider-commit")]
+    [InlineData("after-metadata-finalized-before-ack")]
     public async Task Async_coordinator_process_death_at_receive_cut_recovers_pending_apply(string crashCut)
     {
         string directory = Path.Combine(Path.GetTempPath(),
@@ -132,23 +176,47 @@ public sealed class AsyncCoordinatorProcessCrashTests
             using var receiver = StorageNodePersistence.Load(storage, NewNode(ReceiverSeed).NodeId);
             using var senderIdentity = NewNode(SenderSeed);
 
-            Assert.Single(metadata.ReadPendingApplyIntents("async-process-crash", receiver.NodeId));
+            bool afterMetadataFinalize = crashCut == "after-metadata-finalized-before-ack";
+            IReadOnlyList<MetadataPendingApplyIntent> pendingBeforeRecovery =
+                metadata.ReadPendingApplyIntents("async-process-crash", receiver.NodeId);
+            if (afterMetadataFinalize) Assert.Empty(pendingBeforeRecovery);
+            else Assert.Single(pendingBeforeRecovery);
             bool nodeCheckpointed = receiver.TryGetField(NamespaceId, Record, 0x088B, out var checkpointed);
             Assert.Equal(crashCut != "after-pending-apply", nodeCheckpointed);
             if (nodeCheckpointed)
                 Assert.Equal("async-provider-commit", Encoding.UTF8.GetString(checkpointed!.Value));
             bool providerCommitted = provider.TryReadCurrent(Record, 0x088B, out var providerValue);
-            Assert.Equal(crashCut == "after-provider-commit", providerCommitted);
+            Assert.Equal(crashCut is "after-provider-commit" or "after-metadata-finalized-before-ack", providerCommitted);
             if (providerCommitted)
                 Assert.Equal("async-provider-commit", Encoding.UTF8.GetString(providerValue!.Value));
-            Assert.Equal(0UL, metadata.GetReceiveCursor(
+            Assert.Equal(afterMetadataFinalize ? 1UL : 0UL, metadata.GetReceiveCursor(
                 "async-process-crash", receiver.NodeId, senderIdentity.NodeId, 1, NamespaceId));
 
             var coordinator = new AsyncStorageSyncCoordinator(
                 receiver, metadata, "async-process-crash", NamespaceId);
             var remote = new StorageAsyncRemoteBatchStore(provider);
-            Assert.Equal(1, await coordinator.RecoverPendingAppliesAsync(
-                remote, node => StorageNodePersistence.Save(storage, node)));
+            if (afterMetadataFinalize)
+            {
+                using var sender = StorageNodePersistence.Load(storage, senderIdentity.NodeId);
+                Assert.Equal(0L, sender.PeerStates[(receiver.NodeId, NamespaceId)].AckedFor(sender.NodeId));
+                var (senderPipe, receiverPipe) = PipeTransport.CreatePair();
+                var accept = SyncSession.AcceptAsync(receiver, receiverPipe);
+                await using var initiator = await SyncSession.ConnectAsync(sender, senderPipe);
+                await using var acceptor = await accept;
+                Task<BatchResult> replayReceive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
+                    acceptor, remote, node => StorageNodePersistence.Save(storage, node));
+                Task<bool> replaySend = initiator.PushBatchAsync(sender, NamespaceId);
+                BatchResult duplicate = await replayReceive.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.True(await replaySend.WaitAsync(TimeSpan.FromSeconds(10)));
+                Assert.True(duplicate.Duplicate);
+                Assert.Equal(0, duplicate.Applied);
+                Assert.Equal(1L, sender.PeerStates[(receiver.NodeId, NamespaceId)].AckedFor(sender.NodeId));
+            }
+            else
+            {
+                Assert.Equal(1, await coordinator.RecoverPendingAppliesAsync(
+                    remote, node => StorageNodePersistence.Save(storage, node)));
+            }
             Assert.Empty(metadata.ReadPendingApplyIntents("async-process-crash", receiver.NodeId));
             Assert.Equal(1UL, metadata.GetReceiveCursor(
                 "async-process-crash", receiver.NodeId, senderIdentity.NodeId, 1, NamespaceId));
@@ -193,6 +261,7 @@ public sealed class AsyncCoordinatorProcessCrashTests
         await using var acceptor = await acceptTask;
         await using var initiator = await connectTask;
         StorageNodePersistence.Save(storage, receiver);
+        StorageNodePersistence.Save(storage, sender);
 
         Assert.True(sender.WriteField(NamespaceId, Record, 0x088B,
             Encoding.UTF8.GetBytes("async-provider-commit"), new Hlc(8800, 0)));
@@ -202,7 +271,7 @@ public sealed class AsyncCoordinatorProcessCrashTests
         {
             File.WriteAllText(pidPath, Environment.ProcessId.ToString(
                 System.Globalization.CultureInfo.InvariantCulture));
-            File.WriteAllText(readyPath, "provider-committed-before-metadata-finalize");
+            File.WriteAllText(readyPath, "reached-" + crashCut);
             Thread.Sleep(Timeout.Infinite);
         };
         Task<BatchResult> receive;
@@ -220,6 +289,26 @@ public sealed class AsyncCoordinatorProcessCrashTests
                 },
                 beforeAck: null,
                 receiveStateOwnedByMetadataStore: true);
+        }
+        else if (crashCut == "after-metadata-finalized-before-ack")
+        {
+            var blockingTransport = new BlockBeforeTransportAck(toReceiver, signalAndBlock);
+            // Rebuild the acceptor over the ACK-intercepting transport. Handshake is
+            // performed on that wrapper too, but only established DELTA ACK frames block.
+            await acceptor.DisposeAsync();
+            await initiator.DisposeAsync();
+            var (retrySenderPipe, retryReceiverPipe) = PipeTransport.CreatePair();
+            var wrappedReceiver = new BlockBeforeTransportAck(retryReceiverPipe, signalAndBlock);
+            Task<SyncSession> wrappedAccept = SyncSession.AcceptAsync(receiver, wrappedReceiver);
+            Task<SyncSession> wrappedConnect = SyncSession.ConnectAsync(sender, retrySenderPipe);
+            var ackAcceptor = await wrappedAccept;
+            var ackInitiator = await wrappedConnect;
+            // The original sessions are no longer used; keep the wrapped pair alive
+            // until the parent kills this process at the ACK boundary.
+            _ = ackInitiator;
+            var remote = new StorageAsyncRemoteBatchStore(provider);
+            receive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
+                ackAcceptor, remote, node => StorageNodePersistence.Save(storage, node));
         }
         else
         {
