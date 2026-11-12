@@ -2993,7 +2993,7 @@ private static bool ValidateIncomingBatchForStaging(
 
                 var streamKey = new PeerStreamKey(
                     feed.TargetPeer, feed.TargetTransportEpoch, namespaceId, feed.AuthorStream);
-                if (current.PeerStreams.TryGetValue(streamKey, out PeerStreamStateValue? existing))
+                if (current.PeerStreams.TryGetValue(streamKey, out PeerStreamStateValue existing))
                 {
                     if (existing.PendingBatch is not null || existing.PushedCursor != existing.AckedCursor)
                         throw new InvalidOperationException("An immutable outbound reservation blocks baseline application.");
@@ -3057,11 +3057,11 @@ private static bool ValidateIncomingBatchForStaging(
                 bool hasCurrent = current.Receives.TryGetValue(receiveKey, out ReceiveState currentReceive);
                 ulong currentCursor = hasCurrent ? currentReceive.CursorEnd : 0;
                 byte[] currentDigest = new byte[16];
-                if (current.ReceiveChains.TryGetValue(chainKey, out ReceiveChainState? currentChain))
+                if (current.ReceiveChains.TryGetValue(chainKey, out ReceiveChainState currentChain))
                     currentDigest = currentChain.LastBatchDigest.ToArray();
                 else if (current.LegacyReceiveChains.TryGetValue(
                              new LegacyReceiveChainKey(entry.SenderPeer, entry.IssuerEpoch, namespaceId),
-                             out ReceiveChainState? legacyChain))
+                             out ReceiveChainState legacyChain))
                     currentDigest = legacyChain.LastBatchDigest.ToArray();
                 else if (currentCursor != 0)
                     throw new InvalidDataException("Existing receive cursor has no unambiguous per-author digest chain.");
