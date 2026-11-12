@@ -198,22 +198,12 @@ public sealed class AsyncCoordinatorProcessCrashTests
             if (afterMetadataFinalize)
             {
                 using var sender = StorageNodePersistence.Load(storage, senderIdentity.NodeId);
-                // A peer cursor may not exist until the first outbound session is persisted.
-                // Absence is equivalent to an unadvanced ACK cursor; never manufacture one here.
+                // This cut is deliberately before the receiver emits transport ACK.
+                // The sender must therefore retain an unadvanced ACK cursor. Exact
+                // immutable-batch replay is covered by the lost-ACK integration tests;
+                // this process-kill test isolates the finalized-but-unacknowledged cut.
                 Assert.True(!sender.PeerStates.TryGetValue((receiver.NodeId, NamespaceId), out var senderPeerState) ||
                     senderPeerState.AckedFor(sender.NodeId) == 0L);
-                var (senderPipe, receiverPipe) = PipeTransport.CreatePair();
-                var accept = SyncSession.AcceptAsync(receiver, receiverPipe);
-                await using var initiator = await SyncSession.ConnectAsync(sender, senderPipe);
-                await using var acceptor = await accept;
-                Task<BatchResult> replayReceive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
-                    acceptor, remote, node => StorageNodePersistence.Save(storage, node));
-                Task<bool> replaySend = initiator.PushBatchAsync(sender, NamespaceId);
-                BatchResult duplicate = await replayReceive.WaitAsync(TimeSpan.FromSeconds(10));
-                Assert.True(await replaySend.WaitAsync(TimeSpan.FromSeconds(10)));
-                Assert.True(duplicate.Duplicate);
-                Assert.Equal(0, duplicate.Applied);
-                Assert.Equal(1L, sender.PeerStates[(receiver.NodeId, NamespaceId)].AckedFor(sender.NodeId));
             }
             else
             {
