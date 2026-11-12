@@ -555,7 +555,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             using (metadataA.AcquireTombstoneGcCommitGuard(
                 scope, nodeA.NodeId, namespaceId, gcA, trust,
                 out IReadOnlySet<RecordId>? referencesA))
+            {
                 Assert.NotNull(referencesA);
+                Assert.Empty(referencesA);
+            }
             IReadOnlyList<ProviderMutation> candidatesA =
                 await providerA.ReadTombstoneGcCandidatesAsync(16);
             Assert.Single(candidatesA);
