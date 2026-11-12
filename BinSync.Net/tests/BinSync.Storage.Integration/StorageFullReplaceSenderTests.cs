@@ -259,7 +259,7 @@ public sealed class StorageFullReplaceSenderTests
         try
         {
             using var storage = StorageDatabase.Open(directory, partition);
-            using var provider = new StorageDataProvider(storage);
+            using var provider = new DurableSnapshotProvider(storage);
             using var metadata = new StorageMetadataStore(storage);
             using var node = new Node(localId);
             var gcStore = new StorageNamespaceGcStore(storage, scope, localId);
