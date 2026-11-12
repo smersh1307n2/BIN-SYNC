@@ -83,7 +83,7 @@ public interface IMetadataPeerStateStore
     /// Commits the matching peer ACK and digest checkpoint, then releases the in-flight
     /// reservation atomically. ACKs without a matching pushed reservation fail closed.
     /// </summary>
-    void AcknowledgeOutboundBatch(string scopeId, NodeId localReplica,
+    void AcknowledgePeerBatch(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         BatchId batchId, ulong cursorEnd, byte[] batchDigest);
 }
