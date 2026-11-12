@@ -72,7 +72,7 @@ public sealed class AsyncStorageSyncCoordinator
             (!ReferenceEquals(_namespaceGcStore, gcStore) ||
              !ReferenceEquals(_namespaceGcTrustStore, trustStore)))
             throw new InvalidOperationException("Async namespace-GC binding cannot be replaced.");
-        storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore);
+        storageMetadata.AttachNamespaceGcGuard(gcStore, trustStore, _scopeId, _node.NodeId);
         _namespaceGcStore = gcStore;
         _namespaceGcTrustStore = trustStore;
     }
