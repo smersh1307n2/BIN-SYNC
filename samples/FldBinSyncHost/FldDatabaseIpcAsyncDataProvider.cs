@@ -402,7 +402,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             lock (_gate)
             {
                 ThrowIfDisposed();
-                if (!_snapshots.TryGetValue(snapshot.SnapshotToken, out ipcHandle!))
+                if (!_snapshots.TryGetValue(snapshot.Token, out ipcHandle!))
                     throw new InvalidOperationException("The FLD tombstone-candidate snapshot was not registered.");
             }
 
@@ -425,7 +425,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                     candidates.Add(new ProviderMutation
                     {
                         RecordId = _recordIdResolver(metadata.RecordId),
-                        FieldId = _fieldIdResolver(metadata.FieldId),
+                        FieldId = metadata.FieldId,
                         IsTombstone = metadata.IsTombstone,
                         IsRecordTombstone = metadata.IsRecordTombstone,
                         HlcWall = metadata.HlcWall,
