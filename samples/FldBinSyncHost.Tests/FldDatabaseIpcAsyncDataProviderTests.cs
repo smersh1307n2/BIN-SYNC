@@ -475,6 +475,23 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             InstallSignedProof(gcA);
             InstallSignedProof(gcB);
 
+            Assert.True(gcA.HasProtocolTombstoneGcProof(
+                gcA.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? acceptedA)
+                    ? acceptedA! : throw new InvalidOperationException("Host A roster was not persisted."),
+                trust, authorA, 17, 1, tombstoneAtA.HlcWall, tombstoneAtA.HlcLogical,
+                fullReplaceGeneration, fullReplaceDigest),
+                "Host A must independently validate the signed causal and FULL_REPLACE proof.");
+            Assert.True(gcB.HasProtocolTombstoneGcProof(
+                gcB.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? acceptedB)
+                    ? acceptedB! : throw new InvalidOperationException("Host B roster was not persisted."),
+                trust, authorA, 17, 1, tombstoneAtB.HlcWall, tombstoneAtB.HlcLogical,
+                fullReplaceGeneration, fullReplaceDigest),
+                "Host B must independently validate the signed causal and FULL_REPLACE proof.");
+            Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record),
+                "Host A Metadata must not retain a pending, relay, or outbound reference to the tombstone.");
+            Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record),
+                "Host B Metadata must not retain a pending, relay, or outbound reference to the tombstone.");
+
             Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 16));
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 16));
             Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
