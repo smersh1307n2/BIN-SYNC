@@ -2993,7 +2993,7 @@ private static bool ValidateIncomingBatchForStaging(
 
                 var streamKey = new PeerStreamKey(
                     feed.TargetPeer, feed.TargetTransportEpoch, namespaceId, feed.AuthorStream);
-                if (current.PeerStreams.TryGetValue(streamKey, out PeerStreamStateValue existing))
+                if (current.PeerStreams.TryGetValue(streamKey, out PeerStreamStateValue? existing))
                 {
                     if (existing.PendingBatch is not null || existing.PushedCursor != existing.AckedCursor)
                         throw new InvalidOperationException("An immutable outbound reservation blocks baseline application.");
