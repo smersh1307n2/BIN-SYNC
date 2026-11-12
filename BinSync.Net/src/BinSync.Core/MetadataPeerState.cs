@@ -120,3 +120,20 @@ public sealed class MetadataOutboundBatchReservation
     public required byte[] BatchDigest { get; init; }
     public required byte[] Payload { get; init; }
 }
+
+
+/// <summary>
+/// Optional atomic receiver-side application of a proof-bound FULL_REPLACE Metadata
+/// baseline. The implementation must commit send state, receive state and its
+/// idempotency marker in one durable transaction.
+/// </summary>
+public interface IMetadataBaselineCommitStore
+{
+    /// <summary>
+    /// Applies the complete accepted Active-member MBR1 set for this local replica.
+    /// Returns true when a new baseline transaction was committed and false for an
+    /// exact idempotent replay of the same generation and evidence set.
+    /// </summary>
+    bool ApplyFullReplaceBaseline(string scopeId, NodeId localReplica,
+        NamespaceRosterCertificate acceptedRoster, Guid generation, ReadOnlySpan<byte> snapshotDigest);
+}
