@@ -28,6 +28,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         Guid ownerId = Guid.Empty;
         Process? host = null;
         FldDatabaseIpcAsyncDataProvider? provider = null;
+        FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
         byte[] recordId = FldDatabase.NewRecordId();
         try
         {
@@ -187,12 +188,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
                 var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, checked((int)namespaceId));
-                coordinator.AttachNamespaceGcGuard(gc, trust);
-                Assert.Equal(1, await coordinator.CompactTombstonesAsync(provider, 16));
+                var adapter = new FldBinSyncAsyncHostAdapter(coordinator, provider, remoteApply, _ => { });
+                Assert.Equal(1, await adapter.RunTombstoneGcPassAsync(gc, trust, 16));
             }
 
             Assert.Null(await provider.ReadCurrentAsync(RecordId.From(recordId), 7));
 
+            await remoteApply.DisposeAsync();
+            remoteApply = null;
             await provider.DisposeAsync();
             provider = null;
             await StopDatabaseHostAsync(host);
@@ -205,6 +208,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
         finally
         {
+            if (remoteApply is not null)
+                await remoteApply.DisposeAsync();
             if (provider is not null)
                 await provider.DisposeAsync();
             if (host is not null)
