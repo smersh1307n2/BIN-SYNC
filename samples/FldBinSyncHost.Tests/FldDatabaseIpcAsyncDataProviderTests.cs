@@ -537,7 +537,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             // Host A's outbound payload is now ACKed by Host B, but Host B's relay
             // payload must remain until a downstream peer (not the original author)
-            // durably receives it. Add a WAL-backed third peer to complete that ACK.
+            // receives and applies it. C is a transport-level active member in this
+            // frontier test, not a third durable FLD Database Host.
             relayNode = new NodeBuilder()
                 .WithNodeId(relayMember)
                 .WithEpoch(19)
