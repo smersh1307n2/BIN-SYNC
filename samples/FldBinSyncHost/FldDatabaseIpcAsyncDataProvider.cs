@@ -453,7 +453,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         {
             // Releasing the persisted snapshot pin is part of the read operation.
             // If release fails, propagate the error and leave final Host GC fail-closed.
-            await ReleaseSnapshotAsync(snapshot.SnapshotToken, CancellationToken.None).ConfigureAwait(false);
+            await ReleaseSnapshotAsync(snapshot.Token, CancellationToken.None).ConfigureAwait(false);
         }
     }
 
