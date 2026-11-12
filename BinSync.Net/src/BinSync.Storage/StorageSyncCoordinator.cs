@@ -8,6 +8,20 @@ public sealed record StorageRemoteApplyPlan(
     IReadOnlyList<bool> ApplyOperations);
 
 /// <summary>
+/// Typed proof that the application, Node, host, Metadata and provider commit gates
+/// are all held for one synchronous tombstone-reclamation pass.
+/// Only StorageSyncCoordinator can create this lease.
+/// </summary>
+public sealed class TombstoneGcCommitLease : IDisposable
+{
+    private IDisposable? _inner;
+    internal TombstoneGcCommitLease(IDisposable inner)
+        => _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+    public void Dispose()
+        => Interlocked.Exchange(ref _inner, null)?.Dispose();
+}
+
+/// <summary>
 /// Coordinates BIN-SYNC with an application-owned durable Data Provider and optional
 /// Metadata Store. Before provider-authoritative cutover, local feed entries are
 /// mirrored through Node Outbox; after cutover, Metadata Store owns outbound sequencing
@@ -355,6 +369,27 @@ public sealed class StorageSyncCoordinator
     }
 
     /// <summary>
+    /// Acquire the stronger cross-store barrier required for physical provider tombstone
+    /// reclamation. Unlike the ordinary application guard, this also holds the Metadata
+    /// transaction gate from the live-reference scan through the provider delete, so a
+    /// direct public Metadata writer cannot insert a new PendingApply/relay/outbound
+    /// reference between those two steps.
+    /// </summary>
+    public TombstoneGcCommitLease AcquireTombstoneGcCommitGuard(
+        Func<IDisposable?> acquireHostCommitLease)
+    {
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        if (_namespaceId <= 0 || _namespaceId > ushort.MaxValue ||
+            _node.NodeId.IsZero || string.IsNullOrWhiteSpace(_scopeId))
+            throw new InvalidOperationException(
+                "Tombstone GC requires a non-zero local replica, namespace and stable Metadata scope.");
+        return new TombstoneGcCommitLease(AcquireApplicationCommitGuardCore(
+            acquireHostCommitLease,
+            requireFullReplaceMetadataProof: false,
+            requireTombstoneGcMetadataProof: true));
+    }
+
+    /// <summary>
     /// Acquire the application barrier in the required lock order:
     /// coordinator → Node gates → host WAL/FLD gate → shared BIN-SYNC Storage gate.
     /// Use this overload for physical GC and other coordinated work when the host
@@ -370,7 +405,8 @@ public sealed class StorageSyncCoordinator
 
     private IDisposable AcquireApplicationCommitGuardCore(
         Func<IDisposable?>? acquireHostCommitLease,
-        bool requireFullReplaceMetadataProof)
+        bool requireFullReplaceMetadataProof,
+        bool requireTombstoneGcMetadataProof = false)
     {
         Monitor.Enter(_gate);
         IDisposable? nodeLease = null;
@@ -398,6 +434,19 @@ public sealed class StorageSyncCoordinator
                         "FULL_REPLACE requires a Metadata Store full-replace guard for the exact scope and local replica.");
                 metadataLease = metadataGuard.AcquireFullReplaceCommitGuard(
                     _scopeId, _node.NodeId, _namespaceId);
+            }
+            else if (requireTombstoneGcMetadataProof)
+            {
+                if (_metadataStore is not StorageMetadataStore storageMetadata ||
+                    string.IsNullOrWhiteSpace(_scopeId))
+                    throw new NotSupportedException(
+                        "Tombstone GC requires the durable StorageMetadataStore and a stable Metadata scope.");
+                StorageNamespaceGcStore gcStore = _namespaceGcStore
+                    ?? throw new NotSupportedException("Tombstone GC requires the attached namespace-GC store.");
+                TrustStore trustStore = _namespaceGcTrustStore
+                    ?? throw new NotSupportedException("Tombstone GC requires the attached namespace-GC TrustStore.");
+                metadataLease = storageMetadata.AcquireTombstoneGcCommitGuard(
+                    _scopeId, _node.NodeId, _namespaceId, gcStore, trustStore);
             }
 
             providerLease = providerGuard.AcquireCommitGuard();
