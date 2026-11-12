@@ -3506,3 +3506,14 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x D] Specified the single-lease source capture boundary, two-sided atomic Metadata application, idempotency/fork rules, compaction ordering and crash/rejoin/concurrency test matrix.
 - [!] This is a design checkpoint only. No baseline application API or wire message is implemented by this documentation commit; all physical GC switches remain false.
 - [ ] C/T Next implementation slice: define the member-authenticated evidence ownership model and canonical codec/golden vectors; then add the StorageMetadataStore transaction that atomically updates peer send state, per-author receive cursor/digest rows and the generation marker. Do not compact payloads in the same first slice.
+
+
+## 1.135. Member-signed Metadata baseline report codec — 2026-11-12
+
+- [x C] Added the versioned MBR1 model and canonical codec in `MetadataBaselineReportProtocol`. Each report is signed by the member whose local Metadata state it describes and binds namespace, accepted roster generation/digest, FULL_REPLACE generation, provider snapshot digest/entry count, provider watermark, HLC floor, member transport epoch and report sequence.
+- [x C] Added separately typed per-peer feed rows (Outbound/Relay, target peer transport epoch, author issuer epoch, absolute feed offset and 16-byte digest anchor) and receive rows (sender transport epoch, author issuer epoch, receive cursor and digest anchor). Provider watermark, origin frontier and stream offsets remain separate fields.
+- [x C] Canonical ordering rejects duplicate peer/author feed ownership even if a caller labels one row Outbound and another Relay. Receive rows are independently sorted by sender/transport epoch/author/issuer epoch. Empty receive streams require a zero digest anchor.
+- [x T] Added round-trip/signature, tamper, wrong generation/snapshot, joining signer and duplicate source-kind regression tests.
+- [!] This is the signed wire/data contract only. It is not yet persisted or consumed by FULL_REPLACE, and does not advance Metadata send/receive state. No payload compaction or GC is authorized.
+- [ ] CI Exact-head BIN-SYNC Linux/Windows, Fuzz/Lab, signed vectors and FLD Storage Integration Ubuntu/Windows/macOS must pass before this codec is treated as verified.
+- [ ] Next: persist monotonically accepted member reports under the namespace GC store's shared transaction gate, then implement the single-transaction Metadata baseline application with pending-apply/reservation/epoch checks. Do not compact payloads in that first transaction.
