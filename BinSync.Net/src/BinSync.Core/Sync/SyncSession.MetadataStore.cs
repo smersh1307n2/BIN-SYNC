@@ -72,9 +72,14 @@ public partial class SyncSession
             }
             else
             {
-                var authors = peerStateStore.ReadOutboundAuthors(scopeId, sender.NodeId, namespaceId)
-                    .Concat(peerStateStore.ReadRelayAuthors(scopeId, sender.NodeId, namespaceId))
-                    .Distinct()
+                var outboundAuthors = peerStateStore.ReadOutboundAuthors(
+                    scopeId, sender.NodeId, namespaceId).ToHashSet();
+                var relayAuthors = peerStateStore.ReadRelayAuthors(
+                    scopeId, sender.NodeId, namespaceId).ToHashSet();
+                if (outboundAuthors.Overlaps(relayAuthors))
+                    throw new InvalidDataException(
+                        "A peer author stream is present in both outbound and relay payload stores.");
+                var authors = outboundAuthors.Concat(relayAuthors)
                     .Where(author => publicationCeilings is null ||
                         (publicationCeilings.TryGetValue(author, out ulong ceiling) && ceiling != 0))
                     .OrderBy(author => Convert.ToHexString(author.ToArray()), StringComparer.Ordinal)
@@ -113,7 +118,7 @@ public partial class SyncSession
                         throw new InvalidDataException("Durable peer pushed cursor has no immutable replay reservation.");
 
                     ulong firstSequence;
-                    if (candidateAuthor == sender.NodeId)
+                    if (outboundAuthors.Contains(candidateAuthor))
                     {
                         var first = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
                             PeerNodeId, peerEpoch, namespaceId, candidateAuthor, 1);
@@ -157,7 +162,7 @@ public partial class SyncSession
                 if (selectedAuthor is null) return false;
                 authorStream = selectedAuthor.Value;
                 IReadOnlyList<(ulong Sequence, BatchId ChangeId, uint OriginAuthorEpoch, ulong OriginSequence, byte[] Payload)> pageItems;
-                if (authorStream == sender.NodeId)
+                if (outboundAuthors.Contains(authorStream))
                 {
                     var page = peerStateStore.ReadOutboundForPeer(scopeId, sender.NodeId,
                         PeerNodeId, peerEpoch, namespaceId, authorStream, 256);
