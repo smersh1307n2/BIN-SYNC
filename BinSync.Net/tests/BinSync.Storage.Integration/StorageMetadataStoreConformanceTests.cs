@@ -2489,4 +2489,47 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         }
     }
 
+
+    [Fact]
+    public void Outbound_and_relay_author_exclusivity_survives_reopen()
+    {
+        const string scope = "exclusive-author-reopen";
+        const int namespaceId = 7;
+        NodeId local = Node(1), upstream = Node(2), author = Node(3);
+        string directory = Path.Combine(_root, "exclusive-author-reopen");
+
+        using (var first = new StorageMetadataStore(directory, 453, deleteOnDispose: false))
+            first.FreezeOutbound(scope, local, namespaceId, author,
+                new[] { FrozenOperation(221, 222) });
+
+        using (var reopened = new StorageMetadataStore(directory, 453, deleteOnDispose: false))
+        {
+            var relayAttempt = CreateBatch(scope, 1, 2, 1, namespaceId, 223,
+                1, 1, 0, 224, Operation(3, 225, 226, 227));
+            Assert.Throws<InvalidDataException>(() => reopened.AcceptIncomingBatch(relayAttempt));
+            Assert.Equal(1UL, reopened.GetOutboundHighWatermark(scope, local, namespaceId, author));
+            Assert.Equal(0UL, reopened.GetRelayHighWatermark(scope, local, namespaceId, author));
+        }
+
+        Directory.Delete(directory, recursive: true);
+        directory = Path.Combine(_root, "exclusive-relay-reopen");
+        using (var first = new StorageMetadataStore(directory, 454, deleteOnDispose: false))
+        {
+            var relay = CreateBatch("exclusive-relay-reopen", 1, 2, 1, namespaceId, 228,
+                1, 1, 0, 229, Operation(3, 230, 231, 232));
+            Assert.False(first.AcceptIncomingBatch(relay).IsDuplicate);
+        }
+
+        using (var reopened = new StorageMetadataStore(directory, 454, deleteOnDispose: false))
+        {
+            Assert.Throws<InvalidDataException>(() =>
+                reopened.FreezeOutbound("exclusive-relay-reopen", local, namespaceId, author,
+                    new[] { FrozenOperation(233, 234) }));
+            Assert.Equal(1UL, reopened.GetRelayHighWatermark(
+                "exclusive-relay-reopen", local, namespaceId, author));
+            Assert.Equal(0UL, reopened.GetOutboundHighWatermark(
+                "exclusive-relay-reopen", local, namespaceId, author));
+        }
+    }
+
 }
