@@ -6,6 +6,13 @@ using Fld1.Storage.Engine;
 
 namespace BinSync.Storage;
 
+/// <summary>Explicit opt-in switches for the three independent physical-GC domains.</summary>
+/// <remarks>Every switch defaults to false; enabling a switch never bypasses signed proof validation.</remarks>
+public sealed record StorageNamespaceGcFeatureOptions(
+    bool EnableTombstoneGc = false,
+    bool EnableChangeIdGc = false,
+    bool EnableReceiptGc = false);
+
 /// <summary>
 /// Durable signed namespace roster/frontier/checkpoint/installation state.
 /// It shares the Storage transaction gate with StorageMetadataStore but uses
@@ -24,10 +31,14 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     private readonly byte[] _root;
     private readonly byte[] _identityKey;
     private readonly byte[] _identityValue;
+    private readonly StorageNamespaceGcFeatureOptions _featureOptions;
 
-    public StorageNamespaceGcStore(StorageDatabase storage, string scopeId, NodeId localReplica)
+    public StorageNamespaceGcStore(
+        StorageDatabase storage, string scopeId, NodeId localReplica,
+        StorageNamespaceGcFeatureOptions? featureOptions = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _featureOptions = featureOptions ?? new StorageNamespaceGcFeatureOptions();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         _gate = StorageDatabaseTransactionGate.For(storage);
@@ -68,18 +79,14 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         return _identityValue.AsSpan(8 + scopeLength, 16).SequenceEqual(local);
     }
 
-    /// <summary>
-    /// OFR2/NRS2/FRA2/RCP2 now carry the author-issued, retirement and HLC horizon
-    /// proof. Physical tombstone GC remains disabled until provider/Node/WAL/FLD
-    /// live-reference scans are covered by the same application-wide lease and T-pass.
-    /// </summary>
-    public bool IsTombstoneGcProofEnabled => false;
+    /// <summary>Whether the caller may run proof-gated physical tombstone compaction.</summary>
+    public bool IsTombstoneGcProofEnabled => _featureOptions.EnableTombstoneGc;
 
-    /// <summary>ChangeId physical GC remains disabled until exact-head adversarial proof tests pass.</summary>
-    public bool IsChangeIdGcProofEnabled => false;
+    /// <summary>Whether the caller may run proof-gated ChangeId ledger compaction.</summary>
+    public bool IsChangeIdGcProofEnabled => _featureOptions.EnableChangeIdGc;
 
-    /// <summary>Receipt GC remains disabled until retired-epoch and lost-ACK proof tests pass.</summary>
-    public bool IsReceiptGcProofEnabled => false;
+    /// <summary>Whether the caller may run proof-gated receipt compaction.</summary>
+    public bool IsReceiptGcProofEnabled => _featureOptions.EnableReceiptGc;
 
     public NamespaceRosterCertificate AcceptNamespaceRoster(ReadOnlySpan<byte> encoded, TrustStore trustStore)
     {
