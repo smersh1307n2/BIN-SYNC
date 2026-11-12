@@ -629,8 +629,21 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             initiator = null;
             await acceptor.DisposeAsync();
             acceptor = null;
-            await providerB.DisposeAsync();
+            FldDatabaseIpcAsyncDataProvider crashedProviderB = providerB
+                ?? throw new InvalidOperationException("Expected the crashed Host provider to remain attached.");
             providerB = null;
+            try
+            {
+                await crashedProviderB.DisposeAsync();
+            }
+            catch (AggregateException error) when (
+                error.Flatten().InnerExceptions.Count > 0 &&
+                error.Flatten().InnerExceptions.All(inner => inner is IOException))
+            {
+                // The Host process is already dead, so releasing its Outbox lease
+                // over the broken IPC pipe is impossible; the Host's process exit
+                // has already released the partition lease itself.
+            }
             await remoteB.DisposeAsync();
             remoteB = null;
             await StopDatabaseHostAsync(hostB);
