@@ -557,11 +557,23 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 checked((uint)relayInitiator.PeerEpoch), namespaceId,
                 [new MetadataPeerStreamBaseline(authorA, 0, 17)]);
 
-            Task<BatchResult> relayReceive = relayAcceptor.ReceiveBatchAsync(relayNode);
-            Task<int> relaySend = adapterB.RunOutboundRoundAsync([relayInitiator]);
+            using var relayCancellation = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            Task<BatchResult> relayReceive = relayAcceptor.ReceiveBatchAsync(
+                relayNode, relayCancellation.Token);
+            Task<int> relaySend = adapterB.RunOutboundRoundAsync(
+                [relayInitiator], relayCancellation.Token);
             // Observe receive failures immediately instead of waiting for the sender's
-            // transport-ACK timeout; C's WAL-backed APPLY must complete before ACK.
-            await Task.WhenAll(relayReceive, relaySend).WaitAsync(TimeSpan.FromSeconds(60));
+            // transport-ACK timeout; cancel both sides on failure so session cleanup
+            // cannot remain blocked behind an abandoned receive.
+            try
+            {
+                await Task.WhenAll(relayReceive, relaySend);
+            }
+            catch
+            {
+                relayCancellation.Cancel();
+                throw;
+            }
             int relaySent = await relaySend;
             BatchResult relayApplied = await relayReceive;
             Assert.Equal(1, relaySent);
