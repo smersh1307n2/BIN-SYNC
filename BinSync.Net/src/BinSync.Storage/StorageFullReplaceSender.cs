@@ -119,6 +119,51 @@ public static class StorageFullReplaceSender
     }
 
     /// <summary>
+    /// Prepare and durably persist a source snapshot while the coordinator's typed
+    /// FULL_REPLACE commit barrier is held. The barrier excludes host publication,
+    /// remote APPLY, provider commits and Metadata reservations for the target namespace.
+    /// The host lease must cover every application-owned writer that is not represented
+    /// by the coordinator itself.
+    ///
+    /// This establishes source-side snapshot admission only. It does not yet certify a
+    /// per-author outbound/relay/receive baseline vector; callers must not use this
+    /// overload alone as authorization for physical GC.
+    /// </summary>
+    public static PreparedFullReplaceSnapshot PrepareSnapshotAndPersistUnderCommitGuard(
+        IDataProvider provider,
+        TrustStore trustStore,
+        NamespaceRosterCertificate roster,
+        NodeId authorityNodeId,
+        Guid generation,
+        byte[] authoritySeed,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        NodeId localReplica,
+        StorageSyncCoordinator coordinator,
+        Func<IDisposable?> acquireHostCommitLease)
+    {
+        ArgumentNullException.ThrowIfNull(coordinator);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        if (!coordinator.UsesDataProvider(provider))
+            throw new ArgumentException("FULL_REPLACE coordinator must own the exact source provider instance.", nameof(coordinator));
+        if (!coordinator.UsesMetadataPeerStateStore(metadataStore))
+            throw new ArgumentException("FULL_REPLACE coordinator must own the exact durable Metadata Store instance.", nameof(coordinator));
+        if (coordinator.NamespaceId != roster.NamespaceId ||
+            coordinator.LocalReplicaId != localReplica)
+            throw new ArgumentException("FULL_REPLACE coordinator identity does not match the source namespace and replica.");
+
+        using IFullReplaceCommitLease commitLease =
+            coordinator.AcquireFullReplaceCommitGuard(acquireHostCommitLease);
+        if (commitLease.NamespaceId != roster.NamespaceId ||
+            commitLease.LocalReplica != localReplica)
+            throw new InvalidOperationException("Acquired FULL_REPLACE lease is bound to a different namespace or local replica.");
+
+        return PrepareSnapshotAndPersist(
+            provider, trustStore, roster, authorityNodeId, generation, authoritySeed,
+            metadataStore, scopeId, localReplica);
+    }
+
+    /// <summary>
     /// Restores a persisted provider generation after process restart and revalidates
     /// its signed manifest against the currently accepted roster and authority.
     /// </summary>
