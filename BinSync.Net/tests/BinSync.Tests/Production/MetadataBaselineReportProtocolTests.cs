@@ -211,6 +211,36 @@ public sealed class MetadataBaselineReportProtocolTests
         Assert.Throws<InvalidDataException>(() => MetadataBaselineReportProtocol.DecodeAndVerify(
             encoded, roster, generation, digest));
 
+        var receive = Assert.Single(report.ReceiveEntries);
+        var wrongReceiveEpoch = new MetadataBaselineReport
+        {
+            NamespaceId = report.NamespaceId,
+            RosterGeneration = report.RosterGeneration,
+            RosterDigest = report.RosterDigest,
+            FullReplaceGeneration = report.FullReplaceGeneration,
+            SnapshotDigest = report.SnapshotDigest,
+            SnapshotEntryCount = report.SnapshotEntryCount,
+            ProviderChangeFeedWatermark = report.ProviderChangeFeedWatermark,
+            HlcWallFloor = report.HlcWallFloor,
+            HlcLogicalFloor = report.HlcLogicalFloor,
+            MemberNodeId = report.MemberNodeId,
+            MemberTransportEpoch = report.MemberTransportEpoch,
+            ReportSequence = report.ReportSequence,
+            FeedEntries = report.FeedEntries,
+            ReceiveEntries = new[] { new MetadataBaselineReceiveEntry
+            {
+                SenderPeer = receive.SenderPeer,
+                SenderTransportEpoch = receive.SenderTransportEpoch + 1,
+                AuthorStream = receive.AuthorStream,
+                IssuerEpoch = receive.IssuerEpoch,
+                ReceiveCursor = receive.ReceiveCursor,
+                LastBatchDigest = receive.LastBatchDigest
+            }}
+        };
+        byte[] wrongReceiveEncoded = MetadataBaselineReportProtocol.Sign(wrongReceiveEpoch, keys[0].Seed);
+        Assert.Throws<InvalidDataException>(() => MetadataBaselineReportProtocol.DecodeAndVerify(
+            wrongReceiveEncoded, roster, generation, digest));
+
         var nonzeroEmptyDigest = new MetadataBaselineReport
         {
             NamespaceId = report.NamespaceId,
