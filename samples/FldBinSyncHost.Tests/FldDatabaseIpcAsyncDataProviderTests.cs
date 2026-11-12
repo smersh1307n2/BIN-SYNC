@@ -230,7 +230,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         string hostRootB = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-b-" + Guid.NewGuid().ToString("N"));
         string nodeRootA = Path.Combine(Path.GetTempPath(), "binsync-two-host-gc-node-a-" + Guid.NewGuid().ToString("N"));
         string nodeRootB = Path.Combine(Path.GetTempPath(), "binsync-two-host-gc-node-b-" + Guid.NewGuid().ToString("N"));
-        string nodeRootC = Path.Combine(Path.GetTempPath(), "binsync-two-host-gc-node-c-" + Guid.NewGuid().ToString("N"));
         const ushort namespaceId = 0x539;
         const uint nodeStorageNamespace = 703;
         const string scope = "two-host-signed-tombstone-gc";
@@ -247,7 +246,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         StorageMetadataStore? metadataB = null;
         Wal? walA = null;
         Wal? walB = null;
-        Wal? walC = null;
         Node? nodeA = null;
         Node? nodeB = null;
         FldDatabaseIpcAsyncDataProvider? providerA = null;
@@ -544,8 +542,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 .WithNodeId(relayMember)
                 .WithEpoch(19)
                 .Build();
-            walC = Wal.Open(Path.Combine(nodeRootC, "node.wal"));
-            relayNode.AttachWal(walC);
             var (toBRelay, toCRelay) = PipeTransport.CreatePair();
             Task<SyncSession> relayAcceptTask = SyncSession.AcceptAsync(relayNode, toCRelay);
             Task<SyncSession> relayConnectTask = SyncSession.ConnectAsync(nodeB, toBRelay);
@@ -594,10 +590,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // Its local relay-consumer ACK is independent from C's transport ACK.
             metadataB.AcknowledgeRelay(scope, nodeB.NodeId, namespaceId, authorA, 1);
 
-            // C has now applied the tombstone through a WAL-backed SyncSession receive
+            // C has now received and applied the tombstone through a real SyncSession
             // before signing its OFR2 report. The accepted roster has three Active
             // members; the checkpoint minimum cannot advance until C's signed frontier
-            // is present.
+            // is present. This is frontier-protocol coverage, not a third FLD Host test.
             InstallSignedProof(gcA);
             InstallSignedProof(gcB);
             Assert.True(gcA.HasProtocolTombstoneGcProof(
@@ -662,7 +658,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await providerB.DisposeAsync(); providerB = null;
             nodeA.Dispose(); nodeA = null;
             nodeB.Dispose(); nodeB = null;
-            walC.Dispose(); walC = null;
             walA.Dispose(); walA = null;
             walB.Dispose(); walB = null;
             metadataA.Dispose(); metadataA = null;
@@ -686,7 +681,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (relayInitiator is not null) await relayInitiator.DisposeAsync();
             if (relayAcceptor is not null) await relayAcceptor.DisposeAsync();
             relayNode?.Dispose();
-            walC?.Dispose();
             if (initiator is not null) await initiator.DisposeAsync();
             if (acceptor is not null) await acceptor.DisposeAsync();
             if (remoteA is not null) await remoteA.DisposeAsync();
@@ -709,7 +703,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             try { Directory.Delete(hostRootB, recursive: true); } catch { }
             try { Directory.Delete(nodeRootA, recursive: true); } catch { }
             try { Directory.Delete(nodeRootB, recursive: true); } catch { }
-            try { Directory.Delete(nodeRootC, recursive: true); } catch { }
         }
     }
 
