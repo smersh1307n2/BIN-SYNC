@@ -11,12 +11,22 @@ namespace BinSync.FldHost;
 /// runtimes: FLD remains protocol-neutral and the two FLD runtime assemblies stay
 /// Fld1.Storage.dll + Fld1.Database.dll.
 /// </summary>
+public sealed record FldBinSyncGcPassResult(
+    int ChangeIdsReclaimed,
+    int ReceiptsReclaimed,
+    int TombstonesReclaimed,
+    bool ChangeIdGcEnabled,
+    bool ReceiptGcEnabled,
+    bool TombstoneGcEnabled);
+
 public sealed class FldBinSyncHostAdapter
 {
     private const int RelayBatchPageLimit = 256;
     private const int MaximumSourceChangesPerPage = 4096;
 
     private readonly FldDatabase _database;
+    private readonly FldDatabaseDataProvider _dataProvider;
+    private readonly StorageMetadataStore _metadataStore;
     private readonly StorageSyncCoordinator _coordinator;
     private readonly StorageRelayProvenanceMap _map;
     private readonly StorageRelayPublicationGate _publicationGate;
@@ -32,8 +42,8 @@ public sealed class FldBinSyncHostAdapter
         FldRemoteBatchApplyStore remoteBatchApplyStore)
     {
         _database = database ?? throw new ArgumentNullException(nameof(database));
-        ArgumentNullException.ThrowIfNull(dataProvider);
-        ArgumentNullException.ThrowIfNull(metadataStore);
+        _dataProvider = dataProvider ?? throw new ArgumentNullException(nameof(dataProvider));
+        _metadataStore = metadataStore ?? throw new ArgumentNullException(nameof(metadataStore));
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _map = map ?? throw new ArgumentNullException(nameof(map));
         ArgumentNullException.ThrowIfNull(remoteBatchApplyStore);
@@ -133,6 +143,44 @@ public sealed class FldBinSyncHostAdapter
                 candidate.OriginSequence, candidate.HlcWall, candidate.HlcLogical,
                 generation, digest);
         }, limit);
+    }
+
+    /// <summary>
+    /// Run the three independent, bounded physical-GC domains through the exact
+    /// database/Metadata/coordinator composition. Every domain remains fail-closed
+    /// behind its own namespace-GC enablement flag.
+    /// </summary>
+    public FldBinSyncGcPassResult RunGcMaintenance(
+        StorageNamespaceGcStore gcStore, TrustStore trustStore, int limit = 256)
+    {
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
+        if (limit <= 0 || limit > 4096)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        if (!_coordinator.UsesNamespaceGcStore(gcStore) ||
+            !_coordinator.UsesNamespaceGcTrustStore(trustStore))
+            throw new InvalidOperationException(
+                "GC maintenance requires the exact namespace-GC store and TrustStore attached to this coordinator.");
+
+        NodeId localReplica = NodeId.From(_database.LocalAuthor);
+        int namespaceId = _coordinator.NamespaceId;
+        IApplicationGcReferenceScanner scanner = CreateReferenceScanner();
+        Func<IDisposable?> acquireMetadataGcLease =
+            () => _coordinator.AcquireApplicationCommitGuard(_database.AcquireCommitGuard);
+
+        int changeIds = _metadataStore.CompactChangeLedger(
+            _scopeId, localReplica, namespaceId, _dataProvider, limit,
+            acquireMetadataGcLease, scanner);
+        int receipts = _metadataStore.CompactReceipts(
+            _scopeId, localReplica, namespaceId, limit,
+            acquireMetadataGcLease, scanner);
+        int tombstones = CompactTombstones(gcStore, trustStore, limit);
+
+        return new FldBinSyncGcPassResult(
+            changeIds, receipts, tombstones,
+            gcStore.IsChangeIdGcProofEnabled,
+            gcStore.IsReceiptGcProofEnabled,
+            gcStore.IsTombstoneGcProofEnabled);
     }
 
     /// <summary>
