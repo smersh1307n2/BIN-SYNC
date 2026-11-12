@@ -2822,6 +2822,11 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new InvalidDataException("FULL_REPLACE baseline roster is not the current accepted namespace roster.");
             if (!gcStore.AreAllActiveMembersInstalled(acceptedRoster, generation, snapshotDigest))
                 throw new InvalidOperationException("FULL_REPLACE baseline requires an installed FRA2 ACK from every Active roster member.");
+            if (!gcStore.TryReadRetentionCheckpoint(acceptedRoster, trustStore,
+                    out NamespaceRetentionCheckpoint? retentionCheckpoint) || retentionCheckpoint is null ||
+                retentionCheckpoint.FullReplaceGeneration != generation ||
+                !retentionCheckpoint.FullReplaceDigest.AsSpan().SequenceEqual(snapshotDigest))
+                throw new InvalidOperationException("FULL_REPLACE baseline requires the current signed RCP2 checkpoint bound to the exact generation and snapshot digest.");
 
             IReadOnlyList<MetadataBaselineReport> reports =
                 gcStore.ReadMetadataBaselineReports(acceptedRoster, generation, snapshotDigest);
@@ -2846,6 +2851,10 @@ private static bool ValidateIncomingBatchForStaging(
                 snapshotEntryCount ??= report.SnapshotEntryCount;
                 if (snapshotEntryCount.Value != report.SnapshotEntryCount)
                     throw new InvalidDataException("Active members disagree on the installed FULL_REPLACE snapshot entry count.");
+                if (retentionCheckpoint!.FullReplaceHlcWallFloor < report.HlcWallFloor ||
+                    (retentionCheckpoint.FullReplaceHlcWallFloor == report.HlcWallFloor &&
+                     retentionCheckpoint.FullReplaceHlcLogicalFloor < report.HlcLogicalFloor))
+                    throw new InvalidDataException("RCP2 FULL_REPLACE HLC floor is behind a member's installed snapshot floor.");
             }
             foreach (NamespaceRosterMember member in activeMembers)
                 if (!reportsByMember.ContainsKey(member.NodeId))
