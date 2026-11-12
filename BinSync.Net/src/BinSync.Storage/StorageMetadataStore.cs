@@ -10,7 +10,7 @@ namespace BinSync.Storage;
 /// Durable BIN-SYNC Metadata Store backed by Fld1.Storage.
 /// Each logical metadata entry is stored under its own key; transactions persist only diffs.
 /// </summary>
-public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataProviderReceiptStreamStore, IMetadataChangeIdentityStore, IMetadataLegacyNodeLedgerStore, IMetadataFullReplaceCommitGuard
+public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataProviderReceiptStreamStore, IMetadataChangeIdentityStore, IMetadataLegacyNodeLedgerStore, IMetadataFullReplaceCommitGuard, IMetadataBaselineCommitStore
 {
     private readonly object _gate;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
@@ -2786,6 +2786,449 @@ private static bool ValidateIncomingBatchForStaging(
         }
     }
 
+
+    /// <summary>
+    /// Atomically installs the two-sided MBR1 send/receive baseline for this local
+    /// replica. The exact accepted roster, all active-member FRA2 ACKs and all
+    /// member-signed reports are revalidated while the shared Storage transaction
+    /// gate is held. Payload rows are deliberately not compacted here.
+    /// </summary>
+    public bool ApplyFullReplaceBaseline(
+        string scopeId, NodeId localReplica,
+        NamespaceRosterCertificate acceptedRoster, Guid generation,
+        ReadOnlySpan<byte> snapshotDigest)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        if (generation == Guid.Empty || snapshotDigest.Length != MetadataBaselineReportProtocol.DigestSize)
+            throw new ArgumentException("A FULL_REPLACE generation and 32-byte snapshot digest are required.");
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the durable namespace-GC store before applying a FULL_REPLACE baseline.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.IsBoundTo(_storage, scopeId, localReplica))
+                throw new InvalidOperationException("Namespace-GC store is not bound to this exact Metadata scope and local replica.");
+            if (!gcStore.TryReadNamespaceRoster(acceptedRoster.NamespaceId, trustStore,
+                    out NamespaceRosterCertificate? currentRoster) || currentRoster is null ||
+                currentRoster.RosterGeneration != acceptedRoster.RosterGeneration ||
+                !NamespaceRosterProtocol.ComputeDigest(currentRoster).AsSpan()
+                    .SequenceEqual(NamespaceRosterProtocol.ComputeDigest(acceptedRoster)))
+                throw new InvalidDataException("FULL_REPLACE baseline roster is not the current accepted namespace roster.");
+            if (!gcStore.AreAllActiveMembersInstalled(acceptedRoster, generation, snapshotDigest))
+                throw new InvalidOperationException("FULL_REPLACE baseline requires an installed FRA2 ACK from every Active roster member.");
+
+            IReadOnlyList<MetadataBaselineReport> reports =
+                gcStore.ReadMetadataBaselineReports(acceptedRoster, generation, snapshotDigest);
+            NamespaceRosterMember[] activeMembers = acceptedRoster.Members
+                .Where(member => member.Status == NamespaceMemberStatus.Active)
+                .OrderBy(member => Convert.ToHexString(member.NodeId.ToArray()), StringComparer.Ordinal)
+                .ToArray();
+            if (reports.Count != activeMembers.Length)
+                throw new InvalidOperationException("FULL_REPLACE baseline requires one accepted MBR1 report from every Active roster member.");
+
+            var reportsByMember = new Dictionary<NodeId, MetadataBaselineReport>();
+            int? snapshotEntryCount = null;
+            foreach (MetadataBaselineReport report in reports)
+            {
+                if (report.NamespaceId != acceptedRoster.NamespaceId ||
+                    report.RosterGeneration != acceptedRoster.RosterGeneration ||
+                    report.FullReplaceGeneration != generation ||
+                    !report.SnapshotDigest.AsSpan().SequenceEqual(snapshotDigest) ||
+                    !report.RosterDigest.AsSpan().SequenceEqual(NamespaceRosterProtocol.ComputeDigest(acceptedRoster)) ||
+                    !reportsByMember.TryAdd(report.MemberNodeId, report))
+                    throw new InvalidDataException("FULL_REPLACE baseline report set contains a duplicate or mismatched member envelope.");
+                snapshotEntryCount ??= report.SnapshotEntryCount;
+                if (snapshotEntryCount.Value != report.SnapshotEntryCount)
+                    throw new InvalidDataException("Active members disagree on the installed FULL_REPLACE snapshot entry count.");
+            }
+            foreach (NamespaceRosterMember member in activeMembers)
+                if (!reportsByMember.ContainsKey(member.NodeId))
+                    throw new InvalidOperationException("An Active roster member has not supplied its signed MBR1 report.");
+
+            NamespaceRosterMember localMember = activeMembers.FirstOrDefault(member => member.NodeId == localReplica)
+                ?? throw new InvalidOperationException("The local Metadata replica is not an Active member of the accepted roster.");
+            MetadataBaselineReport localReport = reportsByMember[localReplica];
+            if (localReport.MemberTransportEpoch != localMember.TransportPeerEpoch)
+                throw new InvalidDataException("Local MBR1 report transport epoch does not match the accepted roster.");
+
+            byte[] evidenceDigest = ComputeBaselineEvidenceDigest(reports);
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            PartitionState current = GetOrCreatePartition(partitionKey);
+            byte[] markerKey = EncodeBaselineApplyMarkerKey(
+                partitionKey, acceptedRoster.NamespaceId, acceptedRoster.RosterGeneration, generation);
+            byte[] markerValue = EncodeBaselineApplyMarker(
+                acceptedRoster, generation, snapshotDigest, evidenceDigest,
+                reports.Count, snapshotEntryCount ?? 0);
+            if (current.PersistedEntries.TryGetValue(Convert.ToHexString(markerKey), out var priorMarker))
+            {
+                if (priorMarker.Value.AsSpan().SequenceEqual(markerValue))
+                    return false;
+                throw new InvalidDataException("FULL_REPLACE generation was already applied with different MBR1 evidence.");
+            }
+
+            int pendingApplies = current.PendingApplies.Values.Count(
+                pending => pending.Batch.NamespaceId == acceptedRoster.NamespaceId);
+            if (pendingApplies != 0)
+                throw new InvalidOperationException($"FULL_REPLACE baseline is blocked by {pendingApplies} unresolved PendingApply intent(s).");
+            int pendingReservations = current.PeerStreams.Count(pair =>
+                pair.Key.NamespaceId == acceptedRoster.NamespaceId &&
+                (pair.Value.PendingBatch is not null || pair.Value.PushedCursor != pair.Value.AckedCursor));
+            if (pendingReservations != 0)
+                throw new InvalidOperationException($"FULL_REPLACE baseline is blocked by {pendingReservations} immutable peer reservation(s).");
+
+            int namespaceId = acceptedRoster.NamespaceId;
+            var activePeerEpochs = activeMembers
+                .Where(member => member.NodeId != localReplica)
+                .ToDictionary(member => member.NodeId, member => member.TransportPeerEpoch);
+
+            foreach (var activePeer in activePeerEpochs)
+            {
+                if (current.RetiredPeerEpochs.TryGetValue((namespaceId, activePeer.Key), out uint retiredThrough) &&
+                    activePeer.Value <= retiredThrough)
+                    throw new InvalidDataException("An Active peer transport epoch is already covered by a local retirement fence.");
+                foreach (InterestedPeerKey existingPeer in current.InterestedPeers.Where(key =>
+                             key.NamespaceId == namespaceId && key.Peer == activePeer.Key))
+                {
+                    if (existingPeer.PeerEpoch == activePeer.Value)
+                        continue;
+                    if (existingPeer.PeerEpoch > activePeer.Value ||
+                        !current.RetiredPeerEpochs.TryGetValue((namespaceId, activePeer.Key), out uint fence) ||
+                        existingPeer.PeerEpoch > fence)
+                        throw new InvalidDataException("Local interested-peer epoch state is not fenced by the accepted roster.");
+                }
+            }
+
+            var feedByKey = localReport.FeedEntries.ToDictionary(
+                entry => (entry.TargetPeer, entry.TargetTransportEpoch, entry.AuthorStream));
+            var outboundAuthors = current.OutboundHighWatermarks.Keys
+                .Where(key => key.NamespaceId == namespaceId)
+                .ToDictionary(key => key.Author, _ => MetadataBaselineFeedKind.Outbound);
+            var relayAuthors = current.RelayHighWatermarks.Keys
+                .Where(key => key.NamespaceId == namespaceId)
+                .ToArray();
+            foreach (var relay in relayAuthors)
+            {
+                if (!outboundAuthors.TryAdd(relay.Author, MetadataBaselineFeedKind.Relay))
+                    throw new InvalidDataException("One author stream is present in both local outbound and relay feed domains.");
+            }
+
+            foreach (var activePeer in activePeerEpochs)
+            {
+                foreach (NodeId author in outboundAuthors.Keys)
+                {
+                    if (author != activePeer.Key &&
+                        !feedByKey.ContainsKey((activePeer.Key, activePeer.Value, author)))
+                        throw new InvalidDataException("MBR1 feed vector omits a required outbound/relay stream for an Active peer.");
+                }
+                foreach (PeerStreamKey required in current.RequiredPeerStreams.Where(key =>
+                             key.NamespaceId == namespaceId && key.Peer == activePeer.Key &&
+                             key.PeerEpoch == activePeer.Value))
+                    if (!feedByKey.ContainsKey((required.Peer, required.PeerEpoch, required.AuthorStream)))
+                        throw new InvalidDataException("MBR1 feed vector omits a durably required peer stream.");
+                foreach (PeerStreamKey existing in current.PeerStreams.Keys.Where(key =>
+                             key.NamespaceId == namespaceId && key.Peer == activePeer.Key &&
+                             key.PeerEpoch == activePeer.Value))
+                    if (!feedByKey.ContainsKey((existing.Peer, existing.PeerEpoch, existing.AuthorStream)))
+                        throw new InvalidDataException("MBR1 feed vector omits an existing Active peer stream.");
+            }
+
+            var writes = new List<(byte[] Key, byte[] Value)>();
+            var deletes = new List<byte[]>();
+            var peerUpdates = new List<(PeerStreamKey Key, PeerStreamStateValue Value)>();
+            var requiredAdds = new HashSet<PeerStreamKey>();
+            var interestedAdds = new HashSet<InterestedPeerKey>();
+            var completedAdds = new HashSet<InterestedPeerKey>();
+
+            foreach (var activePeer in activePeerEpochs)
+            {
+                var interestedKey = new InterestedPeerKey(namespaceId, activePeer.Key, activePeer.Value);
+                if (!current.InterestedPeers.Contains(interestedKey))
+                {
+                    interestedAdds.Add(interestedKey);
+                    writes.Add((EncodeInterestedPeerKey(partitionKey, interestedKey), Array.Empty<byte>()));
+                }
+                if (!current.CompletedPeerBaselines.Contains(interestedKey))
+                {
+                    completedAdds.Add(interestedKey);
+                    writes.Add((EncodeCompletedPeerBaselineKey(partitionKey, interestedKey), Array.Empty<byte>()));
+                }
+            }
+
+            foreach (MetadataBaselineFeedEntry feed in localReport.FeedEntries)
+            {
+                if (!activePeerEpochs.TryGetValue(feed.TargetPeer, out uint targetEpoch) ||
+                    targetEpoch != feed.TargetTransportEpoch)
+                    throw new InvalidDataException("MBR1 feed row targets a peer outside the exact Active roster epoch.");
+                if (!outboundAuthors.TryGetValue(feed.AuthorStream, out MetadataBaselineFeedKind sourceKind) ||
+                    sourceKind != feed.FeedKind)
+                    throw new InvalidDataException("MBR1 feed kind does not match the local author's durable outbound/relay domain.");
+
+                ulong highWatermark = feed.FeedKind == MetadataBaselineFeedKind.Outbound
+                    ? current.OutboundHighWatermarks[new OutboundKey(namespaceId, feed.AuthorStream)]
+                    : current.RelayHighWatermarks[new RelayKey(namespaceId, feed.AuthorStream)];
+                if (feed.AbsoluteFeedOffset > highWatermark)
+                    throw new InvalidDataException("MBR1 snapshot feed offset exceeds the local durable feed high-watermark.");
+                if (feed.FeedKind == MetadataBaselineFeedKind.Relay && feed.AbsoluteFeedOffset != 0)
+                    throw new InvalidDataException("FULL_REPLACE cannot skip relay history; relay baseline offset must remain zero.");
+
+                MetadataBaselineReport targetReport = reportsByMember[feed.TargetPeer];
+                MetadataBaselineReceiveEntry? targetReceive = targetReport.ReceiveEntries.FirstOrDefault(entry =>
+                    entry.SenderPeer == localReplica &&
+                    entry.SenderTransportEpoch == localMember.TransportPeerEpoch &&
+                    entry.AuthorStream == feed.AuthorStream &&
+                    entry.IssuerEpoch == feed.IssuerEpoch);
+                ulong receiverCursor = targetReceive?.ReceiveCursor ?? 0;
+                byte[] receiverDigest = targetReceive?.LastBatchDigest ?? new byte[16];
+                if (!receiverDigest.AsSpan().SequenceEqual(feed.DigestAnchor))
+                    throw new InvalidDataException("Source feed digest does not match the target member's signed receive digest chain.");
+                ulong absolutePeerCursor = checked(feed.AbsoluteFeedOffset + receiverCursor);
+                if (absolutePeerCursor > highWatermark)
+                    throw new InvalidDataException("Paired send/receive baseline exceeds the local durable feed high-watermark.");
+
+                var streamKey = new PeerStreamKey(
+                    feed.TargetPeer, feed.TargetTransportEpoch, namespaceId, feed.AuthorStream);
+                if (current.PeerStreams.TryGetValue(streamKey, out PeerStreamStateValue? existing))
+                {
+                    if (existing.PendingBatch is not null || existing.PushedCursor != existing.AckedCursor)
+                        throw new InvalidOperationException("An immutable outbound reservation blocks baseline application.");
+                    bool hasProgress = existing.AckedCursor != 0 || existing.PushedCursor != 0 ||
+                        existing.StreamOffset != 0 || existing.LastBatchDigest.Any(value => value != 0);
+                    if (hasProgress)
+                    {
+                        if (existing.IssuerEpoch != feed.IssuerEpoch)
+                            throw new InvalidDataException("Existing peer stream issuer epoch is incomparable with the signed baseline.");
+                        ulong existingAbsolute = checked(existing.StreamOffset + existing.AckedCursor);
+                        if (existingAbsolute > absolutePeerCursor ||
+                            (existingAbsolute == absolutePeerCursor &&
+                             !existing.LastBatchDigest.AsSpan().SequenceEqual(feed.DigestAnchor)))
+                            throw new InvalidDataException("Signed baseline would regress or fork an already advanced peer stream.");
+                    }
+                }
+
+                var value = new PeerStreamStateValue(
+                    receiverCursor, receiverCursor, feed.AbsoluteFeedOffset,
+                    feed.IssuerEpoch, feed.DigestAnchor.ToArray(), null);
+                peerUpdates.Add((streamKey, value));
+                writes.Add((EncodePeerStreamKey(partitionKey, streamKey), EncodePeerStreamState(value)));
+                if (!current.RequiredPeerStreams.Contains(streamKey))
+                {
+                    requiredAdds.Add(streamKey);
+                    writes.Add((EncodeRequiredPeerStreamKey(partitionKey, streamKey), Array.Empty<byte>()));
+                }
+            }
+
+            var reportReceiveKeys = new HashSet<(NodeId Sender, uint IssuerEpoch, NodeId Author)>();
+            foreach (MetadataBaselineReceiveEntry entry in localReport.ReceiveEntries)
+                reportReceiveKeys.Add((entry.SenderPeer, entry.IssuerEpoch, entry.AuthorStream));
+
+            foreach (var existing in current.Receives.Keys.Where(key => key.NamespaceId == namespaceId))
+                if (!reportReceiveKeys.Contains((existing.Sender, existing.Epoch, existing.AuthorStream)))
+                    throw new InvalidDataException("MBR1 receive vector omits an existing per-author receive cursor.");
+            foreach (var existing in current.ReceiveChains.Keys.Where(key => key.NamespaceId == namespaceId))
+                if (!reportReceiveKeys.Contains((existing.Sender, existing.Epoch, existing.AuthorStream)))
+                    throw new InvalidDataException("MBR1 receive vector omits an existing per-author digest chain.");
+
+            foreach (var legacy in current.LegacyReceiveChains.Keys.Where(key => key.NamespaceId == namespaceId))
+            {
+                NodeId[] established = current.Receives
+                    .Where(pair => pair.Key.Sender == legacy.Sender &&
+                        pair.Key.Epoch == legacy.Epoch && pair.Key.NamespaceId == namespaceId &&
+                        pair.Value.CursorEnd != 0)
+                    .Select(pair => pair.Key.AuthorStream).Distinct().ToArray();
+                if (established.Length != 1 ||
+                    !reportReceiveKeys.Contains((legacy.Sender, legacy.Epoch, established[0])) ||
+                    current.ReceiveChains.ContainsKey(new ReceiveChainKey(
+                        legacy.Sender, legacy.Epoch, namespaceId, established[0])))
+                    throw new InvalidDataException("Ambiguous legacy sender-wide receive digest chain blocks FULL_REPLACE baseline.");
+            }
+
+            var receiveUpdates = new List<(ReceiveKey Key, ReceiveState Value, ReceiveChainKey ChainKey, ReceiveChainState ChainValue)>();
+            var legacyDeletes = new HashSet<LegacyReceiveChainKey>();
+            foreach (MetadataBaselineReceiveEntry entry in localReport.ReceiveEntries)
+            {
+                var receiveKey = new ReceiveKey(entry.SenderPeer, entry.IssuerEpoch, namespaceId, entry.AuthorStream);
+                var chainKey = new ReceiveChainKey(entry.SenderPeer, entry.IssuerEpoch, namespaceId, entry.AuthorStream);
+                bool hasCurrent = current.Receives.TryGetValue(receiveKey, out ReceiveState currentReceive);
+                ulong currentCursor = hasCurrent ? currentReceive.CursorEnd : 0;
+                byte[] currentDigest = new byte[16];
+                if (current.ReceiveChains.TryGetValue(chainKey, out ReceiveChainState? currentChain))
+                    currentDigest = currentChain.LastBatchDigest.ToArray();
+                else if (current.LegacyReceiveChains.TryGetValue(
+                             new LegacyReceiveChainKey(entry.SenderPeer, entry.IssuerEpoch, namespaceId),
+                             out ReceiveChainState? legacyChain))
+                    currentDigest = legacyChain.LastBatchDigest.ToArray();
+                else if (currentCursor != 0)
+                    throw new InvalidDataException("Existing receive cursor has no unambiguous per-author digest chain.");
+
+                if (current.ReceiveChains.ContainsKey(chainKey) &&
+                    current.LegacyReceiveChains.ContainsKey(
+                        new LegacyReceiveChainKey(entry.SenderPeer, entry.IssuerEpoch, namespaceId)))
+                    throw new InvalidDataException("Legacy and per-author receive digest rows coexist.");
+
+                NamespaceRosterMember senderMember = acceptedRoster.Members.First(member => member.NodeId == entry.SenderPeer);
+                MetadataBaselineFeedEntry? senderFeed = null;
+                if (senderMember.Status == NamespaceMemberStatus.Active)
+                {
+                    MetadataBaselineReport senderReport = reportsByMember[entry.SenderPeer];
+                    senderFeed = senderReport.FeedEntries.FirstOrDefault(feed =>
+                        feed.TargetPeer == localReplica &&
+                        feed.TargetTransportEpoch == localMember.TransportPeerEpoch &&
+                        feed.AuthorStream == entry.AuthorStream &&
+                        feed.IssuerEpoch == entry.IssuerEpoch);
+                    if (senderFeed is null)
+                    {
+                        MetadataBaselineFeedEntry? newerEpoch = senderReport.FeedEntries.FirstOrDefault(feed =>
+                            feed.TargetPeer == localReplica &&
+                            feed.TargetTransportEpoch == localMember.TransportPeerEpoch &&
+                            feed.AuthorStream == entry.AuthorStream &&
+                            feed.IssuerEpoch > entry.IssuerEpoch);
+                        if (newerEpoch is null && (entry.ReceiveCursor != 0 || currentCursor != 0))
+                            throw new InvalidDataException("Active sender receive stream has no matching signed source feed.");
+                    }
+                    else if (!senderFeed.DigestAnchor.AsSpan().SequenceEqual(entry.LastBatchDigest) &&
+                             currentCursor <= entry.ReceiveCursor)
+                        throw new InvalidDataException("Receiver digest does not match the active sender's signed feed digest.");
+                }
+
+                ulong selectedCursor;
+                byte[] selectedDigest;
+                if (currentCursor > entry.ReceiveCursor)
+                {
+                    if (senderMember.Status == NamespaceMemberStatus.Active &&
+                        (senderFeed is null || !senderFeed.DigestAnchor.AsSpan().SequenceEqual(currentDigest)))
+                        throw new InvalidDataException("A locally advanced receive stream is not confirmed by the sender's signed feed digest.");
+                    selectedCursor = currentCursor;
+                    selectedDigest = currentDigest;
+                }
+                else
+                {
+                    if (currentCursor == entry.ReceiveCursor &&
+                        !currentDigest.AsSpan().SequenceEqual(entry.LastBatchDigest))
+                        throw new InvalidDataException("Equal receive cursors have conflicting digest anchors.");
+                    selectedCursor = entry.ReceiveCursor;
+                    selectedDigest = entry.LastBatchDigest.ToArray();
+                }
+
+                var legacyKey = new LegacyReceiveChainKey(entry.SenderPeer, entry.IssuerEpoch, namespaceId);
+                if (current.LegacyReceiveChains.ContainsKey(legacyKey))
+                {
+                    legacyDeletes.Add(legacyKey);
+                    deletes.Add(EncodeLegacyReceiveChainKey(partitionKey, legacyKey));
+                }
+
+                byte[] receiveSuffix = new byte[38];
+                entry.SenderPeer.WriteTo(receiveSuffix);
+                BinaryPrimitives.WriteUInt32LittleEndian(receiveSuffix.AsSpan(16), entry.IssuerEpoch);
+                BinaryPrimitives.WriteUInt16LittleEndian(receiveSuffix.AsSpan(20), checked((ushort)namespaceId));
+                entry.AuthorStream.WriteTo(receiveSuffix.AsSpan(22));
+                writes.Add((StorageKey(PartitionRoot(partitionKey), 2, receiveSuffix), EncodeUInt64(selectedCursor)));
+                writes.Add((EncodeReceiveChainKey(partitionKey, chainKey), selectedDigest));
+                receiveUpdates.Add((receiveKey, new ReceiveState(selectedCursor),
+                    chainKey, new ReceiveChainState(selectedDigest)));
+            }
+
+            foreach (NamespaceRosterMember retired in acceptedRoster.Members.Where(member =>
+                         member.Status == NamespaceMemberStatus.Retired && member.RetiredThroughEpoch != 0))
+            {
+                if (!current.RetiredPeerEpochs.TryGetValue((namespaceId, retired.NodeId), out uint priorFence) ||
+                    priorFence < retired.RetiredThroughEpoch)
+                {
+                    byte[] suffix = new byte[18];
+                    BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+                    retired.NodeId.WriteTo(suffix.AsSpan(2));
+                    byte[] value = new byte[4];
+                    BinaryPrimitives.WriteUInt32LittleEndian(value, retired.RetiredThroughEpoch);
+                    writes.Add((StorageKey(PartitionRoot(partitionKey), 18, suffix), value));
+                }
+            }
+
+            writes.Add((markerKey, markerValue));
+            CommitPeerMetadataDelta(partitionKey, current, writes, deletes, () =>
+            {
+                foreach (var update in peerUpdates)
+                    current.PeerStreams[update.Key] = update.Value;
+                foreach (PeerStreamKey key in requiredAdds)
+                    current.RequiredPeerStreams.Add(key);
+                foreach (InterestedPeerKey key in interestedAdds)
+                    current.InterestedPeers.Add(key);
+                foreach (InterestedPeerKey key in completedAdds)
+                    current.CompletedPeerBaselines.Add(key);
+                foreach (var update in receiveUpdates)
+                {
+                    current.Receives[update.Key] = update.Value;
+                    current.ReceiveChains[update.ChainKey] = update.ChainValue;
+                }
+                foreach (LegacyReceiveChainKey key in legacyDeletes)
+                    current.LegacyReceiveChains.Remove(key);
+                foreach (NamespaceRosterMember retired in acceptedRoster.Members.Where(member =>
+                             member.Status == NamespaceMemberStatus.Retired && member.RetiredThroughEpoch != 0))
+                {
+                    if (!current.RetiredPeerEpochs.TryGetValue((namespaceId, retired.NodeId), out uint priorFence) ||
+                        priorFence < retired.RetiredThroughEpoch)
+                        current.RetiredPeerEpochs[(namespaceId, retired.NodeId)] = retired.RetiredThroughEpoch;
+                }
+            });
+            return true;
+        }
+    }
+
+    private static byte[] ComputeBaselineEvidenceDigest(IReadOnlyList<MetadataBaselineReport> reports)
+    {
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(Encoding.UTF8.GetBytes("BIN-SYNC/METADATA-FULL-REPLACE-BASELINE-SET/v1"));
+        Span<byte> length = stackalloc byte[4];
+        foreach (MetadataBaselineReport report in reports.OrderBy(
+                     item => Convert.ToHexString(item.MemberNodeId.ToArray()), StringComparer.Ordinal))
+        {
+            byte[] envelope = MetadataBaselineReportProtocol.EncodeEnvelope(report);
+            BinaryPrimitives.WriteInt32LittleEndian(length, envelope.Length);
+            hash.AppendData(length);
+            hash.AppendData(envelope);
+        }
+        return hash.GetHashAndReset();
+    }
+
+    private static byte[] EncodeBaselineApplyMarkerKey(
+        PartitionKey partitionKey, int namespaceId, ulong rosterGeneration, Guid generation)
+    {
+        byte[] suffix = new byte[26];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+        BinaryPrimitives.WriteUInt64LittleEndian(suffix.AsSpan(2), rosterGeneration);
+        generation.TryWriteBytes(suffix.AsSpan(10), bigEndian: true, out _);
+        return StorageKey(PartitionRoot(partitionKey), 26, suffix);
+    }
+
+    private static byte[] EncodeBaselineApplyMarker(
+        NamespaceRosterCertificate roster, Guid generation, ReadOnlySpan<byte> snapshotDigest,
+        ReadOnlySpan<byte> evidenceDigest, int reportCount, int snapshotEntryCount)
+    {
+        byte[] value = new byte[109];
+        "MBAC"u8.CopyTo(value);
+        value[4] = 1;
+        snapshotDigest.CopyTo(value.AsSpan(5, 32));
+        evidenceDigest.CopyTo(value.AsSpan(37, 32));
+        NamespaceRosterProtocol.ComputeDigest(roster).CopyTo(value, 69);
+        BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(101), reportCount);
+        BinaryPrimitives.WriteInt32LittleEndian(value.AsSpan(105), snapshotEntryCount);
+        return value;
+    }
+
+    private static byte[] EncodeReceiveStateKey(PartitionKey partitionKey, ReceiveKey receive)
+    {
+        byte[] suffix = new byte[38];
+        receive.Sender.WriteTo(suffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), receive.Epoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)receive.NamespaceId));
+        receive.AuthorStream.WriteTo(suffix.AsSpan(22));
+        return StorageKey(PartitionRoot(partitionKey), 2, suffix);
+    }
+
     public uint? GetRetiredPeerEpoch(string scopeId, NodeId localReplica, NodeId peer, int namespaceId)
     {
         lock (_gate)
@@ -4359,6 +4802,18 @@ private static bool ValidateIncomingBatchForStaging(
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
                         BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
                     state.LegacyReceiveChains.Add(legacyChainKey, new ReceiveChainState(row.Value.ToArray()));
+                    break;
+                }
+                case 26:
+                {
+                    RequireLength(key, 26);
+                    if (row.Value.Length != 109 || !row.Value.AsSpan(0, 4).SequenceEqual("MBAC"u8) ||
+                        row.Value[4] != 1 || BinaryPrimitives.ReadUInt16LittleEndian(key) == 0 ||
+                        BinaryPrimitives.ReadUInt64LittleEndian(key.Slice(2)) == 0 ||
+                        new Guid(key.Slice(10, 16), bigEndian: true) == Guid.Empty ||
+                        BinaryPrimitives.ReadInt32LittleEndian(row.Value.AsSpan(101)) <= 0 ||
+                        BinaryPrimitives.ReadInt32LittleEndian(row.Value.AsSpan(105)) < 0)
+                        throw new InvalidDataException("Stored FULL_REPLACE baseline commit marker is malformed.");
                     break;
                 }
                 case 25:
