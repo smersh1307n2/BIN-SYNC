@@ -224,7 +224,7 @@ public partial class SyncSession
 
             // Commit the durable cursor/digest first. If the process stops before the
             // Node mirror is updated, the next call restores it from this committed row.
-            peerStateStore.AcknowledgeOutboundBatch(scopeId, sender.NodeId,
+            peerStateStore.AcknowledgePeerBatch(scopeId, sender.NodeId,
                 PeerNodeId, peerEpoch, namespaceId, authorStream,
                 reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest);
             // Metadata Store is authoritative in this overload. Do not mirror the committed
