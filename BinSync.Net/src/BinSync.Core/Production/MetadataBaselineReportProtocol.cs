@@ -280,6 +280,7 @@ public static class MetadataBaselineReportProtocol
             previousFeed = entry;
         }
 
+        var receiveStreamIdentities = new HashSet<(NodeId Sender, NodeId Author, uint IssuerEpoch)>();
         MetadataBaselineReceiveEntry? previousReceive = null;
         foreach (MetadataBaselineReceiveEntry entry in report.ReceiveEntries)
         {
@@ -290,6 +291,8 @@ public static class MetadataBaselineReportProtocol
                 throw new ArgumentException("MBR1 receive entry identity or digest is invalid.", nameof(report));
             if (entry.ReceiveCursor == 0 && !IsZero(entry.LastBatchDigest))
                 throw new ArgumentException("An empty receive stream must use the zero digest anchor.", nameof(report));
+            if (!receiveStreamIdentities.Add((entry.SenderPeer, entry.AuthorStream, entry.IssuerEpoch)))
+                throw new ArgumentException("MBR1 receive state cannot duplicate one sender/author/issuer stream across transport epochs.", nameof(report));
             if (previousReceive is not null && CompareReceive(previousReceive, entry) >= 0)
                 throw new ArgumentException("MBR1 receive entries must be strictly sorted and unique.", nameof(report));
             previousReceive = entry;
