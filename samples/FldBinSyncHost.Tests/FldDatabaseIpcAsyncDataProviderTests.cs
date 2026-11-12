@@ -224,7 +224,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
-    public async Task Async_two_host_signed_gc_respects_local_metadata_relay_references()
+    public async Task Async_two_host_signed_gc_waits_for_peer_acks_then_reclaims_tombstone_on_both_hosts()
     {
         string hostRootA = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-a-" + Guid.NewGuid().ToString("N"));
         string hostRootB = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-b-" + Guid.NewGuid().ToString("N"));
@@ -254,6 +254,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteB = null;
         SyncSession? acceptor = null;
         SyncSession? initiator = null;
+        Node? relayNode = null;
+        SyncSession? relayAcceptor = null;
+        SyncSession? relayInitiator = null;
         Guid ownerA = Guid.Empty;
         Guid ownerB = Guid.Empty;
         try
@@ -498,6 +501,46 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.NotNull(await providerA.ReadCurrentAsync(record, 0x0951));
             Assert.NotNull(await providerB.ReadCurrentAsync(record, 0x0951));
 
+            // Host A's outbound payload is now ACKed by Host B, but Host B's relay
+            // payload must remain until a downstream peer (not the original author)
+            // durably receives it. Add an in-memory third peer to complete that ACK.
+            relayNode = new NodeBuilder()
+                .WithNodeId(NodeId.From(Id(0x96)))
+                .WithEpoch(19)
+                .Build();
+            var (toBRelay, toCRelay) = PipeTransport.CreatePair();
+            Task<SyncSession> relayAcceptTask = SyncSession.AcceptAsync(relayNode, toCRelay);
+            Task<SyncSession> relayConnectTask = SyncSession.ConnectAsync(nodeB, toBRelay);
+            relayAcceptor = await relayAcceptTask;
+            relayInitiator = await relayConnectTask;
+            metadataB.RegisterInterestedPeer(scope, nodeB.NodeId, relayNode.NodeId,
+                checked((uint)relayInitiator.PeerEpoch), namespaceId);
+            metadataB.CompletePeerInitialSync(scope, nodeB.NodeId, relayNode.NodeId,
+                checked((uint)relayInitiator.PeerEpoch), namespaceId,
+                [new MetadataPeerStreamBaseline(authorA, 0, 17)]);
+
+            Task<BatchResult> relayReceive = relayAcceptor.ReceiveBatchAsync(relayNode);
+            int relaySent = await adapterB.RunOutboundRoundAsync([relayInitiator])
+                .WaitAsync(TimeSpan.FromSeconds(60));
+            BatchResult relayApplied = await relayReceive.WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.Equal(1, relaySent);
+            Assert.Equal(1, relayApplied.Applied);
+
+            // Compact only after the actual peer ACKs have advanced the per-stream
+            // safe cursors. The signed namespace proof alone never deletes payloads.
+            metadataA.CompactOutboundThrough(scope, nodeA.NodeId, namespaceId, authorA, 1);
+            metadataB.CompactRelayThrough(scope, nodeB.NodeId, namespaceId, authorA, 1);
+            Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record));
+            Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record));
+
+            Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 16));
+            Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 16));
+            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
+            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
+
+            await relayInitiator.DisposeAsync(); relayInitiator = null;
+            await relayAcceptor.DisposeAsync(); relayAcceptor = null;
+            relayNode.Dispose(); relayNode = null;
             await initiator.DisposeAsync(); initiator = null;
             await acceptor.DisposeAsync(); acceptor = null;
             await remoteA.DisposeAsync(); remoteA = null;
@@ -519,13 +562,16 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             using var reopenedA = FldDatabase.Open(hostRootA, namespaceId, authorABytes);
             using var reopenedB = FldDatabase.Open(hostRootB, namespaceId, authorBBytes);
-            Assert.True(reopenedA.TryResolve(record.ToArray(), 0x0951, out _),
-                "Host A must retain the Tombstone across restart while its immutable outbound Metadata payload is not compacted.");
-            Assert.True(reopenedB.TryResolve(record.ToArray(), 0x0951, out _),
-                "Host B must retain the Tombstone across restart while its relay Metadata payload is not compacted.");
+            Assert.False(reopenedA.TryResolve(record.ToArray(), 0x0951, out _),
+                "Host A's safely reclaimed tombstone must remain absent after durable reopen.");
+            Assert.False(reopenedB.TryResolve(record.ToArray(), 0x0951, out _),
+                "Host B's safely reclaimed tombstone must remain absent after durable reopen.");
         }
         finally
         {
+            if (relayInitiator is not null) await relayInitiator.DisposeAsync();
+            if (relayAcceptor is not null) await relayAcceptor.DisposeAsync();
+            relayNode?.Dispose();
             if (initiator is not null) await initiator.DisposeAsync();
             if (acceptor is not null) await acceptor.DisposeAsync();
             if (remoteA is not null) await remoteA.DisposeAsync();
