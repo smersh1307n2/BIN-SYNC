@@ -350,7 +350,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1UL, tombstoneAtA.OriginSequence);
             Assert.Equal(1UL, tombstoneAtB.OriginSequence);
 
-            var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+            var keys = new[]
+            {
+                BatchSignature.GenerateKeyPair(),
+                BatchSignature.GenerateKeyPair(),
+                BatchSignature.GenerateKeyPair()
+            };
+            NodeId relayMember = NodeId.From(Id(0x96));
             var trust = new TrustStore();
             trust.Allow(authorA, keys[0].PublicKey, TrustMode.PreShared);
             var roster = new NamespaceRosterCertificate
@@ -373,6 +379,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         NodeId = authorB,
                         PublicKey = keys[1].PublicKey,
                         TransportPeerEpoch = 11,
+                        Status = NamespaceMemberStatus.Active
+                    },
+                    new NamespaceRosterMember
+                    {
+                        NodeId = relayMember,
+                        PublicKey = keys[2].PublicKey,
+                        TransportPeerEpoch = 12,
                         Status = NamespaceMemberStatus.Active
                     }
                 ]
@@ -461,8 +474,41 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         HlcLogicalFloor = 1,
                         Installed = true
                     }, keys[1].Seed), acceptedRoster);
+                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                    new FullReplaceInstalledAck
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        Generation = fullReplaceGeneration,
+                        Digest = fullReplaceDigest,
+                        MemberNodeId = relayMember,
+                        MemberTransportEpoch = 12,
+                        HlcWallFloor = 100,
+                        HlcLogicalFloor = 1,
+                        Installed = true
+                    }, keys[2].Seed), acceptedRoster);
+                var reportC = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                    new AppliedOriginFrontierReport
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 1,
+                        RosterDigest = rosterDigest,
+                        MemberNodeId = relayMember,
+                        MemberTransportEpoch = 12,
+                        ReportSequence = 1,
+                        Entries =
+                        [
+                            new AppliedOriginFrontierEntry
+                            {
+                                OriginAuthorNodeId = authorA,
+                                OriginAuthorEpoch = 17,
+                                ContiguousAppliedOriginSequence = 1
+                            }
+                        ]
+                    }, keys[2].Seed), acceptedRoster);
                 var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
-                    acceptedRoster, 1, new byte[32], [reportA, reportB],
+                    acceptedRoster, 1, new byte[32], [reportA, reportB, reportC],
                     fullReplaceGeneration, fullReplaceDigest,
                     fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 1);
                 gc.AcceptRetentionCheckpoint(
@@ -476,21 +522,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var gcB = new StorageNamespaceGcStore(
                 nodeStorageB, scope, authorB,
                 new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
-            InstallSignedProof(gcA);
-            InstallSignedProof(gcB);
-
-            Assert.True(gcA.HasProtocolTombstoneGcProof(
-                gcA.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? acceptedA)
-                    ? acceptedA! : throw new InvalidOperationException("Host A roster was not persisted."),
-                trust, authorA, 17, 1, tombstoneAtA.HlcWall, tombstoneAtA.HlcLogical,
-                fullReplaceGeneration, fullReplaceDigest),
-                "Host A must independently validate the signed causal and FULL_REPLACE proof.");
-            Assert.True(gcB.HasProtocolTombstoneGcProof(
-                gcB.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? acceptedB)
-                    ? acceptedB! : throw new InvalidOperationException("Host B roster was not persisted."),
-                trust, authorA, 17, 1, tombstoneAtB.HlcWall, tombstoneAtB.HlcLogical,
-                fullReplaceGeneration, fullReplaceDigest),
-                "Host B must independently validate the signed causal and FULL_REPLACE proof.");
+            // Before C receives the tombstone there is deliberately no accepted
+            // three-member frontier proof. The retained Metadata payloads independently
+            // keep both physical GC passes fail-closed.
             Assert.True(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record),
                 "Host A's immutable outbound payload remains retained until a proof-bound Metadata baseline compacts it.");
             Assert.True(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record),
@@ -505,7 +539,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // payload must remain until a downstream peer (not the original author)
             // durably receives it. Add an in-memory third peer to complete that ACK.
             relayNode = new NodeBuilder()
-                .WithNodeId(NodeId.From(Id(0x96)))
+                .WithNodeId(relayMember)
                 .WithEpoch(19)
                 .Build();
             var (toBRelay, toCRelay) = PipeTransport.CreatePair();
@@ -540,6 +574,24 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // B is also the local durable consumer of the applied relay change.
             // Its local relay-consumer ACK is independent from C's transport ACK.
             metadataB.AcknowledgeRelay(scope, nodeB.NodeId, namespaceId, authorA, 1);
+
+            // C has now durably applied the tombstone before signing its OFR2 report.
+            // The accepted roster has three Active members; the checkpoint minimum
+            // therefore cannot advance until C's own signed applied frontier is present.
+            InstallSignedProof(gcA);
+            InstallSignedProof(gcB);
+            Assert.True(gcA.HasProtocolTombstoneGcProof(
+                gcA.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? acceptedA)
+                    ? acceptedA! : throw new InvalidOperationException("Host A roster was not persisted."),
+                trust, authorA, 17, 1, tombstoneAtA.HlcWall, tombstoneAtA.HlcLogical,
+                fullReplaceGeneration, fullReplaceDigest),
+                "Host A must independently validate all three Active members' signed applied frontiers.");
+            Assert.True(gcB.HasProtocolTombstoneGcProof(
+                gcB.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? acceptedB)
+                    ? acceptedB! : throw new InvalidOperationException("Host B roster was not persisted."),
+                trust, authorA, 17, 1, tombstoneAtB.HlcWall, tombstoneAtB.HlcLogical,
+                fullReplaceGeneration, fullReplaceDigest),
+                "Host B must independently validate all three Active members' signed applied frontiers.");
 
             // Compact only after both the local apply consumer and every interested
             // downstream peer have acknowledged the immutable relay prefix.
