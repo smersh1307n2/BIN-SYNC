@@ -1158,7 +1158,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// </summary>
     public IDisposable AcquireTombstoneGcCommitGuard(
         string scopeId, NodeId localReplica, int namespaceId,
-        StorageNamespaceGcStore gcStore, TrustStore trustStore)
+        StorageNamespaceGcStore gcStore, TrustStore trustStore,
+        out IReadOnlySet<RecordId>? liveRecordReferences)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero)
@@ -1180,6 +1181,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 throw new InvalidOperationException(
                     "Tombstone GC namespace state is not bound to the exact Metadata Store scope and local replica.");
 
+            liveRecordReferences = TryBuildLiveRecordReferenceSet(
+                scopeId, localReplica, namespaceId, out HashSet<RecordId> liveRecords)
+                ? liveRecords
+                : null;
             return new FullReplaceCommitLease(_gate);
         }
         catch
