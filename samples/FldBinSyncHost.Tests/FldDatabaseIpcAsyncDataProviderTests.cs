@@ -333,6 +333,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await Task.WhenAll(receiveAtB, sendFromA).WaitAsync(TimeSpan.FromSeconds(60));
             Assert.Equal(1, (await receiveAtB).Applied);
             Assert.Equal(1, await sendFromA);
+
+            // The receiving host must forward its retained relay copy and receive the
+            // duplicate ACK before its Metadata reference can stop pinning the record.
+            Task<BatchResult> duplicateAtA = adapterA.ReceiveBatchAsync(initiator);
+            Task<int> relayFromB = adapterB.RunOutboundRoundAsync([acceptor]);
+            await Task.WhenAll(duplicateAtA, relayFromB).WaitAsync(TimeSpan.FromSeconds(60));
+            Assert.Equal(0, (await duplicateAtA).Applied);
+            Assert.Equal(1, await relayFromB);
+
             ProviderMutation? tombstoneAtA = await providerA.ReadCurrentAsync(record, 0x0951);
             ProviderMutation? tombstoneAtB = await providerB.ReadCurrentAsync(record, 0x0951);
             Assert.NotNull(tombstoneAtA);
