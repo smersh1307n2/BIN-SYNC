@@ -2589,4 +2589,146 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         }
     }
 
+
+    [Fact]
+    public void Legacy_sender_digest_chain_migrates_to_the_only_established_author_when_next_batch_is_from_another_author()
+    {
+        const string scope = "legacy-single-author-receive-chain";
+        const int namespaceId = 7;
+        NodeId local = Node(1), sender = Node(2), authorA = Node(3), authorB = Node(4);
+        string directory = Path.Combine(_root, "legacy-single-author-receive-chain");
+        byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
+        byte[] root = new byte[49];
+        root[0] = 0x70;
+        SHA256.HashData(scopeBytes).CopyTo(root, 1);
+        local.WriteTo(root.AsSpan(33));
+
+        byte[] Key(byte kind, ReadOnlySpan<byte> suffix)
+        {
+            byte[] key = new byte[root.Length + 1 + suffix.Length];
+            root.CopyTo(key, 0);
+            key[root.Length] = kind;
+            suffix.CopyTo(key.AsSpan(root.Length + 1));
+            return key;
+        }
+
+        byte[] legacySuffix = new byte[22];
+        sender.WriteTo(legacySuffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(legacySuffix.AsSpan(16), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(legacySuffix.AsSpan(20), checked((ushort)namespaceId));
+
+        using (var storage = StorageDatabase.Open(directory, 457))
+        using (var store = new StorageMetadataStore(storage))
+        {
+            Assert.False(store.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 31,
+                1, 1, 0, 81, Operation(3, 51, 61, 71, originSequence: 1))).IsDuplicate);
+        }
+
+        byte[] legacyDigest;
+        using (var storage = StorageDatabase.Open(directory, 457))
+        {
+            StorageEntry chain;
+            using (var snapshot = storage.OpenSnapshot())
+                chain = Assert.Single(snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 256),
+                    row => row.Key[root.Length] == 25);
+            legacyDigest = chain.Value.ToArray();
+            using var batch = storage.BeginWriteBatch();
+            batch.Delete(chain.Key);
+            batch.Put(Key(14, legacySuffix), legacyDigest);
+            batch.Commit();
+        }
+
+        using (var storage = StorageDatabase.Open(directory, 457))
+        using (var store = new StorageMetadataStore(storage))
+        {
+            Assert.False(store.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 32,
+                1, 1, 0, 82, Operation(4, 52, 62, 72, originSequence: 1))).IsDuplicate);
+
+            using var snapshot = storage.OpenSnapshot();
+            var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 256);
+            Assert.DoesNotContain(rows, row => row.Key[root.Length] == 14);
+            var chains = rows.Where(row => row.Key[root.Length] == 25).ToArray();
+            Assert.Equal(2, chains.Length);
+            var migratedA = Assert.Single(chains, row =>
+                NodeId.From(row.Key.AsSpan(root.Length + 1 + 22, 16)) == authorA);
+            var newB = Assert.Single(chains, row =>
+                NodeId.From(row.Key.AsSpan(root.Length + 1 + 22, 16)) == authorB);
+            Assert.Equal(legacyDigest, migratedA.Value);
+            Assert.Equal(Enumerable.Repeat((byte)82, 16).ToArray(), newB.Value);
+        }
+
+        using (var reopened = new StorageMetadataStore(directory, 457, deleteOnDispose: false))
+        {
+            Assert.False(reopened.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 33,
+                2, 2, 81, 83, Operation(3, 53, 63, 73, originSequence: 2))).IsDuplicate);
+        }
+    }
+
+    [Fact]
+    public void Ambiguous_legacy_sender_digest_chain_requires_full_replace_without_mutating_rows()
+    {
+        const string scope = "legacy-ambiguous-receive-chain";
+        const int namespaceId = 7;
+        NodeId local = Node(1), sender = Node(2), authorA = Node(3), authorB = Node(4);
+        string directory = Path.Combine(_root, "legacy-ambiguous-receive-chain");
+        byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
+        byte[] root = new byte[49];
+        root[0] = 0x70;
+        SHA256.HashData(scopeBytes).CopyTo(root, 1);
+        local.WriteTo(root.AsSpan(33));
+
+        byte[] Key(byte kind, ReadOnlySpan<byte> suffix)
+        {
+            byte[] key = new byte[root.Length + 1 + suffix.Length];
+            root.CopyTo(key, 0);
+            key[root.Length] = kind;
+            suffix.CopyTo(key.AsSpan(root.Length + 1));
+            return key;
+        }
+
+        byte[] legacySuffix = new byte[22];
+        sender.WriteTo(legacySuffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(legacySuffix.AsSpan(16), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(legacySuffix.AsSpan(20), checked((ushort)namespaceId));
+
+        using (var storage = StorageDatabase.Open(directory, 458))
+        using (var store = new StorageMetadataStore(storage))
+        {
+            Assert.False(store.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 41,
+                1, 1, 0, 91, Operation(3, 61, 71, 81, originSequence: 1))).IsDuplicate);
+            Assert.False(store.AcceptIncomingBatch(CreateBatch(scope, 1, 2, 1, namespaceId, 42,
+                1, 1, 0, 92, Operation(4, 62, 72, 82, originSequence: 1))).IsDuplicate);
+        }
+
+        using (var storage = StorageDatabase.Open(directory, 458))
+        {
+            StorageEntry[] chains;
+            using (var snapshot = storage.OpenSnapshot())
+                chains = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 256)
+                    .Where(row => row.Key[root.Length] == 25).ToArray();
+            Assert.Equal(2, chains.Length);
+            StorageEntry legacySource = Assert.Single(chains, row =>
+                NodeId.From(row.Key.AsSpan(root.Length + 1 + 22, 16)) == authorB);
+            using var batch = storage.BeginWriteBatch();
+            foreach (var chain in chains) batch.Delete(chain.Key);
+            batch.Put(Key(14, legacySuffix), legacySource.Value);
+            batch.Commit();
+        }
+
+        using (var storage = StorageDatabase.Open(directory, 458))
+        using (var store = new StorageMetadataStore(storage))
+        {
+            var next = CreateBatch(scope, 1, 2, 1, namespaceId, 43,
+                2, 2, 92, 93, Operation(4, 63, 73, 83, originSequence: 2));
+            InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+                store.AcceptIncomingBatch(next));
+            Assert.Contains("FULL_REPLACE", error.Message);
+
+            using var snapshot = storage.OpenSnapshot();
+            var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 256);
+            Assert.Contains(rows, row => row.Key[root.Length] == 14);
+            Assert.DoesNotContain(rows, row => row.Key[root.Length] == 25);
+        }
+    }
+
 }

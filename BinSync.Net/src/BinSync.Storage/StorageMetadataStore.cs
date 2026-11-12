@@ -1340,6 +1340,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var newRequiredStreams = new HashSet<PeerStreamKey>();
         ReceiveChainKey chainKey = default;
         LegacyReceiveChainKey? legacyChainKey = null;
+        ReceiveChainKey? legacyTargetKey = null;
+        ReceiveChainState? legacyTargetState = null;
 
         if (!isNewReceipt)
         {
@@ -1362,7 +1364,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ? priorReceive : new ReceiveState(0);
             chainKey = new ReceiveChainKey(incoming.SenderPeer, incoming.SenderEpoch,
                 incoming.NamespaceId, receiveKey.AuthorStream);
-            var chain = GetReceiveChainStateForAuthor(current, receiveKey, out legacyChainKey);
+            var chain = GetReceiveChainStateForAuthor(current, receiveKey,
+                out legacyChainKey, out legacyTargetKey, out legacyTargetState);
             if (incoming.CursorStart != checked(receive.CursorEnd + 1) ||
                 !chain.LastBatchDigest.AsSpan().SequenceEqual(incoming.PreviousBatchDigest))
                 throw new InvalidDataException("Incoming batch does not continue its author cursor and author-stream digest chain.");
@@ -1461,7 +1464,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
             writes.Add((EncodeReceiveChainKey(partitionKey, chainKey), incoming.BatchDigest.ToArray()));
             if (legacyChainKey is { } legacyToDelete)
+            {
                 deletes.Add(EncodeLegacyReceiveChainKey(partitionKey, legacyToDelete));
+                if (legacyTargetKey is { } legacyTarget && legacyTarget != chainKey &&
+                    legacyTargetState is { } legacyState)
+                    writes.Add((EncodeReceiveChainKey(partitionKey, legacyTarget),
+                        legacyState.LastBatchDigest.ToArray()));
+            }
             }
         }
 
@@ -1538,6 +1547,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 receipt.NewRelayOperationCount, receipt.DurableAuthor, incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch, GetMaxOriginSequence(incoming)));
             current.Receives[new ReceiveKey(incoming.SenderPeer, incoming.SenderEpoch,
                 incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveState(incoming.CursorEnd);
+            if (legacyTargetKey is { } migratedTarget && migratedTarget != chainKey &&
+                legacyTargetState is { } migratedTargetState)
+                current.ReceiveChains[migratedTarget] =
+                    new ReceiveChainState(migratedTargetState.LastBatchDigest.ToArray());
             current.ReceiveChains[chainKey] = new ReceiveChainState(incoming.BatchDigest.ToArray());
             if (legacyChainKey is { } migratedLegacy)
                 current.LegacyReceiveChains.Remove(migratedLegacy);
@@ -1667,7 +1680,7 @@ private static bool ValidateIncomingBatchForStaging(
         var receive = state.Receives.TryGetValue(receiveKey, out var priorReceive)
             ? priorReceive
             : new ReceiveState(0);
-        var chain = GetReceiveChainStateForAuthor(state, receiveKey, out _);
+        var chain = GetReceiveChainStateForAuthor(state, receiveKey, out _, out _, out _);
         if (batch.CursorStart != checked(receive.CursorEnd + 1) ||
             !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
             throw new InvalidDataException("Incoming batch does not continue its author cursor and author-stream digest chain.");
@@ -1739,7 +1752,8 @@ private static bool ValidateIncomingBatchForStaging(
             : new ReceiveState(0);
         var chainKey = new ReceiveChainKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, receiveKey.AuthorStream);
-        var chain = GetReceiveChainStateForAuthor(current, receiveKey, out var legacyChainKey);
+        var chain = GetReceiveChainStateForAuthor(current, receiveKey,
+            out var legacyChainKey, out var legacyTargetKey, out var legacyTargetState);
         if (batch.CursorStart != checked(receive.CursorEnd + 1) ||
             !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
             throw new InvalidDataException("Incoming batch does not continue its author cursor and author-stream digest chain.");
@@ -1840,6 +1854,10 @@ private static bool ValidateIncomingBatchForStaging(
         writes.Add((StorageKey(root, 1, receiptSuffix), receiptValue));
         writes.Add((StorageKey(root, 2, receiveSuffix), receiveValue));
         writes.Add((chainStorageKey, batch.BatchDigest.ToArray()));
+        if (legacyTargetKey is { } legacyTarget && legacyTarget != chainKey &&
+            legacyTargetState is { } legacyState)
+            writes.Add((EncodeReceiveChainKey(partitionKey, legacyTarget),
+                legacyState.LastBatchDigest.ToArray()));
 
         foreach (var pair in newLedger)
         {
@@ -1909,6 +1927,10 @@ private static bool ValidateIncomingBatchForStaging(
             batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(), relayAdded,
             receipt.DurableAuthor, batch.HeaderFingerprint.ToArray(), batch.TransportPeerEpoch, GetMaxOriginSequence(batch)));
         current.Receives[receiveKey] = new ReceiveState(batch.CursorEnd);
+        if (legacyTargetKey is { } migratedTarget && migratedTarget != chainKey &&
+            legacyTargetState is { } migratedTargetState)
+            current.ReceiveChains[migratedTarget] =
+                new ReceiveChainState(migratedTargetState.LastBatchDigest.ToArray());
         current.ReceiveChains[chainKey] = new ReceiveChainState(batch.BatchDigest.ToArray());
         if (legacyChainKey is { } migratedLegacy)
             current.LegacyReceiveChains.Remove(migratedLegacy);
@@ -5018,20 +5040,30 @@ private static bool ValidateIncomingBatchForStaging(
     private readonly record struct ReceiveChainState(byte[] LastBatchDigest);
 
     private static ReceiveChainState GetReceiveChainStateForAuthor(
-        PartitionState state, ReceiveKey receiveKey, out LegacyReceiveChainKey? legacyKey)
+        PartitionState state, ReceiveKey receiveKey,
+        out LegacyReceiveChainKey? legacyKey,
+        out ReceiveChainKey? legacyTargetKey,
+        out ReceiveChainState? legacyTargetState)
     {
         var key = new ReceiveChainKey(receiveKey.Sender, receiveKey.Epoch,
             receiveKey.NamespaceId, receiveKey.AuthorStream);
+        var legacy = new LegacyReceiveChainKey(receiveKey.Sender, receiveKey.Epoch, receiveKey.NamespaceId);
         if (state.ReceiveChains.TryGetValue(key, out var current))
         {
+            if (state.LegacyReceiveChains.ContainsKey(legacy))
+                throw new InvalidDataException(
+                    "Legacy and per-author receive digest rows coexist; a FULL_REPLACE baseline is required.");
             legacyKey = null;
+            legacyTargetKey = null;
+            legacyTargetState = null;
             return current;
         }
 
-        var legacy = new LegacyReceiveChainKey(receiveKey.Sender, receiveKey.Epoch, receiveKey.NamespaceId);
         if (!state.LegacyReceiveChains.TryGetValue(legacy, out var legacyState))
         {
             legacyKey = null;
+            legacyTargetKey = null;
+            legacyTargetState = null;
             return new ReceiveChainState(new byte[16]);
         }
 
@@ -5043,20 +5075,26 @@ private static bool ValidateIncomingBatchForStaging(
             .Select(pair => pair.Key.AuthorStream)
             .Distinct()
             .ToArray();
-        if (establishedAuthors.Length != 1 || establishedAuthors[0] != receiveKey.AuthorStream)
+        if (establishedAuthors.Length != 1)
             throw new InvalidDataException(
                 "Legacy sender-wide digest chain is ambiguous across author streams; a FULL_REPLACE baseline is required.");
 
         legacyKey = legacy;
-        return legacyState;
+        legacyTargetKey = new ReceiveChainKey(receiveKey.Sender, receiveKey.Epoch,
+            receiveKey.NamespaceId, establishedAuthors[0]);
+        legacyTargetState = legacyState;
+        return establishedAuthors[0] == receiveKey.AuthorStream
+            ? legacyState
+            : new ReceiveChainState(new byte[16]);
     }
 
     private static bool HasReceiveChainForAuthor(PartitionState state, ReceiveKey receiveKey)
     {
         var key = new ReceiveChainKey(receiveKey.Sender, receiveKey.Epoch,
             receiveKey.NamespaceId, receiveKey.AuthorStream);
-        if (state.ReceiveChains.ContainsKey(key)) return true;
         var legacy = new LegacyReceiveChainKey(receiveKey.Sender, receiveKey.Epoch, receiveKey.NamespaceId);
+        if (state.ReceiveChains.ContainsKey(key))
+            return !state.LegacyReceiveChains.ContainsKey(legacy);
         if (!state.LegacyReceiveChains.ContainsKey(legacy)) return false;
         NodeId[] establishedAuthors = state.Receives
             .Where(pair => pair.Key.Sender == receiveKey.Sender &&
