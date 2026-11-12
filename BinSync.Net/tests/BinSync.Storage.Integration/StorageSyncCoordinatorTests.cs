@@ -4132,7 +4132,7 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Fact]
-    public void Full_replace_commit_guard_requires_exact_namespace_gc_binding_and_releases_host_lease()
+    public void Full_replace_commit_guard_rejects_wrong_scope_gc_binding_before_host_lease()
     {
         const string scope = "full-replace-gc-binding";
         using var storage = StorageDatabase.Open(Path.Combine(_root, "full-replace-gc-binding"), 482);
@@ -4154,15 +4154,10 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(0, hostReleases);
 
         var wrongScopeStore = new StorageNamespaceGcStore(storage, scope + "-wrong", local.NodeId);
-        coordinator.AttachNamespaceGcGuard(wrongScopeStore, trust);
-        Assert.Throws<InvalidOperationException>(() =>
-            coordinator.AcquireFullReplaceCommitGuard(() =>
-            {
-                Interlocked.Increment(ref hostAcquires);
-                return new CallbackLease(() => Interlocked.Increment(ref hostReleases));
-            }));
-        Assert.Equal(1, hostAcquires);
-        Assert.Equal(1, hostReleases);
+        Assert.Throws<ArgumentException>(() =>
+            coordinator.AttachNamespaceGcGuard(wrongScopeStore, trust));
+        Assert.Equal(0, hostAcquires);
+        Assert.Equal(0, hostReleases);
     }
 
     [Theory]
