@@ -101,6 +101,8 @@ public sealed class AsyncStorageSyncCoordinator
             ?? throw new InvalidOperationException("Async namespace-GC guard has not been attached.");
         TrustStore trustStore = _namespaceGcTrustStore
             ?? throw new InvalidOperationException("Async namespace-GC TrustStore has not been attached.");
+        string scopeId = _scopeId
+            ?? throw new InvalidOperationException("Async tombstone GC requires a stable Metadata scope.");
         if (!gcStore.IsTombstoneGcProofEnabled)
             return 0;
 
@@ -111,7 +113,7 @@ public sealed class AsyncStorageSyncCoordinator
             lock (_metadataGate)
             {
                 if (!storageMetadata.TryBuildLiveRecordReferenceSet(
-                    _scopeId, _node.NodeId, _namespaceId, out liveRecordReferences))
+                    scopeId, _node.NodeId, _namespaceId, out liveRecordReferences))
                     return 0; // Unknown payload or pending immutable peer reservation.
             }
 
