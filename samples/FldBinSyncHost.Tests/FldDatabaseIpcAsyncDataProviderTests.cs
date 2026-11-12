@@ -539,7 +539,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             // Host A's outbound payload is now ACKed by Host B, but Host B's relay
             // payload must remain until a downstream peer (not the original author)
-            // durably receives it. Add an in-memory third peer to complete that ACK.
+            // durably receives it. Add a WAL-backed third peer to complete that ACK.
             relayNode = new NodeBuilder()
                 .WithNodeId(relayMember)
                 .WithEpoch(19)
@@ -580,9 +580,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             metadataB.AcknowledgeRelay(scope, nodeB.NodeId, namespaceId, authorA, 1);
 
             // C has now applied the tombstone through a WAL-backed SyncSession receive
-            // before signing its OFR2 report. The accepted roster has three Active members;
-            // the checkpoint minimum
-            // therefore cannot advance until C's own signed applied frontier is present.
+            // before signing its OFR2 report. The accepted roster has three Active
+            // members; the checkpoint minimum cannot advance until C's signed frontier
+            // is present.
             InstallSignedProof(gcA);
             InstallSignedProof(gcB);
             Assert.True(gcA.HasProtocolTombstoneGcProof(
@@ -671,6 +671,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (relayInitiator is not null) await relayInitiator.DisposeAsync();
             if (relayAcceptor is not null) await relayAcceptor.DisposeAsync();
             relayNode?.Dispose();
+            walC?.Dispose();
             if (initiator is not null) await initiator.DisposeAsync();
             if (acceptor is not null) await acceptor.DisposeAsync();
             if (remoteA is not null) await remoteA.DisposeAsync();
