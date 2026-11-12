@@ -3496,3 +3496,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [ ] T Add source-side concurrency tests that race snapshot preparation against local publish, inbound APPLY, outbound reservation/ACK, roster/frontier mutation and host restart. Every run must either produce a vector and provider snapshot from one excluded commit interval or fail closed; no mixed-time manifest is acceptable.
 - [ ] T Add lost-ACK/rejoin and crash cuts after snapshot persistence, after all member ACKs, after Metadata baseline commit, and during bounded payload compaction. Reopening and retrying the same generation must be idempotent; a newer roster/epoch or a conflicting generation must not inherit the old baseline.
 - [ ] Physical GC and automatic FULL_REPLACE baseline retirement remain disabled until the source-side admission proof, signed vector contract, two-sided Metadata transaction, and exact-head platform CI all pass.
+
+
+## 1.134. Proof-bound Metadata baseline contract — 2026-11-12
+
+- [x A/D] Added `docs/BIN-SYNC-v3.1-METADATA-BASELINE-VECTOR.md` as the implementation contract for the missing FULL_REPLACE → Metadata retirement bridge.
+- [x A] Made the coordinate domains explicit: provider watermark, origin frontier, outbound feed, relay feed, per-peer send stream and per-sender receive stream are not interchangeable. Send stream identity includes peer transport epoch and author issuer epoch; receive evidence must preserve its own cursor and digest chain.
+- [x D] Specified a versioned snapshot-bound evidence envelope and canonical feed/receive vectors. The contract explicitly forbids silently changing FRA/FULL_REPLACE wire layouts or letting the namespace authority fabricate another member's local Metadata cursor state.
+- [x D] Specified the single-lease source capture boundary, two-sided atomic Metadata application, idempotency/fork rules, compaction ordering and crash/rejoin/concurrency test matrix.
+- [!] This is a design checkpoint only. No baseline application API or wire message is implemented by this documentation commit; all physical GC switches remain false.
+- [ ] C/T Next implementation slice: define the member-authenticated evidence ownership model and canonical codec/golden vectors; then add the StorageMetadataStore transaction that atomically updates peer send state, per-author receive cursor/digest rows and the generation marker. Do not compact payloads in the same first slice.
