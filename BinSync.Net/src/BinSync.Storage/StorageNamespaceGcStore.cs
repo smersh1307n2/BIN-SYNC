@@ -25,6 +25,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     private const byte CheckpointKind = 3;
     private const byte FullReplaceAckKind = 4;
     private const byte CurrentRosterKind = 5;
+    private const byte BaselineReportKind = 6;
     private const int RootLength = 49;
     private readonly StorageDatabase _storage;
     private readonly object _gate;
@@ -288,6 +289,116 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
             }
             WriteRows((key, owned));
             return acknowledgement;
+        }
+    }
+
+    public MetadataBaselineReport AcceptMetadataBaselineReport(
+        ReadOnlySpan<byte> encoded, NamespaceRosterCertificate acceptedRoster,
+        Guid expectedGeneration, ReadOnlySpan<byte> expectedSnapshotDigest)
+    {
+        byte[] owned = encoded.ToArray();
+        MetadataBaselineReport report = MetadataBaselineReportProtocol.DecodeAndVerify(
+            owned, acceptedRoster, expectedGeneration, expectedSnapshotDigest);
+        lock (_gate)
+        {
+            EnsureCurrentRoster(acceptedRoster);
+            byte[] ackBytes = ReadValue(FullReplaceAckKey(
+                report.NamespaceId, report.RosterGeneration, expectedGeneration, report.MemberNodeId))
+                ?? throw new InvalidDataException("MBR1 cannot be accepted before the member's durable FULL_REPLACE installation ACK.");
+            FullReplaceInstalledAck ack = FullReplaceInstalledAckProtocol.DecodeAndVerify(ackBytes, acceptedRoster);
+            if (!ack.Installed || ack.MemberTransportEpoch != report.MemberTransportEpoch ||
+                ack.Generation != expectedGeneration ||
+                !ack.Digest.AsSpan().SequenceEqual(expectedSnapshotDigest) ||
+                ack.HlcWallFloor != report.HlcWallFloor || ack.HlcLogicalFloor != report.HlcLogicalFloor)
+                throw new InvalidDataException("MBR1 report does not match the member's exact installed FULL_REPLACE ACK.");
+
+            byte[] key = BaselineReportKey(report.NamespaceId, report.RosterGeneration, report.MemberNodeId);
+            byte[]? priorBytes = ReadValue(key);
+            if (priorBytes is not null)
+            {
+                if (priorBytes.Length < 94 + BatchSignature.SignatureSize ||
+                    !priorBytes.AsSpan(0, 4).SequenceEqual("MBR1"u8))
+                    throw new InvalidDataException("Stored MBR1 report is corrupt.");
+                Guid priorGeneration = new(priorBytes.AsSpan(46, 16), bigEndian: true);
+                byte[] priorSnapshotDigest = priorBytes.AsSpan(62, MetadataBaselineReportProtocol.DigestSize).ToArray();
+                MetadataBaselineReport prior = MetadataBaselineReportProtocol.DecodeAndVerify(
+                    priorBytes, acceptedRoster, priorGeneration, priorSnapshotDigest);
+
+                if (report.ReportSequence < prior.ReportSequence)
+                    throw new InvalidDataException("MBR1 report sequence regressed.");
+                if (report.ReportSequence == prior.ReportSequence)
+                {
+                    if (!owned.AsSpan().SequenceEqual(priorBytes))
+                        throw new InvalidDataException("MBR1 report sequence fork detected.");
+                    return prior;
+                }
+                ValidateBaselineReportProgress(prior, report);
+            }
+
+            WriteRows((key, owned));
+            return report;
+        }
+    }
+
+    public IReadOnlyList<MetadataBaselineReport> ReadMetadataBaselineReports(
+        NamespaceRosterCertificate acceptedRoster, Guid generation, ReadOnlySpan<byte> snapshotDigest)
+    {
+        if (generation == Guid.Empty || snapshotDigest.Length != MetadataBaselineReportProtocol.DigestSize)
+            throw new ArgumentException("A FULL_REPLACE generation and 32-byte snapshot digest are required.");
+        lock (_gate)
+        {
+            EnsureCurrentRoster(acceptedRoster);
+            byte[] prefix = BaselineReportPrefix(acceptedRoster.NamespaceId, acceptedRoster.RosterGeneration);
+            var rows = Scan(prefix);
+            var reports = new List<MetadataBaselineReport>(rows.Count);
+            foreach (StorageEntry row in rows)
+            {
+                MetadataBaselineReport report = MetadataBaselineReportProtocol.DecodeAndVerify(
+                    row.Value, acceptedRoster, generation, snapshotDigest);
+                if (row.Key.Length != prefix.Length + 16 ||
+                    !row.Key.AsSpan(prefix.Length).SequenceEqual(report.MemberNodeId.ToArray()))
+                    throw new InvalidDataException("MBR1 report key/value identity mismatch.");
+                reports.Add(report);
+            }
+            reports.Sort((a, b) => CompareNodeIds(a.MemberNodeId, b.MemberNodeId));
+            return reports;
+        }
+    }
+
+    private static void ValidateBaselineReportProgress(
+        MetadataBaselineReport prior, MetadataBaselineReport next)
+    {
+        if (next.ProviderChangeFeedWatermark < prior.ProviderChangeFeedWatermark ||
+            next.HlcWallFloor < prior.HlcWallFloor ||
+            (next.HlcWallFloor == prior.HlcWallFloor && next.HlcLogicalFloor < prior.HlcLogicalFloor))
+            throw new InvalidDataException("MBR1 provider watermark or HLC floor regressed.");
+
+        var nextFeeds = next.FeedEntries.ToDictionary(
+            entry => (entry.TargetPeer, entry.TargetTransportEpoch, entry.AuthorStream));
+        foreach (MetadataBaselineFeedEntry oldEntry in prior.FeedEntries)
+        {
+            if (!nextFeeds.TryGetValue(
+                    (oldEntry.TargetPeer, oldEntry.TargetTransportEpoch, oldEntry.AuthorStream),
+                    out MetadataBaselineFeedEntry? current) ||
+                current.FeedKind != oldEntry.FeedKind ||
+                current.IssuerEpoch < oldEntry.IssuerEpoch ||
+                current.AbsoluteFeedOffset < oldEntry.AbsoluteFeedOffset ||
+                (current.AbsoluteFeedOffset == oldEntry.AbsoluteFeedOffset &&
+                 !current.DigestAnchor.AsSpan().SequenceEqual(oldEntry.DigestAnchor)))
+                throw new InvalidDataException("MBR1 feed vector regressed, dropped a stream, or changed an equal-offset digest anchor.");
+        }
+
+        var nextReceives = next.ReceiveEntries.ToDictionary(
+            entry => (entry.SenderPeer, entry.SenderTransportEpoch, entry.AuthorStream, entry.IssuerEpoch));
+        foreach (MetadataBaselineReceiveEntry oldEntry in prior.ReceiveEntries)
+        {
+            if (!nextReceives.TryGetValue(
+                    (oldEntry.SenderPeer, oldEntry.SenderTransportEpoch, oldEntry.AuthorStream, oldEntry.IssuerEpoch),
+                    out MetadataBaselineReceiveEntry? current) ||
+                current.ReceiveCursor < oldEntry.ReceiveCursor ||
+                (current.ReceiveCursor == oldEntry.ReceiveCursor &&
+                 !current.LastBatchDigest.AsSpan().SequenceEqual(oldEntry.LastBatchDigest)))
+                throw new InvalidDataException("MBR1 receive vector regressed, dropped a stream, or changed an equal-cursor digest anchor.");
         }
     }
 
@@ -856,6 +967,18 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
 
     private byte[] CheckpointKey(int namespaceId, ulong generation)
         => Key(CheckpointKind, NamespaceGenerationSuffix(namespaceId, generation));
+
+    private byte[] BaselineReportKey(int namespaceId, ulong rosterGeneration, NodeId member)
+    {
+        byte[] suffix = new byte[2 + 8 + 16];
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+        BinaryPrimitives.WriteUInt64LittleEndian(suffix.AsSpan(2), rosterGeneration);
+        member.WriteTo(suffix.AsSpan(10));
+        return Key(BaselineReportKind, suffix);
+    }
+
+    private byte[] BaselineReportPrefix(int namespaceId, ulong rosterGeneration)
+        => Key(BaselineReportKind, NamespaceGenerationSuffix(namespaceId, rosterGeneration));
 
     private byte[] FullReplaceAckKey(int namespaceId, ulong rosterGeneration, Guid generation, NodeId member)
     {
