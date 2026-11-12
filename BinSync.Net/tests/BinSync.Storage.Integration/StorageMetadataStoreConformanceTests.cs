@@ -1629,7 +1629,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         // Legacy rows without a recorded transport epoch cannot be attributed to the
         // retired incarnation, so they remain retained rather than being guessed away.
-        var legacyReplay = MakeBatch(authorB, 5, 202, 203, 2, epochBound.BatchDigest);
+        var legacyReplay = MakeBatch(authorB, 5, 202, 203, 2);
         Assert.True(store.AcceptIncomingBatch(legacyReplay).IsDuplicate);
     }
 
