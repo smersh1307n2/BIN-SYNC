@@ -23,18 +23,22 @@ public sealed class AsyncCoordinatorProcessCrashTests
     private sealed class StorageAsyncRemoteBatchStore : IAsyncProviderRemoteBatchCommitStore
     {
         private readonly IDataProvider _provider;
+        private readonly Action? _beforeCommit;
         private readonly Action? _afterCommit;
 
-        public StorageAsyncRemoteBatchStore(IDataProvider provider, Action? afterCommit = null)
+        public StorageAsyncRemoteBatchStore(
+            IDataProvider provider, Action? afterCommit = null, Action? beforeCommit = null)
         {
             _provider = provider;
             _afterCommit = afterCommit;
+            _beforeCommit = beforeCommit;
         }
 
         public ValueTask<ProviderApplyReceipt> ApplyRemoteBatchAsync(
             ProviderRemoteBatchCommit batch, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            _beforeCommit?.Invoke();
             ProviderApplyReceipt applied = _provider.ApplyRemoteBatch(batch.ApplyToken, batch.Mutations);
             _afterCommit?.Invoke();
             return ValueTask.FromResult(new ProviderApplyReceipt(
@@ -42,8 +46,11 @@ public sealed class AsyncCoordinatorProcessCrashTests
         }
     }
 
-    [Fact]
-    public async Task Async_coordinator_process_death_after_provider_commit_recovers_pending_apply()
+    [Theory]
+    [InlineData("after-pending-apply")]
+    [InlineData("after-node-checkpoint")]
+    [InlineData("after-provider-commit")]
+    public async Task Async_coordinator_process_death_at_receive_cut_recovers_pending_apply(string crashCut)
     {
         string directory = Path.Combine(Path.GetTempPath(),
             "binsync-async-coordinator-crash-" + Guid.NewGuid().ToString("N"));
@@ -81,6 +88,7 @@ public sealed class AsyncCoordinatorProcessCrashTests
         start.Environment["BIN_SYNC_ASYNC_CRASH_DIR"] = directory;
         start.Environment["BIN_SYNC_ASYNC_CRASH_READY"] = readyPath;
         start.Environment["BIN_SYNC_ASYNC_CRASH_PID"] = pidPath;
+        start.Environment["BIN_SYNC_ASYNC_CRASH_CUT"] = crashCut;
 
         System.Diagnostics.Process? child = null;
         try
@@ -125,10 +133,14 @@ public sealed class AsyncCoordinatorProcessCrashTests
             using var senderIdentity = NewNode(SenderSeed);
 
             Assert.Single(metadata.ReadPendingApplyIntents("async-process-crash", receiver.NodeId));
-            Assert.True(receiver.TryGetField(NamespaceId, Record, 0x088B, out var checkpointed));
-            Assert.Equal("async-provider-commit", Encoding.UTF8.GetString(checkpointed!.Value));
-            Assert.True(provider.TryReadCurrent(Record, 0x088B, out var providerValue));
-            Assert.Equal("async-provider-commit", Encoding.UTF8.GetString(providerValue!.Value));
+            bool nodeCheckpointed = receiver.TryGetField(NamespaceId, Record, 0x088B, out var checkpointed);
+            Assert.Equal(crashCut != "after-pending-apply", nodeCheckpointed);
+            if (nodeCheckpointed)
+                Assert.Equal("async-provider-commit", Encoding.UTF8.GetString(checkpointed!.Value));
+            bool providerCommitted = provider.TryReadCurrent(Record, 0x088B, out var providerValue);
+            Assert.Equal(crashCut == "after-provider-commit", providerCommitted);
+            if (providerCommitted)
+                Assert.Equal("async-provider-commit", Encoding.UTF8.GetString(providerValue!.Value));
             Assert.Equal(0UL, metadata.GetReceiveCursor(
                 "async-process-crash", receiver.NodeId, senderIdentity.NodeId, 1, NamespaceId));
 
@@ -163,9 +175,11 @@ public sealed class AsyncCoordinatorProcessCrashTests
         string? directory = Environment.GetEnvironmentVariable("BIN_SYNC_ASYNC_CRASH_DIR");
         string? readyPath = Environment.GetEnvironmentVariable("BIN_SYNC_ASYNC_CRASH_READY");
         string? pidPath = Environment.GetEnvironmentVariable("BIN_SYNC_ASYNC_CRASH_PID");
+        string? crashCut = Environment.GetEnvironmentVariable("BIN_SYNC_ASYNC_CRASH_CUT");
         if (string.IsNullOrWhiteSpace(directory) ||
             string.IsNullOrWhiteSpace(readyPath) ||
-            string.IsNullOrWhiteSpace(pidPath))
+            string.IsNullOrWhiteSpace(pidPath) ||
+            string.IsNullOrWhiteSpace(crashCut))
             return;
 
         using var storage = StorageDatabase.Open(directory, PartitionId);
@@ -191,9 +205,30 @@ public sealed class AsyncCoordinatorProcessCrashTests
             File.WriteAllText(readyPath, "provider-committed-before-metadata-finalize");
             Thread.Sleep(Timeout.Infinite);
         };
-        var remote = new StorageAsyncRemoteBatchStore(provider, signalAndBlock);
-        Task<BatchResult> receive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
-            acceptor, remote, node => StorageNodePersistence.Save(storage, node));
+        Task<BatchResult> receive;
+        if (crashCut == "after-pending-apply")
+        {
+            coordinator.RegisterInterestedPeer(acceptor, NamespaceId);
+            receive = acceptor.ReceiveBatchAsync(receiver,
+                beforeApply: null,
+                beforeApplyWithOperationDecisions: (batch, payload, peer) =>
+                {
+                    StorageRemoteApplyPlan plan = coordinator.BeginRemoteBatchBeforeNodeApply(
+                        batch, payload.ToArray(), peer, checked((uint)acceptor.PeerEpoch));
+                    signalAndBlock();
+                    return plan.ApplyOperations;
+                },
+                beforeAck: null,
+                receiveStateOwnedByMetadataStore: true);
+        }
+        else
+        {
+            var remote = crashCut == "after-node-checkpoint"
+                ? new StorageAsyncRemoteBatchStore(provider, beforeCommit: signalAndBlock)
+                : new StorageAsyncRemoteBatchStore(provider, afterCommit: signalAndBlock);
+            receive = coordinator.ReceiveBatchWithAsyncProviderBeforeAckAsync(
+                acceptor, remote, node => StorageNodePersistence.Save(storage, node));
+        }
         Task<bool> send = initiator.PushBatchAsync(sender, NamespaceId);
         await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
     }
