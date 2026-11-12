@@ -9,6 +9,13 @@ namespace BinSync.Storage.Integration;
 
 public sealed class StorageFullReplaceSenderTests
 {
+    private sealed class CallbackLease : IDisposable
+    {
+        private Action? _release;
+        public CallbackLease(Action release) => _release = release;
+        public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
+    }
+
     private static byte[] Id(byte value)
     {
         byte[] bytes = new byte[16];
