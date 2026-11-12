@@ -45,6 +45,24 @@ public sealed class FldBinSyncAsyncHostAdapter
         => _coordinator.PublishLocalChangesAsync(
             _provider, _persistNode, _publicationLimit, cancellationToken);
 
+    /// <summary>
+    /// Run one bounded process-isolated FLD tombstone-GC pass. Candidate discovery is
+    /// performed from a disposable provider snapshot; the final IPC operation rechecks
+    /// Host references and exact candidate versions under the FLD commit monitor.
+    /// </summary>
+    public Task<int> RunTombstoneGcPassAsync(
+        StorageNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        int limit = 256,
+        CancellationToken cancellationToken = default)
+    {
+        if (_provider is not IAsyncProviderTombstoneGc tombstoneGc)
+            throw new NotSupportedException(
+                "The configured async provider does not expose the process-isolated tombstone-GC capability.");
+        _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
+        return _coordinator.CompactTombstonesAsync(tombstoneGc, limit, cancellationToken);
+    }
+
     /// <summary>Receive one DELTA_BATCH; transport ACK follows durable FLD APPLY and Metadata finalization.</summary>
     public Task<BatchResult> ReceiveBatchAsync(
         SyncSession session,
