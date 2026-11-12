@@ -90,6 +90,20 @@ public sealed class StorageMetadataBaselineCommitTests
                     Installed = true
                 }, keys[i].Seed), roster);
         }
+        gc.AcceptRetentionCheckpoint(NamespaceRetentionCheckpointProtocol.Sign(
+            new NamespaceRetentionCheckpoint
+            {
+                NamespaceId = NamespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                CheckpointSequence = 1,
+                PreviousCheckpointDigest = new byte[NamespaceRosterProtocol.DigestSize],
+                SafeFrontier = Array.Empty<RetentionFrontierEntry>(),
+                FullReplaceGeneration = generation,
+                FullReplaceDigest = snapshotDigest,
+                FullReplaceHlcWallFloor = 100,
+                FullReplaceHlcLogicalFloor = 2
+            }, keys[0].Seed), roster, trust);
 
         metadata.RegisterInterestedPeer(Scope, local, peer, 11, NamespaceId);
         metadata.FreezeOutbound(Scope, local, NamespaceId, local, new[]
