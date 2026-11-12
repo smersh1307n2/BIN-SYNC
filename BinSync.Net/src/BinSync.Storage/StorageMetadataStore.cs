@@ -1384,8 +1384,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
                     continue;
                 }
-                if (operation.AuthorNodeId == incoming.LocalReplica)
-                    throw new InvalidDataException("An incoming route cannot introduce a new operation authored by the local replica.");
+                if (current.OutboundHighWatermarks.ContainsKey(
+                    new OutboundKey(incoming.NamespaceId, operation.AuthorNodeId)))
+                    throw new InvalidDataException("An author stream cannot be populated by both local outbound and incoming relay operations.");
                 newLedger.Add((ledgerKey,
                     new ChangeLedgerValue(operation.Fingerprint.ToArray(), false, operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence)));
                 if (!operation.RelayEligible) continue;
@@ -1701,9 +1702,9 @@ private static bool ValidateIncomingBatchForStaging(
             bool hasLedgerIdentity = state.ChangeLedger.TryGetValue(key, out var priorLedger);
             if (hasLedgerIdentity && !LedgerMatches(priorLedger!, operation))
                 throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
-            if (operation.AuthorNodeId == batch.LocalReplica &&
-                (!hasLedgerIdentity || !priorLedger!.IsLocalOutbound))
-                throw new InvalidDataException("An incoming route cannot introduce a new operation authored by the local replica.");
+            if (!hasLedgerIdentity &&
+                state.OutboundHighWatermarks.ContainsKey(new OutboundKey(batch.NamespaceId, operation.AuthorNodeId)))
+                throw new InvalidDataException("An author stream cannot be populated by both local outbound and incoming relay operations.");
 
             if (pendingIdentities.TryGetValue(key, out var pendingOperation))
             {
@@ -1769,8 +1770,9 @@ private static bool ValidateIncomingBatchForStaging(
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint within one incoming batch.");
                 continue;
             }
-            if (operation.AuthorNodeId == batch.LocalReplica)
-                throw new InvalidDataException("An incoming route cannot introduce a new operation authored by the local replica.");
+            if (current.OutboundHighWatermarks.ContainsKey(
+                new OutboundKey(batch.NamespaceId, operation.AuthorNodeId)))
+                throw new InvalidDataException("An author stream cannot be populated by both local outbound and incoming relay operations.");
 
             newLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), false, operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence));
             if (!operation.RelayEligible)
@@ -2045,6 +2047,9 @@ private static bool ValidateIncomingBatchForStaging(
             return Array.Empty<MetadataOutboundItem>();
 
         var key = new OutboundKey(namespaceId, localAuthor);
+        if (current.RelayHighWatermarks.TryGetValue(new RelayKey(namespaceId, localAuthor), out ulong existingRelayHigh) &&
+            existingRelayHigh != 0)
+            throw new InvalidDataException("An author stream cannot be populated by both local outbound and incoming relay operations.");
         var existingByChangeId = new Dictionary<BatchId, MetadataOutboundItem>();
         var newOperations = new List<MetadataFrozenOperation>(operations.Count);
         bool sawNewOperation = false;
