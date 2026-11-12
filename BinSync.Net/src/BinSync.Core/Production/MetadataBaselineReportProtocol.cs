@@ -194,6 +194,18 @@ public static class MetadataBaselineReportProtocol
         return report;
     }
 
+    public static byte[] EncodeEnvelope(MetadataBaselineReport report)
+    {
+        Validate(report);
+        if (report.Signature.Length != BatchSignature.SignatureSize)
+            throw new ArgumentException("A signed MBR1 report is required.", nameof(report));
+        byte[] payload = EncodePayload(report);
+        byte[] encoded = new byte[payload.Length + BatchSignature.SignatureSize];
+        payload.CopyTo(encoded, 0);
+        report.Signature.CopyTo(encoded, payload.Length);
+        return encoded;
+    }
+
     public static byte[] EncodePayload(MetadataBaselineReport report)
     {
         Validate(report);
@@ -261,8 +273,7 @@ public static class MetadataBaselineReportProtocol
             if (entry.TargetPeer.IsZero || entry.TargetPeer == report.MemberNodeId ||
                 entry.TargetTransportEpoch == 0 || entry.AuthorStream.IsZero || entry.IssuerEpoch == 0 ||
                 entry.FeedKind is not (MetadataBaselineFeedKind.Outbound or MetadataBaselineFeedKind.Relay) ||
-                entry.DigestAnchor is null || entry.DigestAnchor.Length != ChainDigestSize ||
-                (entry.AbsoluteFeedOffset == 0 && !IsZero(entry.DigestAnchor)))
+                entry.DigestAnchor is null || entry.DigestAnchor.Length != ChainDigestSize)
                 throw new ArgumentException("MBR1 feed entry identity or digest is invalid.", nameof(report));
             if (previousFeed is not null && CompareFeed(previousFeed, entry) >= 0)
                 throw new ArgumentException("MBR1 feed entries must be strictly sorted and unique by peer/epoch/author.", nameof(report));
