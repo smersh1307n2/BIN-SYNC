@@ -333,8 +333,18 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await Task.WhenAll(receiveAtB, sendFromA).WaitAsync(TimeSpan.FromSeconds(60));
             Assert.Equal(1, (await receiveAtB).Applied);
             Assert.Equal(1, await sendFromA);
-            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
-            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
+            ProviderMutation? tombstoneAtA = await providerA.ReadCurrentAsync(record, 0x0951);
+            ProviderMutation? tombstoneAtB = await providerB.ReadCurrentAsync(record, 0x0951);
+            Assert.NotNull(tombstoneAtA);
+            Assert.NotNull(tombstoneAtB);
+            Assert.True(tombstoneAtA!.IsTombstone);
+            Assert.True(tombstoneAtB!.IsTombstone);
+            Assert.Equal(BatchId.From(Id(0x94)), tombstoneAtA.ChangeId);
+            Assert.Equal(BatchId.From(Id(0x94)), tombstoneAtB.ChangeId);
+            Assert.Equal(17U, tombstoneAtA.OriginAuthorEpoch);
+            Assert.Equal(17U, tombstoneAtB.OriginAuthorEpoch);
+            Assert.Equal(1UL, tombstoneAtA.OriginSequence);
+            Assert.Equal(1UL, tombstoneAtB.OriginSequence);
 
             var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
             var trust = new TrustStore();
