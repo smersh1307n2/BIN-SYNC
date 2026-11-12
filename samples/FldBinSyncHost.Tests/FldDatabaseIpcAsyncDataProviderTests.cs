@@ -550,7 +550,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record));
 
             // Distinguish a conservative Metadata reservation block from provider
-            // candidate/proof rejection before invoking physical GC.
+            // candidate/proof rejection before invoking physical GC. The Host seals
+            // the committed WAL prefix under its commit guard before this final
+            // reference scan; any uncommitted overlay or unacknowledged Outbox still
+            // keeps physical reclamation fail-closed.
             metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
             using (metadataA.AcquireTombstoneGcCommitGuard(
                 scope, nodeA.NodeId, namespaceId, gcA, trust,
