@@ -580,7 +580,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(Batch(40), pending.BatchId);
                 Assert.Equal(3u, pending.IssuerEpoch);
                 Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, pending.Payload);
-                reopened.AcknowledgeOutboundBatch(scope, local, peer, 7, 9, author,
+                reopened.AcknowledgePeerBatch(scope, local, peer, 7, 9, author,
                     pending.BatchId, pending.CursorEnd, pending.BatchDigest.ToArray());
 
                 var state = reopened.GetPeerStreamState(scope, local, peer, 7, 9, author);
@@ -590,7 +590,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(pending.BatchDigest, state.LastBatchDigest);
                 Assert.Null(state.PendingBatch);
                 Assert.Throws<InvalidOperationException>(() =>
-                    reopened.AcknowledgeOutboundBatch(scope, local, peer, 7, 9, author,
+                    reopened.AcknowledgePeerBatch(scope, local, peer, 7, 9, author,
                         pending.BatchId, pending.CursorEnd, pending.BatchDigest));
             }
 
@@ -1534,7 +1534,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 };
                 store.ReserveOutboundBatch(scope, local, peer, 2, 7, local, reservation);
                 store.MarkOutboundBatchPushed(scope, local, peer, 2, 7, local, reservation.BatchId);
-                store.AcknowledgeOutboundBatch(scope, local, peer, 2, 7, local,
+                store.AcknowledgePeerBatch(scope, local, peer, 2, 7, local,
                     reservation.BatchId, 1, reservation.BatchDigest);
 
                 Assert.Equal(0UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
@@ -2005,7 +2005,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         };
         store.ReserveOutboundBatch(scope, local, peerA, 1, 7, author, Make(134, 135));
         store.MarkOutboundBatchPushed(scope, local, peerA, 1, 7, author, Batch(134));
-        store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
+        store.AcknowledgePeerBatch(scope, local, peerA, 1, 7, author,
             Batch(134), 1, Enumerable.Repeat((byte)135, 16).ToArray());
 
         Assert.Equal(0UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
@@ -2014,7 +2014,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(136, 137));
         store.MarkOutboundBatchPushed(scope, local, peerB, 1, 7, author, Batch(136));
-        store.AcknowledgeOutboundBatch(scope, local, peerB, 1, 7, author,
+        store.AcknowledgePeerBatch(scope, local, peerB, 1, 7, author,
             Batch(136), 1, Enumerable.Repeat((byte)137, 16).ToArray());
         Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
         store.CompactRelayThrough(scope, local, 7, author, 1);
@@ -2056,7 +2056,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
                 store.ReserveOutboundBatch(scope, local, peerA, 1, 7, author, Make(92));
                 store.MarkOutboundBatchPushed(scope, local, peerA, 1, 7, author, Batch(92));
-                store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
+                store.AcknowledgePeerBatch(scope, local, peerA, 1, 7, author,
                     Batch(92), 1, Enumerable.Repeat((byte)92, 16).ToArray());
 
                 Assert.Equal(0UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
@@ -2066,7 +2066,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
                 store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(93));
                 store.MarkOutboundBatchPushed(scope, local, peerB, 1, 7, author, Batch(93));
-                store.AcknowledgeOutboundBatch(scope, local, peerB, 1, 7, author,
+                store.AcknowledgePeerBatch(scope, local, peerB, 1, 7, author,
                     Batch(93), 1, Enumerable.Repeat((byte)93, 16).ToArray());
                 Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, author));
                 store.CompactOutboundThrough(scope, local, 7, author, 1);
@@ -2103,7 +2103,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         };
         store.ReserveOutboundBatch(scope, local, peer, 1, 7, local, reservation);
         store.MarkOutboundBatchPushed(scope, local, peer, 1, 7, local, reservation.BatchId);
-        store.AcknowledgeOutboundBatch(scope, local, peer, 1, 7, local,
+        store.AcknowledgePeerBatch(scope, local, peer, 1, 7, local,
             reservation.BatchId, 1, reservation.BatchDigest);
 
         Assert.Equal(1UL, store.GetSafePeerStreamCompactionCursor(scope, local, 7, local));
@@ -2131,7 +2131,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         store.ReserveOutboundBatch(scope, local, peerB, 1, 7, author, Make(82, 83));
         store.RegisterInterestedPeerStream(scope, local, peerB, 1, 7, author, 0, 0, 1, new byte[16]);
         store.MarkOutboundBatchPushed(scope, local, peerA, 1, 7, author, Batch(80));
-        store.AcknowledgeOutboundBatch(scope, local, peerA, 1, 7, author,
+        store.AcknowledgePeerBatch(scope, local, peerA, 1, 7, author,
             Batch(80), 1, Enumerable.Repeat((byte)81, 16).ToArray());
 
         var a = store.GetPeerStreamState(scope, local, peerA, 1, 7, author);
@@ -2162,7 +2162,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             };
             store.ReserveOutboundBatch(scope, local, peer, 4, 7, author, first);
             store.MarkOutboundBatchPushed(scope, local, peer, 4, 7, author, Batch(70));
-            store.AcknowledgeOutboundBatch(scope, local, peer, 4, 7, author,
+            store.AcknowledgePeerBatch(scope, local, peer, 4, 7, author,
                 Batch(70), 1, first.BatchDigest);
 
             var nextEpoch = new MetadataOutboundBatchReservation
@@ -2186,7 +2186,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Equal(2u, pending.IssuerEpoch);
             Assert.Equal(new byte[16], pending.PreviousBatchDigest);
             reopened.MarkOutboundBatchPushed("peer-reservation-epoch", local, peer, 4, 7, author, pending.BatchId);
-            reopened.AcknowledgeOutboundBatch("peer-reservation-epoch", local, peer, 4, 7, author,
+            reopened.AcknowledgePeerBatch("peer-reservation-epoch", local, peer, 4, 7, author,
                 pending.BatchId, pending.CursorEnd, pending.BatchDigest);
             Assert.Equal(2UL, reopened.GetPeerStreamState("peer-reservation-epoch", local, peer, 4, 7, author).AckedCursor);
         }
@@ -2209,13 +2209,13 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Payload = new byte[] { 1 }
         };
         store.ReserveOutboundBatch(scope, local, peer, 1, 7, author, reservation);
-        Assert.Throws<InvalidDataException>(() => store.AcknowledgeOutboundBatch(
+        Assert.Throws<InvalidDataException>(() => store.AcknowledgePeerBatch(
             scope, local, peer, 1, 7, author, Batch(50), 2, reservation.BatchDigest));
-        Assert.Throws<InvalidDataException>(() => store.AcknowledgeOutboundBatch(
+        Assert.Throws<InvalidDataException>(() => store.AcknowledgePeerBatch(
             scope, local, peer, 1, 7, author, Batch(50), 2, Enumerable.Repeat((byte)99, 16).ToArray()));
 
         store.MarkOutboundBatchPushed(scope, local, peer, 1, 7, author, Batch(50));
-        store.AcknowledgeOutboundBatch(scope, local, peer, 1, 7, author,
+        store.AcknowledgePeerBatch(scope, local, peer, 1, 7, author,
             Batch(50), 2, reservation.BatchDigest);
         Assert.Throws<InvalidDataException>(() => store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
             new MetadataOutboundBatchReservation
@@ -2374,7 +2374,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Equal(reservation.BatchId, retry.BatchId);
         Assert.Equal(reservation.Payload, retry.Payload);
         store.MarkOutboundBatchPushed(scope, local, peer, 1, 7, author, reservation.BatchId);
-        store.AcknowledgeOutboundBatch(scope, local, peer, 1, 7, author,
+        store.AcknowledgePeerBatch(scope, local, peer, 1, 7, author,
             reservation.BatchId, reservation.CursorEnd, reservation.BatchDigest);
 
         Assert.Throws<InvalidDataException>(() => store.ReserveOutboundBatch(scope, local, peer, 1, 7, author,
