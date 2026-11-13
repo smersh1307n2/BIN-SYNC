@@ -6,6 +6,7 @@ using Xunit;
 
 namespace BinSync.Storage.Integration;
 
+[Collection("Process crash integration")]
 public sealed class StorageSyncCoordinatorTests
 {
     private static async Task AwaitBothPeerOperationsAsync(Task left, Task right)
