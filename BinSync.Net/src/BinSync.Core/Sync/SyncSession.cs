@@ -728,7 +728,7 @@ public partial class SyncSession : IAsyncDisposable
                 byte frameType = raw[3];
                 byte flags = raw[4];
                 uint streamId = BinaryPrimitives.ReadUInt32LittleEndian(raw.AsSpan(5));
-                if (frameType != SessionWire.TypeAliasMap && (frameType < 0x04 || frameType > NamespaceGcFrames.FullReplaceReady))
+                if (frameType != SessionWire.TypeAliasMap && (frameType < 0x04 || frameType > NamespaceGcFrames.MetadataBaselineReport))
                     throw new FrameException("FRAME_REJECTED");
 
                 if (frameType == Frames.TYPE_WINDOW_UPDATE)
