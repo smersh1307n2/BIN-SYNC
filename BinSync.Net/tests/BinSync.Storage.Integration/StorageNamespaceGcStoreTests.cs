@@ -1611,6 +1611,7 @@ public sealed class StorageNamespaceGcStoreTests
         NodeId local = NodeId.From(Id(0x7F));
         NodeId sender = NodeId.From(Id(2));
         BatchId changeId = BatchId.From(Id(0x67));
+        MetadataIncomingBatch? staleReplay = null;
 
         IApplicationGcReferenceScanner Scanner(bool hasChangeIdReference)
             => new DelegateApplicationGcReferenceScanner((_, _, _) =>
@@ -1623,9 +1624,10 @@ public sealed class StorageNamespaceGcStoreTests
 
         try
         {
-            using var storage = StorageDatabase.Open(directory, 912);
-            using var metadata = new StorageMetadataStore(storage);
-            using var provider = new StorageDataProvider(storage);
+            using (var storage = StorageDatabase.Open(directory, 912))
+            using (var metadata = new StorageMetadataStore(storage))
+            using (var provider = new StorageDataProvider(storage))
+            {
             var gc = new StorageNamespaceGcStore(
                 storage, scope, local,
                 new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
@@ -1754,7 +1756,7 @@ public sealed class StorageNamespaceGcStoreTests
                 scope, local, namespaceId, provider,
                 16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
 
-            var staleReplay = new MetadataIncomingBatch
+            staleReplay = new MetadataIncomingBatch
             {
                 ScopeId = scope,
                 LocalReplica = local,
@@ -1771,7 +1773,22 @@ public sealed class StorageNamespaceGcStoreTests
                 HeaderFingerprint = Enumerable.Repeat((byte)0x6E, 16).ToArray(),
                 Operations = incoming.Operations
             };
-            Assert.Throws<InvalidDataException>(() => metadata.AcceptIncomingBatch(staleReplay));
+            // The replay fence must outlive the process-local metadata objects.
+            // Reopen the same durable Storage partition before attempting the stale operation.
+            }
+
+            using (var reopenedStorage = StorageDatabase.Open(directory, 912))
+            using (var reopenedMetadata = new StorageMetadataStore(reopenedStorage))
+            {
+                var reopenedGc = new StorageNamespaceGcStore(
+                    reopenedStorage, scope, local,
+                    new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
+                reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
+                Assert.False(reopenedMetadata.TryGetChangeIdentity(
+                    scope, local, namespaceId, changeId, out _, out _, out _));
+                Assert.Throws<InvalidDataException>(() =>
+                    reopenedMetadata.AcceptIncomingBatch(staleReplay!));
+            }
         }
         finally
         {
