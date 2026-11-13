@@ -1875,10 +1875,35 @@ public sealed class StorageNamespaceGcStoreTests
             Assert.True(metadata.TryGetChangeIdentity(
                 scope, local, namespaceId, changeId, out _, out _, out _));
 
-            // Once the host confirms no reference remains, the ledger row can be
-            // removed. The signed checkpoint remains the durable stale-replay fence.
-            // Reclaim a single ledger identity per durable transaction. Repeated
-            // bounded calls must make monotonic progress without skipping candidates.
+            // A roster generation transition invalidates the old all-member
+            // origin horizon even when the member set and transport epochs are
+            // unchanged. ChangeId reclamation must pause until every Active member
+            // republishes evidence for the new accepted roster generation.
+            NamespaceRosterCertificate nextRoster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(
+                    Roster(2, NamespaceRosterProtocol.ComputeDigest(roster), keys),
+                    keys[0].Seed), trust);
+            Assert.Empty(gc.ReadOriginFrontiers(nextRoster));
+            Assert.False(gc.TryReadRetentionCheckpoint(nextRoster, trust, out _));
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+            var nextReport0 = gc.AcceptOriginFrontier(
+                SignedReport(nextRoster, 0, keys, 1, 100), nextRoster);
+            var nextReport1 = gc.AcceptOriginFrontier(
+                SignedReport(nextRoster, 1, keys, 1, 90), nextRoster);
+            var nextCheckpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                nextRoster, 1, new byte[32], new[] { nextReport0, nextReport1 });
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(nextCheckpoint, keys[0].Seed),
+                nextRoster, trust);
+            Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(
+                nextRoster, trust, sender, 3, 50));
+
+            // Once the host confirms no reference remains and the current roster
+            // has a fresh signed horizon, the ledger row can be removed. The
+            // checkpoint remains the durable stale-replay fence. Reclaim a single
+            // identity per transaction and resume monotonically after restart.
             int CountLiveChangeIds() => changeIds.Count(id =>
                 metadata.TryGetChangeIdentity(scope, local, namespaceId, id, out _, out _, out _));
             // Persist one bounded page, then simulate process death before the next
