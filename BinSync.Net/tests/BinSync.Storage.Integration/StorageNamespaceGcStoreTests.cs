@@ -1542,7 +1542,18 @@ public sealed class StorageNamespaceGcStoreTests
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
             Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, sender, 3, 50));
 
-            // A host-owned immutable snapshot reference must block reclamation even
+            // A provider snapshot pins the exact source generation and its ChangeId
+            // provenance. GC must fail closed while the snapshot handle is alive,
+            // even if the application scanner reports no external reference.
+            ProviderSnapshotHandle providerSnapshot = provider.OpenSnapshot();
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, changeId, out _, out _, out _));
+            provider.ReleaseSnapshot(providerSnapshot.Token);
+
+            // A host-owned immutable snapshot reference must also block reclamation
             // after the signed causal horizon has advanced.
             Assert.Equal(0, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
