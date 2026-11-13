@@ -296,6 +296,7 @@ public sealed class StorageMetadataBaselineCommitTests
             Assert.Equal(fixture.RelayDigest, receive.LastBatchDigest);
 
             byte[] encoded = MetadataBaselineReportProtocol.EncodeEnvelope(report);
+            Assert.Equal(fixture.LocalReport, encoded);
             MetadataBaselineReport verified = MetadataBaselineReportProtocol.DecodeAndVerify(
                 encoded, fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
             Assert.Equal(report.ReportSequence, verified.ReportSequence);
