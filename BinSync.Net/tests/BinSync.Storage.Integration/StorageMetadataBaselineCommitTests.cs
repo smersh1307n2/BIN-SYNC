@@ -390,9 +390,13 @@ public sealed class StorageMetadataBaselineCommitTests
             Assert.Equal(fixture.Local, report.MemberNodeId);
             Assert.Equal(localMember.TransportPeerEpoch, report.MemberTransportEpoch);
             Assert.Equal(1UL, report.ReportSequence);
-            Assert.Equal(report, Assert.Single(fixture.Gc.ReadMetadataBaselineReports(
-                accepted, fixture.Generation, fixture.SnapshotDigest),
-                item => item.MemberNodeId == fixture.Local));
+            MetadataBaselineReport persisted = Assert.Single(
+                fixture.Gc.ReadMetadataBaselineReports(
+                    accepted, fixture.Generation, fixture.SnapshotDigest),
+                item => item.MemberNodeId == fixture.Local);
+            Assert.Equal(
+                MetadataBaselineReportProtocol.EncodeEnvelope(report),
+                MetadataBaselineReportProtocol.EncodeEnvelope(persisted));
         }
         finally
         {
