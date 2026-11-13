@@ -1701,7 +1701,7 @@ public sealed class StorageNamespaceGcStoreTests
                 NamespaceId = namespaceId,
                 BatchId = BatchId.From(Id(0x66)),
                 CursorStart = 1,
-                CursorEnd = 3,
+                CursorEnd = 1,
                 PreviousBatchDigest = new byte[16],
                 BatchDigest = Enumerable.Repeat((byte)0x68, 16).ToArray(),
                 HeaderFingerprint = Enumerable.Repeat((byte)0x69, 16).ToArray(),
@@ -1773,7 +1773,7 @@ public sealed class StorageNamespaceGcStoreTests
                 BatchId = BatchId.From(Id(0x70)),
                 IssuerEpoch = 3,
                 CursorStart = 1,
-                CursorEnd = 1,
+                CursorEnd = 3,
                 PreviousBatchDigest = new byte[16],
                 BatchDigest = Enumerable.Repeat((byte)0x71, 16).ToArray(),
                 Payload = new byte[] { 0x72 }
