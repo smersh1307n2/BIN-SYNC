@@ -3,6 +3,26 @@ using BinSync.Storage;
 
 namespace BinSync.FldHost;
 
+/// <summary>Portable identity of one installed FULL_REPLACE cut used for MBR1 exchange.</summary>
+public sealed record MetadataBaselineExchangeIdentity(
+    int NamespaceId,
+    ulong RosterGeneration,
+    byte[] RosterDigest,
+    Guid Generation,
+    byte[] SnapshotDigest);
+
+/// <summary>
+/// Provider facts read under the Host commit guard when a Joining member is promoted
+/// to Active and must publish its first MBR1 report for an already installed generation.
+/// </summary>
+public sealed record FullReplaceInstalledSnapshotIdentity(
+    Guid Generation,
+    byte[] Digest,
+    int SnapshotEntryCount,
+    ulong ProviderChangeFeedWatermark,
+    ulong HlcWallFloor,
+    uint HlcLogicalFloor);
+
 /// <summary>
 /// Application-owned, one-shot v3.1 namespace-GC round orchestration.
 /// The caller owns sessions, durable frame-sequence allocation, cadence and retries;
@@ -745,11 +765,112 @@ public sealed class V31NamespaceGcHostOrchestrator
     }
 
     /// <summary>
+    /// Convenience overload for the authority, which owns the prepared provider snapshot.
+    /// Non-authority Active members use the portable exchange identity overload.
+    /// </summary>
+    public Task<bool> ExchangeAndApplyMetadataBaselineAsync(
+        PreparedFullReplaceSnapshot prepared,
+        StorageMetadataStore metadataStore,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        string scopeId,
+        byte[] memberSeed,
+        ulong reportSequence,
+        IReadOnlyList<SyncSession> activeMemberSessions,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        return ExchangeAndApplyMetadataBaselineAsync(
+            new MetadataBaselineExchangeIdentity(
+                prepared.NamespaceId, prepared.RosterGeneration, prepared.RosterDigest,
+                prepared.Generation, prepared.Digest),
+            metadataStore, gcStore, trustStore, scopeId, memberSeed,
+            reportSequence, activeMemberSessions, cancellationToken);
+    }
+
+    /// <summary>
+    /// Capture a promoted member's MBR1 report after its roster status becomes Active.
+    /// The provider identity callback runs while the same Host commit guard used for
+    /// Metadata capture is held; the installed FRA2 evidence is re-issued against the
+    /// new accepted roster before the report is durably accepted.
+    /// </summary>
+    public MetadataBaselineReport CapturePromotedActiveMemberMetadataBaseline(
+        StorageMetadataStore metadataStore,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        string scopeId,
+        FullReplaceInstalledAck installedAck,
+        Func<FullReplaceInstalledSnapshotIdentity> readInstalledSnapshotIdentity,
+        byte[] memberSeed,
+        ulong reportSequence)
+    {
+        if (!_roundGate.Wait(0))
+            throw new InvalidOperationException("A v3.1 namespace control-plane round is already active.");
+        try
+        {
+            ArgumentNullException.ThrowIfNull(metadataStore);
+            ArgumentNullException.ThrowIfNull(gcStore);
+            ArgumentNullException.ThrowIfNull(trustStore);
+            ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+            ArgumentNullException.ThrowIfNull(installedAck);
+            ArgumentNullException.ThrowIfNull(readInstalledSnapshotIdentity);
+            ArgumentNullException.ThrowIfNull(memberSeed);
+            if (memberSeed.Length != 32 || reportSequence == 0)
+                throw new ArgumentException("A 32-byte member seed and non-zero MBR1 report sequence are required.");
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+            if (!_coordinator.UsesMetadataPeerStateStore(metadataStore) ||
+                !_coordinator.IsMetadataStoreOwnedPublication)
+                throw new InvalidOperationException(
+                    "Promoted-member MBR1 capture requires the coordinator's Metadata Store-owned publication cutover.");
+
+            using IDisposable commitGuard = _acquireHostCommitLease()
+                ?? throw new InvalidOperationException("The Host commit guard is unavailable for promoted-member MBR1 capture.");
+            if (!gcStore.TryReadNamespaceRoster(_coordinator.NamespaceId, trustStore,
+                    out NamespaceRosterCertificate? roster) || roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available for promoted-member MBR1 capture.");
+            NamespaceRosterProtocol.VerifyOrThrow(roster, trustStore);
+            NamespaceRosterMember local = FindRosterMember(roster, _coordinator.LocalReplicaId);
+            if (local.Status != NamespaceMemberStatus.Active)
+                throw new InvalidOperationException("A promoted member must be Active in the currently accepted roster before MBR1 capture.");
+            byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(roster);
+            if (installedAck.NamespaceId != roster.NamespaceId ||
+                installedAck.RosterGeneration != roster.RosterGeneration ||
+                !installedAck.RosterDigest.AsSpan().SequenceEqual(rosterDigest) ||
+                installedAck.MemberNodeId != _coordinator.LocalReplicaId ||
+                installedAck.MemberTransportEpoch != local.TransportPeerEpoch ||
+                !installedAck.Installed ||
+                installedAck.Generation == Guid.Empty ||
+                installedAck.Digest.Length != MetadataBaselineReportProtocol.DigestSize)
+                throw new InvalidDataException("Promoted-member FRA2 evidence does not match the exact current Active roster.");
+
+            FullReplaceInstalledSnapshotIdentity snapshot = readInstalledSnapshotIdentity()
+                ?? throw new InvalidOperationException("Provider did not return the installed FULL_REPLACE snapshot identity.");
+            if (snapshot.Generation != installedAck.Generation ||
+                snapshot.Digest is null ||
+                !snapshot.Digest.AsSpan().SequenceEqual(installedAck.Digest) ||
+                snapshot.SnapshotEntryCount < 0 ||
+                snapshot.HlcWallFloor != installedAck.HlcWallFloor ||
+                snapshot.HlcLogicalFloor != installedAck.HlcLogicalFloor)
+                throw new InvalidDataException("Provider's installed FULL_REPLACE identity does not match the promoted member's FRA2 evidence.");
+
+            return metadataStore.AcceptLocalFullReplaceAndCreateBaselineReport(
+                scopeId, _coordinator.LocalReplicaId, roster, installedAck,
+                snapshot.SnapshotEntryCount, snapshot.ProviderChangeFeedWatermark,
+                reportSequence, memberSeed);
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Exchanges each Active member's own signed MBR1 report with every other Active
     /// member and atomically applies the complete local baseline. This is a full-mesh
     /// exchange: a report is accepted only on a session authenticated as its signer.
     /// </summary>
     public async Task<bool> ExchangeAndApplyMetadataBaselineAsync(
+        MetadataBaselineExchangeIdentity identity,
         PreparedFullReplaceSnapshot prepared,
         StorageMetadataStore metadataStore,
         IMetadataNamespaceGcStore gcStore,
