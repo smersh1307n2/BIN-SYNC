@@ -1601,6 +1601,24 @@ public sealed class StorageMetadataBaselineCommitTests
 
             Assert.Equal(2, fixture.Gc.ReadMetadataBaselineReports(
                 rejoined, fixture.Generation, fixture.SnapshotDigest).Count);
+
+            // The signed MBR1 set now authorizes the replacement epoch's exact
+            // durable stream baselines. Persist that replacement baseline first,
+            // then retire the old local interested-peer epoch. ApplyFullReplaceBaseline
+            // must never silently discard an unfenced local epoch.
+            metadata.CompletePeerInitialSync(
+                Scope, fixture.Local, fixture.Peer, 12, NamespaceId,
+                new[]
+                {
+                    new MetadataPeerStreamBaseline(fixture.Local, 1, 7),
+                    new MetadataPeerStreamBaseline(fixture.RelayAuthor, 0, 5)
+                });
+            metadata.RetireInterestedPeer(
+                Scope, fixture.Local, fixture.Peer,
+                retiredPeerEpoch: 11, replacementPeerEpoch: 12, namespaceId: NamespaceId);
+            Assert.Equal(11U, metadata.GetRetiredPeerEpochThrough(
+                Scope, fixture.Local, fixture.Peer, NamespaceId));
+
             Assert.True(metadata.ApplyFullReplaceBaseline(
                 Scope, fixture.Local, rejoined, fixture.Generation, fixture.SnapshotDigest));
             Assert.True(metadata.IsFullReplaceBaselineApplied(
