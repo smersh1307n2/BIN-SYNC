@@ -2588,6 +2588,15 @@ private static bool ValidateIncomingBatchForStaging(
             var partitionKey = new PartitionKey(scopeId, localReplica);
             if (!TryGetPartition(partitionKey, out PartitionState? current))
                 throw new InvalidOperationException("Cannot publish an MBR1 report before the Metadata partition is initialized.");
+            int pendingApplies = current.PendingApplies.Values.Count(
+                pending => pending.Batch.NamespaceId == acceptedRoster.NamespaceId);
+            if (pendingApplies != 0)
+                throw new InvalidOperationException($"MBR1 capture is blocked by {pendingApplies} unresolved PendingApply intent(s).");
+            int pendingReservations = current.PeerStreams.Count(pair =>
+                pair.Key.NamespaceId == acceptedRoster.NamespaceId &&
+                (pair.Value.PendingBatch is not null || pair.Value.PushedCursor != pair.Value.AckedCursor));
+            if (pendingReservations != 0)
+                throw new InvalidOperationException($"MBR1 capture is blocked by {pendingReservations} immutable peer reservation(s).");
 
             StorageNamespaceGcStore gcStore = _namespaceGcStore
                 ?? throw new InvalidOperationException("Attach the durable namespace-GC store before creating an MBR1 report.");
