@@ -383,7 +383,7 @@ public sealed class StorageMetadataBaselineCommitTests
                 Assert.True(metadata.IsFullReplaceBaselineApplied(
                     Scope, local, fixture.Roster, generation, snapshotDigest));
                 Assert.Throws<InvalidDataException>(() => metadata.IsFullReplaceBaselineApplied(
-                    Scope, local, fixture.Roster, generation, Digest(99)));
+                    Scope, local, fixture.Roster, generation, Enumerable.Repeat((byte)99, 32).ToArray()));
                 Assert.Equal(0, metadata.CompactRelayThroughBounded(
                     Scope, local, NamespaceId, relayAuthor, 0, maxEntries: 1));
                 Assert.Throws<ArgumentOutOfRangeException>(() => metadata.CompactRelayThroughBounded(
