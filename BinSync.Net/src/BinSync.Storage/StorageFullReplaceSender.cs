@@ -142,7 +142,7 @@ public static class StorageFullReplaceSender
         NodeId localReplica,
         StorageSyncCoordinator coordinator,
         Func<IDisposable?> acquireHostCommitLease,
-        ulong baselineReportSequence = 1)
+        ulong baselineReportSequence)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
