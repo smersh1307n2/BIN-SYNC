@@ -1802,9 +1802,9 @@ public sealed class StorageNamespaceGcStoreTests
             Assert.Equal(0, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
                 16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
-            metadata.AcknowledgeRelay(scope, local, namespaceId, sender, 1);
-            Assert.Equal(1, metadata.CompactRelayThroughBounded(
-                scope, local, namespaceId, sender, 1, maxEntries: 16));
+            metadata.AcknowledgeRelay(scope, local, namespaceId, sender, 3);
+            Assert.Equal(3, metadata.CompactRelayThroughBounded(
+                scope, local, namespaceId, sender, 3, maxEntries: 16));
 
             // A provider snapshot pins the exact source generation and its ChangeId
             // provenance. GC must fail closed while the snapshot handle is alive,
