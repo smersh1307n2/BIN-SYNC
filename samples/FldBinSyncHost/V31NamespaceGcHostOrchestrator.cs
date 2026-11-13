@@ -531,6 +531,68 @@ public sealed class V31NamespaceGcHostOrchestrator
     }
 
     /// <summary>
+    /// Member-side Active receive. The receiver must be composed with the exact
+    /// StorageMetadataStore and a monotonic MBR1 sequence so it persists its own
+    /// report inside the FULL_REPLACE commit lease before this method returns.
+    /// </summary>
+    public async Task<FullReplaceInstalledAck?> ReceiveActiveFullReplaceAndCaptureBaselineAsync(
+        SyncSession authoritySession,
+        StorageFullReplaceReceiver receiver,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        CancellationToken cancellationToken = default)
+    {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ArgumentNullException.ThrowIfNull(authoritySession);
+            ArgumentNullException.ThrowIfNull(receiver);
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+            if (!receiver.IsBoundTo(gcStore, trustStore))
+                throw new InvalidOperationException("Active FULL_REPLACE receiver must use the exact accepted namespace-GC store and TrustStore.");
+
+            NamespaceRosterCertificate roster =
+                await _coordinator.ReceiveAndAcceptNamespaceRosterAsync(
+                    authoritySession, cancellationToken).ConfigureAwait(false);
+            if (roster.NamespaceId != _coordinator.NamespaceId ||
+                roster.AuthorityNodeId != authoritySession.PeerNodeId)
+                throw new InvalidDataException("FULL_REPLACE authority roster does not match the authenticated session.");
+            NamespaceRosterMember authority = FindRosterMember(roster, authoritySession.PeerNodeId);
+            if (authority.Status != NamespaceMemberStatus.Active ||
+                authority.TransportPeerEpoch != checked((uint)authoritySession.PeerEpoch))
+                throw new InvalidDataException("FULL_REPLACE authority is not Active at this transport epoch.");
+            NamespaceRosterMember local = FindRosterMember(roster, _coordinator.LocalReplicaId);
+            if (local.Status != NamespaceMemberStatus.Active)
+                throw new InvalidOperationException("This entry point is only for an already Active roster member.");
+
+            FullReplaceInstalledAck? acknowledgement =
+                await receiver.ReceiveTransferAsync(authoritySession, cancellationToken).ConfigureAwait(false);
+            if (acknowledgement is null)
+                return null;
+            if (!acknowledgement.Installed ||
+                acknowledgement.MemberNodeId != _coordinator.LocalReplicaId ||
+                acknowledgement.MemberTransportEpoch != local.TransportPeerEpoch ||
+                acknowledgement.RosterGeneration != roster.RosterGeneration)
+                throw new InvalidDataException("Active FULL_REPLACE receiver returned an ACK outside the accepted roster.");
+
+            MetadataBaselineReport localReport = gcStore.ReadMetadataBaselineReports(
+                    roster, acknowledgement.Generation, acknowledgement.Digest)
+                .FirstOrDefault(report => report.MemberNodeId == _coordinator.LocalReplicaId)
+                ?? throw new InvalidOperationException(
+                    "Active FULL_REPLACE receiver did not durably capture its MBR1 report under the install commit lease.");
+            if (localReport.MemberTransportEpoch != local.TransportPeerEpoch ||
+                localReport.HlcWallFloor != acknowledgement.HlcWallFloor ||
+                localReport.HlcLogicalFloor != acknowledgement.HlcLogicalFloor)
+                throw new InvalidDataException("Active receiver MBR1 report does not match its installed FRA2 ACK.");
+            return acknowledgement;
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Member-side Joining receive. It accepts the authority's signed roster before
     /// reading FULL_REPLACE frames. StorageFullReplaceReceiver performs durable staging,
     /// cross-store guarded commit, HLC/Node refresh and FRA2 persistence before sending
