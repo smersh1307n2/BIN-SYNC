@@ -293,13 +293,9 @@ public sealed class StorageNamespaceGcStoreTests
                 Assert.Equal(0, metadata.CompactReceipts(
                     scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(true)));
 
+                // Commit only the first bounded page, then close the entire Storage
+                // process scope below. Remaining receipts must be reclaimable after reopen.
                 Assert.Equal(1, metadata.CompactReceipts(
-                    scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
-                Assert.Equal(1, metadata.CompactReceipts(
-                    scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
-                Assert.Equal(1, metadata.CompactReceipts(
-                    scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
-                Assert.Equal(0, metadata.CompactReceipts(
                     scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
             }
 
@@ -311,8 +307,12 @@ public sealed class StorageNamespaceGcStoreTests
                 reopenedStorage, scope, local,
                 new StorageNamespaceGcFeatureOptions(EnableReceiptGc: true));
             reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
+            Assert.Equal(1, reopenedMetadata.CompactReceipts(
+                scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
+            Assert.Equal(1, reopenedMetadata.CompactReceipts(
+                scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
             Assert.Equal(0, reopenedMetadata.CompactReceipts(
-                scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
+                scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
             // The receipt row is gone, but the durable receive cursor/digest chain
             // must still reject the old batch after restart instead of treating it as new.
             Assert.Equal(3, compactedBatches.Count);
@@ -1831,21 +1831,12 @@ public sealed class StorageNamespaceGcStoreTests
             // bounded calls must make monotonic progress without skipping candidates.
             int CountLiveChangeIds() => changeIds.Count(id =>
                 metadata.TryGetChangeIdentity(scope, local, namespaceId, id, out _, out _, out _));
+            // Persist one bounded page, then simulate process death before the next
+            // invocation can observe completion.
             Assert.Equal(1, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
                 1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
             Assert.Equal(2, CountLiveChangeIds());
-            Assert.Equal(1, metadata.CompactChangeLedger(
-                scope, local, namespaceId, provider,
-                1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
-            Assert.Equal(1, CountLiveChangeIds());
-            Assert.Equal(1, metadata.CompactChangeLedger(
-                scope, local, namespaceId, provider,
-                1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
-            Assert.Equal(0, CountLiveChangeIds());
-            Assert.Equal(0, metadata.CompactChangeLedger(
-                scope, local, namespaceId, provider,
-                1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
 
             staleReplay = new MetadataIncomingBatch
             {
@@ -1875,8 +1866,18 @@ public sealed class StorageNamespaceGcStoreTests
                     reopenedStorage, scope, local,
                     new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
                 reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
-                Assert.False(reopenedMetadata.TryGetChangeIdentity(
-                    scope, local, namespaceId, changeId, out _, out _, out _));
+                Assert.Equal(2, new[] { changeId, secondChangeId, thirdChangeId }.Count(id =>
+                    reopenedMetadata.TryGetChangeIdentity(
+                        scope, local, namespaceId, id, out _, out _, out _)));
+                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
+                    scope, local, namespaceId, reopenedProvider,
+                    1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
+                    scope, local, namespaceId, reopenedProvider,
+                    1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+                Assert.Equal(0, new[] { changeId, secondChangeId, thirdChangeId }.Count(id =>
+                    reopenedMetadata.TryGetChangeIdentity(
+                        scope, local, namespaceId, id, out _, out _, out _)));
                 Assert.Throws<InvalidDataException>(() =>
                     reopenedMetadata.AcceptIncomingBatch(staleReplay!));
             }
