@@ -1385,6 +1385,23 @@ public sealed class StorageMetadataBaselineCommitTests
             joining = fixture.Gc.AcceptNamespaceRoster(
                 NamespaceRosterProtocol.Sign(joining, fixture.Keys[0].Seed), fixture.Trust);
 
+            // A returning member must install and sign the current FULL_REPLACE
+            // generation under its new transport epoch before promotion to Active.
+            fixture.Gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                new FullReplaceInstalledAck
+                {
+                    NamespaceId = NamespaceId,
+                    RosterGeneration = joining.RosterGeneration,
+                    RosterDigest = NamespaceRosterProtocol.ComputeDigest(joining),
+                    Generation = fixture.Generation,
+                    Digest = fixture.SnapshotDigest,
+                    MemberNodeId = fixture.Peer,
+                    MemberTransportEpoch = 12,
+                    HlcWallFloor = 100,
+                    HlcLogicalFloor = 2,
+                    Installed = true
+                }, fixture.Keys[1].Seed), joining);
+
             NamespaceRosterCertificate rejoined = new()
             {
                 NamespaceId = NamespaceId,
