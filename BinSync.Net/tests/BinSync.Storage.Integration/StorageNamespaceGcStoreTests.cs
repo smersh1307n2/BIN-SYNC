@@ -1829,22 +1829,20 @@ public sealed class StorageNamespaceGcStoreTests
             // removed. The signed checkpoint remains the durable stale-replay fence.
             // Reclaim a single ledger identity per durable transaction. Repeated
             // bounded calls must make monotonic progress without skipping candidates.
+            int CountLiveChangeIds() => changeIds.Count(id =>
+                metadata.TryGetChangeIdentity(scope, local, namespaceId, id, out _, out _, out _));
             Assert.Equal(1, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
                 1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
-            Assert.True(metadata.TryGetChangeIdentity(
-                scope, local, namespaceId, secondChangeId, out _, out _, out _));
+            Assert.Equal(2, CountLiveChangeIds());
             Assert.Equal(1, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
                 1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
-            Assert.True(metadata.TryGetChangeIdentity(
-                scope, local, namespaceId, thirdChangeId, out _, out _, out _));
+            Assert.Equal(1, CountLiveChangeIds());
             Assert.Equal(1, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
                 1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
-            foreach (BatchId id in changeIds)
-                Assert.False(metadata.TryGetChangeIdentity(
-                    scope, local, namespaceId, id, out _, out _, out _));
+            Assert.Equal(0, CountLiveChangeIds());
             Assert.Equal(0, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
                 1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
