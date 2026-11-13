@@ -2573,6 +2573,16 @@ private static bool ValidateIncomingBatchForStaging(
         {
             ThrowIfDisposed();
             var partitionKey = new PartitionKey(scopeId, localReplica);
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the durable namespace-GC store before checking a FULL_REPLACE baseline marker.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.TryReadNamespaceRoster(acceptedRoster.NamespaceId, trustStore,
+                    out NamespaceRosterCertificate? currentRoster) || currentRoster is null ||
+                currentRoster.RosterGeneration != acceptedRoster.RosterGeneration ||
+                !NamespaceRosterProtocol.ComputeDigest(currentRoster).AsSpan()
+                    .SequenceEqual(NamespaceRosterProtocol.ComputeDigest(acceptedRoster)))
+                throw new InvalidDataException("FULL_REPLACE baseline marker cannot authorize compaction for a stale or unaccepted roster.");
             if (!TryGetPartition(partitionKey, out var current))
                 return false;
             byte[] key = EncodeBaselineApplyMarkerKey(
@@ -2584,7 +2594,8 @@ private static bool ValidateIncomingBatchForStaging(
             if (value.Length != 109 || !value.AsSpan(0, 4).SequenceEqual("MBAC"u8) ||
                 value[4] != 1 || !value.AsSpan(5, 32).SequenceEqual(snapshotDigest) ||
                 !value.AsSpan(69, 32).SequenceEqual(expectedRosterDigest) ||
-                BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(101)) <= 0 ||
+                BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(101)) !=
+                    acceptedRoster.Members.Count(member => member.Status == NamespaceMemberStatus.Active) ||
                 BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(105)) < 0)
                 throw new InvalidDataException("Durable FULL_REPLACE baseline marker is malformed or does not match the requested cut.");
             return true;
