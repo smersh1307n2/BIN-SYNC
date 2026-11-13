@@ -3579,3 +3579,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [!] This is a host API/capability-boundary hardening only. It does not change MBR1 wire bytes, baseline transaction semantics, payload retention, or GC eligibility.
 - [ ] T Exact-head host adapter + BIN-SYNC/FLD Storage Integration CI must pass. Add direct negative-path orchestration coverage for a Metadata implementation that has peer-state support but omits IMetadataBaselineCommitStore.
 - [ ] Next: bounded post-marker outbound/relay payload compaction with explicit crash cuts, reopen/retry idempotency and strict contiguous-prefix assertions. Keep physical tombstone/ChangeId/receipt GC disabled.
+## 1.139. Bounded post-marker FULL_REPLACE payload compaction — 2026-11-13
+
+- [x C] Added the optional IMetadataBaselinePayloadCompactionStore capability and implemented it in StorageMetadataStore; the host orchestrator exposes a bounded entry point that requires the coordinator's exact Metadata instance and holds the Host commit lease.
+- [x C] Compaction requires the exact durable baseline marker and replays the baseline transaction's full MBR1 evidence validation before deleting anything. A changed report set or stale roster fails closed; unresolved PendingApply and immutable reservations are checked explicitly after marker validation.
+- [x C] Per-stream safe prefixes are recomputed from the local member's signed feed rows paired with each Active target's signed receive cursor/digest. The minimum across targets is capped by current peer progress and any local-consumer ACK, so writes beyond the snapshot cut remain untouched.
+- [x C] Each stream deletes at most maxEntriesPerStream rows in one atomic Storage WriteBatch. Repeated calls are idempotent; after process death/reopen the same marker and signed evidence reconstruct the same ceiling and continue from remaining rows.
+- [x T] Added a crash/reopen integration test: the first one-row page is committed, the store is reopened, the next page is removed, retries converge to zero, a post-cut outbound row remains, and a relay row with zero signed receive progress is retained.
+- [!] This is payload compaction only. It does not reclaim ChangeIds, receipts, tombstones or ghosts and does not enable physical GC.
+- [ ] T Add direct host-orchestrator negative-path coverage for a Metadata store missing the baseline-compaction capability; extend multi-peer tests with divergent receive cursors and concurrent post-cut writes.
+- [ ] Next: audit post-marker compaction across roster rejoin/retirement and epoch rollover; then implement crash-cut/retry coverage for the bounded receipt/ChangeId stages without enabling production GC.

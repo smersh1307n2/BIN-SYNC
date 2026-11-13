@@ -779,4 +779,85 @@ public sealed class StorageMetadataBaselineCommitTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public void Full_replace_baseline_payload_compaction_is_bounded_and_resumes_after_reopen()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-payload-compact-" + Guid.NewGuid().ToString("N"));
+        NodeId local = default;
+        NodeId relayAuthor = default;
+        NamespaceRosterCertificate roster = null!;
+        Guid generation = Guid.Empty;
+        byte[] snapshotDigest = Array.Empty<byte>();
+        byte[] localPublicKey = Array.Empty<byte>();
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 918))
+            {
+                Fixture fixture = CreateFixture(storage);
+                local = fixture.Local;
+                relayAuthor = fixture.RelayAuthor;
+                roster = fixture.Roster;
+                generation = fixture.Generation;
+                snapshotDigest = fixture.SnapshotDigest.ToArray();
+                localPublicKey = fixture.Keys[0].PublicKey.ToArray();
+                using StorageMetadataStore metadata = fixture.Metadata;
+
+                Assert.Throws<InvalidOperationException>(() =>
+                    metadata.CompactFullReplaceBaselinePayloadsBounded(
+                        Scope, local, roster, generation, snapshotDigest, maxEntriesPerStream: 1));
+                Assert.True(metadata.ApplyFullReplaceBaseline(
+                    Scope, local, roster, generation, snapshotDigest));
+
+                metadata.FreezeOutbound(Scope, local, NamespaceId, local, new[]
+                {
+                    new MetadataFrozenOperation
+                    {
+                        ChangeId = Batch(22), Fingerprint = Digest(22), Payload = new byte[] { 0x22 },
+                        OriginAuthorEpoch = 7
+                    }
+                });
+
+                // The first page is committed. Simulate process death before the caller
+                // can observe/acknowledge completion; the remaining page must be retryable.
+                Assert.Equal(1, metadata.CompactFullReplaceBaselinePayloadsBounded(
+                    Scope, local, roster, generation, snapshotDigest, maxEntriesPerStream: 1));
+            }
+
+            using (var storage = StorageDatabase.Open(directory, 918))
+            {
+                var gc = new StorageNamespaceGcStore(storage, Scope, local);
+                var trust = new TrustStore();
+                trust.Allow(local, localPublicKey, TrustMode.PreShared);
+                using var metadata = new StorageMetadataStore(storage);
+                metadata.AttachNamespaceGcGuard(gc, trust, Scope, local);
+
+                Assert.True(metadata.IsFullReplaceBaselineApplied(
+                    Scope, local, roster, generation, snapshotDigest));
+                Assert.Equal(1, metadata.CompactFullReplaceBaselinePayloadsBounded(
+                    Scope, local, roster, generation, snapshotDigest, maxEntriesPerStream: 1));
+                Assert.Equal(0, metadata.CompactFullReplaceBaselinePayloadsBounded(
+                    Scope, local, roster, generation, snapshotDigest, maxEntriesPerStream: 1));
+                Assert.Equal(0, metadata.CompactFullReplaceBaselinePayloadsBounded(
+                    Scope, local, roster, generation, snapshotDigest, maxEntriesPerStream: 1));
+
+                ulong lease = metadata.AcquireOutboundLease(
+                    Scope, local, NamespaceId, local, Guid.NewGuid());
+                MetadataOutboundPage outbound = metadata.ReadOutbound(
+                    Scope, local, NamespaceId, local, lease, afterSequence: 0, limit: 10);
+                MetadataOutboundItem remaining = Assert.Single(outbound.Items);
+                Assert.Equal(3UL, remaining.Sequence);
+                Assert.Equal(Batch(22), remaining.ChangeId);
+
+                MetadataRelayPage relay = metadata.ReadRelay(
+                    Scope, local, NamespaceId, relayAuthor, afterSequence: 0, limit: 10);
+                Assert.Single(relay.Items);
+                Assert.Equal(1UL, relay.Items[0].Sequence);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
 }

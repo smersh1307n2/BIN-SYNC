@@ -10,7 +10,7 @@ namespace BinSync.Storage;
 /// Durable BIN-SYNC Metadata Store backed by Fld1.Storage.
 /// Each logical metadata entry is stored under its own key; transactions persist only diffs.
 /// </summary>
-public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataProviderReceiptStreamStore, IMetadataChangeIdentityStore, IMetadataLegacyNodeLedgerStore, IMetadataFullReplaceCommitGuard, IMetadataBaselineCommitStore
+public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataProviderReceiptStreamStore, IMetadataChangeIdentityStore, IMetadataLegacyNodeLedgerStore, IMetadataFullReplaceCommitGuard, IMetadataBaselineCommitStore, IMetadataBaselinePayloadCompactionStore
 {
     private readonly object _gate;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
@@ -2566,6 +2566,150 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
             return CompactStreamPayload(partitionKey, current, 20,
                 namespaceId, originalAuthor, safeThroughSequence, relay: true, maxEntries);
+        }
+    }
+
+    /// <summary>
+    /// Removes one bounded page per baseline-covered outbound/relay stream. The exact
+    /// marker and accepted MBR1 evidence are revalidated before every page, so a caller
+    /// can retry the same generation after process death or Storage reopen. The safe
+    /// prefix is the minimum paired source-feed/receiver cursor across Active peers,
+    /// capped by current peer and local-consumer acknowledgements.
+    /// </summary>
+    public int CompactFullReplaceBaselinePayloadsBounded(
+        string scopeId, NodeId localReplica, NamespaceRosterCertificate acceptedRoster,
+        Guid generation, ReadOnlySpan<byte> snapshotDigest, int maxEntriesPerStream = 512)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        if (generation == Guid.Empty || snapshotDigest.Length != MetadataBaselineReportProtocol.DigestSize)
+            throw new ArgumentException("A FULL_REPLACE generation and 32-byte snapshot digest are required.");
+        if (maxEntriesPerStream <= 0 || maxEntriesPerStream > 4096)
+            throw new ArgumentOutOfRangeException(nameof(maxEntriesPerStream));
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!IsFullReplaceBaselineApplied(
+                    scopeId, localReplica, acceptedRoster, generation, snapshotDigest))
+                throw new InvalidOperationException(
+                    "Baseline payload compaction requires the exact durable FULL_REPLACE apply marker.");
+
+            // Re-run the transaction's evidence validation. With an exact marker this
+            // must be a no-op; a changed MBR1 evidence set fails closed before deletion.
+            if (ApplyFullReplaceBaseline(
+                    scopeId, localReplica, acceptedRoster, generation, snapshotDigest))
+                throw new InvalidOperationException(
+                    "FULL_REPLACE baseline marker changed while preparing payload compaction.");
+
+            if (!TryGetPartition(partitionKey, out var current))
+                throw new InvalidOperationException("FULL_REPLACE baseline Metadata partition is unavailable.");
+
+            int pendingApplies = current.PendingApplies.Values.Count(
+                pending => pending.Batch.NamespaceId == acceptedRoster.NamespaceId);
+            if (pendingApplies != 0)
+                throw new InvalidOperationException(
+                    $"Baseline payload compaction is blocked by {pendingApplies} unresolved PendingApply intent(s).");
+            int pendingReservations = current.PeerStreams.Count(pair =>
+                pair.Key.NamespaceId == acceptedRoster.NamespaceId &&
+                (pair.Value.PendingBatch is not null || pair.Value.PushedCursor != pair.Value.AckedCursor));
+            if (pendingReservations != 0)
+                throw new InvalidOperationException(
+                    $"Baseline payload compaction is blocked by {pendingReservations} immutable peer reservation(s).");
+
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the durable namespace-GC store before baseline payload compaction.");
+            IReadOnlyList<MetadataBaselineReport> reports =
+                gcStore.ReadMetadataBaselineReports(acceptedRoster, generation, snapshotDigest);
+            NamespaceRosterMember[] activeMembers = acceptedRoster.Members
+                .Where(member => member.Status == NamespaceMemberStatus.Active)
+                .ToArray();
+            if (reports.Count != activeMembers.Length)
+                throw new InvalidDataException("Baseline payload compaction requires one current MBR1 report per Active member.");
+
+            var reportsByMember = reports.ToDictionary(report => report.MemberNodeId);
+            if (activeMembers.Any(member => !reportsByMember.ContainsKey(member.NodeId)))
+                throw new InvalidDataException("Baseline payload compaction found an incomplete Active-member report set.");
+            NamespaceRosterMember localMember = activeMembers.FirstOrDefault(member => member.NodeId == localReplica)
+                ?? throw new InvalidOperationException("Local Metadata replica is not Active in the accepted roster.");
+            MetadataBaselineReport localReport = reportsByMember[localReplica];
+            if (localReport.MemberTransportEpoch != localMember.TransportPeerEpoch)
+                throw new InvalidDataException("Local MBR1 report transport epoch does not match the accepted roster.");
+
+            var safePrefixes = new Dictionary<(MetadataBaselineFeedKind Kind, NodeId Author), ulong>();
+            foreach (MetadataBaselineFeedEntry feed in localReport.FeedEntries)
+            {
+                NamespaceRosterMember targetMember = activeMembers.FirstOrDefault(member =>
+                    member.NodeId == feed.TargetPeer)
+                    ?? throw new InvalidDataException("Baseline feed row targets a non-Active member.");
+                if (feed.TargetTransportEpoch != targetMember.TransportPeerEpoch)
+                    throw new InvalidDataException("Baseline feed row targets a stale peer transport epoch.");
+                MetadataBaselineReport targetReport = reportsByMember[feed.TargetPeer];
+                MetadataBaselineReceiveEntry? receive = targetReport.ReceiveEntries.FirstOrDefault(entry =>
+                    entry.SenderPeer == localReplica &&
+                    entry.SenderTransportEpoch == localMember.TransportPeerEpoch &&
+                    entry.AuthorStream == feed.AuthorStream &&
+                    entry.IssuerEpoch == feed.IssuerEpoch);
+                byte[] receiveDigest = receive?.LastBatchDigest ?? new byte[16];
+                if (!receiveDigest.AsSpan().SequenceEqual(feed.DigestAnchor))
+                    throw new InvalidDataException("Baseline source feed digest does not match its target's signed receive chain.");
+
+                ulong absoluteSafe = checked(feed.AbsoluteFeedOffset + (receive?.ReceiveCursor ?? 0));
+                var stream = (feed.FeedKind, feed.AuthorStream);
+                if (safePrefixes.TryGetValue(stream, out ulong prior))
+                    safePrefixes[stream] = Math.Min(prior, absoluteSafe);
+                else
+                    safePrefixes.Add(stream, absoluteSafe);
+            }
+
+            int removedTotal = 0;
+            foreach (var pair in safePrefixes)
+            {
+                bool relay = pair.Key.Kind == MetadataBaselineFeedKind.Relay;
+                if (!relay && pair.Key.Kind != MetadataBaselineFeedKind.Outbound)
+                    throw new InvalidDataException("Baseline feed contains an unsupported source kind.");
+                NodeId author = pair.Key.Author;
+                ulong safeThrough = pair.Value;
+                bool hasPeerRequirements = current.InterestedPeers.Any(peer =>
+                        peer.NamespaceId == acceptedRoster.NamespaceId && peer.Peer != author) ||
+                    current.RequiredPeerStreams.Any(peer =>
+                        peer.NamespaceId == acceptedRoster.NamespaceId &&
+                        peer.AuthorStream == author && peer.Peer != author);
+                if (hasPeerRequirements)
+                    safeThrough = Math.Min(safeThrough,
+                        GetSafePeerCursor(current, acceptedRoster.NamespaceId, author));
+
+                if (relay)
+                {
+                    var key = new RelayKey(acceptedRoster.NamespaceId, author);
+                    if (current.RelayAck.ContainsKey(key))
+                        safeThrough = Math.Min(safeThrough,
+                            current.RelayAck.TryGetValue(key, out ulong ack) ? ack : 0);
+                    else if (!hasPeerRequirements)
+                        safeThrough = 0;
+
+                    removedTotal = checked(removedTotal + CompactRelayThroughBounded(
+                        scopeId, localReplica, acceptedRoster.NamespaceId, author,
+                        safeThrough, maxEntriesPerStream));
+                }
+                else
+                {
+                    var key = new OutboundKey(acceptedRoster.NamespaceId, author);
+                    if (current.OutboundLeases.ContainsKey(key))
+                        safeThrough = Math.Min(safeThrough,
+                            current.OutboundAck.TryGetValue(key, out ulong ack) ? ack : 0);
+                    else if (!hasPeerRequirements)
+                        safeThrough = 0;
+
+                    removedTotal = checked(removedTotal + CompactOutboundThroughBounded(
+                        scopeId, localReplica, acceptedRoster.NamespaceId, author,
+                        safeThrough, maxEntriesPerStream));
+                }
+            }
+            return removedTotal;
         }
     }
 

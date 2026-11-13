@@ -1002,6 +1002,61 @@ public sealed class V31NamespaceGcHostOrchestrator
     }
 
     /// <summary>
+    /// Compact one bounded page of payloads already covered by the applied FULL_REPLACE
+    /// baseline. The host commit lease excludes provider/Metadata writers while the
+    /// durable store revalidates the marker and member-signed evidence.
+    /// </summary>
+    public int CompactAppliedFullReplaceBaselinePayloadsBounded(
+        IMetadataStore metadataStore,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        string scopeId,
+        MetadataBaselineExchangeIdentity identity,
+        int maxEntriesPerStream = 512)
+    {
+        if (!_roundGate.Wait(0))
+            throw new InvalidOperationException("A v3.1 namespace control-plane round is already active.");
+        try
+        {
+            ArgumentNullException.ThrowIfNull(metadataStore);
+            ArgumentNullException.ThrowIfNull(gcStore);
+            ArgumentNullException.ThrowIfNull(trustStore);
+            ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+            ArgumentNullException.ThrowIfNull(identity);
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+            if (metadataStore is not IMetadataPeerStateStore peerStateStore ||
+                metadataStore is not IMetadataBaselinePayloadCompactionStore compactionStore ||
+                !_coordinator.UsesMetadataPeerStateStore(peerStateStore) ||
+                identity.NamespaceId != _coordinator.NamespaceId ||
+                identity.RosterGeneration == 0 ||
+                identity.Generation == Guid.Empty ||
+                identity.RosterDigest is null ||
+                identity.RosterDigest.Length != NamespaceRosterProtocol.DigestSize ||
+                identity.SnapshotDigest is null ||
+                identity.SnapshotDigest.Length != MetadataBaselineReportProtocol.DigestSize)
+                throw new InvalidOperationException(
+                    "Baseline payload compaction requires the coordinator-bound Metadata Store and its durable compaction capability.");
+
+            if (!gcStore.TryReadNamespaceRoster(_coordinator.NamespaceId, trustStore,
+                    out NamespaceRosterCertificate? roster) || roster is null ||
+                roster.RosterGeneration != identity.RosterGeneration ||
+                !NamespaceRosterProtocol.ComputeDigest(roster).AsSpan().SequenceEqual(identity.RosterDigest))
+                throw new InvalidOperationException(
+                    "Baseline payload compaction identity is not bound to the currently accepted roster.");
+
+            using IDisposable commitGuard = _acquireHostCommitLease()
+                ?? throw new InvalidOperationException("The Host commit guard is unavailable for baseline payload compaction.");
+            return compactionStore.CompactFullReplaceBaselinePayloadsBounded(
+                scopeId, _coordinator.LocalReplicaId, roster,
+                identity.Generation, identity.SnapshotDigest, maxEntriesPerStream);
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Accept a later Active roster on the rejoined member and only then activate its
     /// fresh local author epoch. This is deliberately separate from FULL_REPLACE commit:
     /// installed data does not grant permission to originate new local operations.

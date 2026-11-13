@@ -137,3 +137,21 @@ public interface IMetadataBaselineCommitStore
     bool ApplyFullReplaceBaseline(string scopeId, NodeId localReplica,
         NamespaceRosterCertificate acceptedRoster, Guid generation, ReadOnlySpan<byte> snapshotDigest);
 }
+
+/// <summary>
+/// Optional durable capability for bounded, retryable payload compaction after an
+/// exact proof-bound FULL_REPLACE Metadata baseline has been committed.
+/// Implementations must revalidate the durable marker/evidence and may delete only
+/// the source prefixes proven received by every Active member.
+/// </summary>
+public interface IMetadataBaselinePayloadCompactionStore
+{
+    /// <summary>
+    /// Removes at most maxEntriesPerStream payload rows from each outbound/relay stream
+    /// covered by the exact installed baseline. Repeated calls are idempotent; zero
+    /// means no further baseline-covered payload rows remain eligible for deletion.
+    /// </summary>
+    int CompactFullReplaceBaselinePayloadsBounded(
+        string scopeId, NodeId localReplica, NamespaceRosterCertificate acceptedRoster,
+        Guid generation, ReadOnlySpan<byte> snapshotDigest, int maxEntriesPerStream = 512);
+}
