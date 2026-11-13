@@ -98,6 +98,32 @@ public sealed class NamespaceGcSessionTests
         FullReplaceInstalledAck receivedAck = await ackReceive;
         Assert.Equal(generation, receivedAck.Generation);
         Assert.Equal(nodeB.NodeId, receivedAck.MemberNodeId);
+
+        var baselineReport = new MetadataBaselineReport
+        {
+            NamespaceId = roster.NamespaceId,
+            RosterGeneration = roster.RosterGeneration,
+            RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+            FullReplaceGeneration = generation,
+            SnapshotDigest = digest,
+            SnapshotEntryCount = 3,
+            ProviderChangeFeedWatermark = 17,
+            HlcWallFloor = 123,
+            HlcLogicalFloor = 4,
+            MemberNodeId = nodeB.NodeId,
+            MemberTransportEpoch = 1,
+            ReportSequence = 1,
+            FeedEntries = Array.Empty<MetadataBaselineFeedEntry>(),
+            ReceiveEntries = Array.Empty<MetadataBaselineReceiveEntry>()
+        };
+        var baselineReceive = initiator.ReceiveMetadataBaselineReportAsync(
+            roster, generation, digest);
+        await acceptor.SendMetadataBaselineReportAsync(
+            baselineReport, memberSeed, roster, generation, digest, frameSequence: 3);
+        MetadataBaselineReport receivedBaseline = await baselineReceive;
+        Assert.Equal(nodeB.NodeId, receivedBaseline.MemberNodeId);
+        Assert.Equal(17UL, receivedBaseline.ProviderChangeFeedWatermark);
+        Assert.Equal(123UL, receivedBaseline.HlcWallFloor);
     }
 
     [Fact]
