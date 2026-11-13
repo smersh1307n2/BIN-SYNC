@@ -166,29 +166,37 @@ public static class StorageFullReplaceSender
         PreparedFullReplaceSnapshot prepared = PrepareSnapshotAndPersist(
             provider, trustStore, roster, authorityNodeId, generation, authoritySeed,
             metadataStore, scopeId, localReplica);
-        NamespaceRosterMember localMember = roster.Members.FirstOrDefault(
-            member => member.NodeId == localReplica)
-            ?? throw new InvalidDataException("Source replica is absent from the accepted FULL_REPLACE roster.");
-        if (localMember.Status != NamespaceMemberStatus.Active)
-            throw new InvalidOperationException("Only an Active source member can capture the local MBR1 baseline.");
-        metadataStore.AcceptLocalFullReplaceAndCreateBaselineReport(
-            scopeId, localReplica, roster,
-            new FullReplaceInstalledAck
-            {
-                NamespaceId = roster.NamespaceId,
-                RosterGeneration = roster.RosterGeneration,
-                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
-                Generation = prepared.Generation,
-                Digest = prepared.Digest,
-                MemberNodeId = localReplica,
-                MemberTransportEpoch = localMember.TransportPeerEpoch,
-                HlcWallFloor = prepared.HlcWallFloor,
-                HlcLogicalFloor = prepared.HlcLogicalFloor,
-                Installed = true
-            },
-            prepared.ExpectedEntryCount, prepared.SourceChangeFeedWatermark,
-            baselineReportSequence, authoritySeed);
-        return prepared;
+        try
+        {
+            NamespaceRosterMember localMember = roster.Members.FirstOrDefault(
+                member => member.NodeId == localReplica)
+                ?? throw new InvalidDataException("Source replica is absent from the accepted FULL_REPLACE roster.");
+            if (localMember.Status != NamespaceMemberStatus.Active)
+                throw new InvalidOperationException("Only an Active source member can capture the local MBR1 baseline.");
+            metadataStore.AcceptLocalFullReplaceAndCreateBaselineReport(
+                scopeId, localReplica, roster,
+                new FullReplaceInstalledAck
+                {
+                    NamespaceId = roster.NamespaceId,
+                    RosterGeneration = roster.RosterGeneration,
+                    RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                    Generation = prepared.Generation,
+                    Digest = prepared.Digest,
+                    MemberNodeId = localReplica,
+                    MemberTransportEpoch = localMember.TransportPeerEpoch,
+                    HlcWallFloor = prepared.HlcWallFloor,
+                    HlcLogicalFloor = prepared.HlcLogicalFloor,
+                    Installed = true
+                },
+                prepared.ExpectedEntryCount, prepared.SourceChangeFeedWatermark,
+                baselineReportSequence, authoritySeed);
+            return prepared;
+        }
+        catch
+        {
+            prepared.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -327,6 +335,66 @@ public static class StorageFullReplaceSender
                 "Prepared FULL_REPLACE snapshot belongs to a different roster or provider generation.");
         FullReplaceTransferProtocol.VerifyBegin(
             prepared.Manifest, roster, trustStore);
+    }
+
+    /// <summary>
+    /// Verifies that a prepared source snapshot is the exact generation durably recorded
+    /// by this Metadata partition and that its local signed MBR1 evidence was accepted
+    /// for the supplied roster. This is required before a host retries transfers after
+    /// process restart or accepts a caller-supplied prepared snapshot.
+    /// </summary>
+    public static void ValidatePreparedSnapshotPersistence(
+        PreparedFullReplaceSnapshot prepared,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        NodeId localReplica,
+        IMetadataNamespaceGcStore gcStore,
+        NamespaceRosterCertificate roster)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        ArgumentNullException.ThrowIfNull(metadataStore);
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(roster);
+
+        if (!metadataStore.TryGetPreparedFullReplaceSnapshot(
+                scopeId, localReplica, prepared.NamespaceId, prepared.Generation,
+                out PreparedFullReplaceSnapshotState? state) || state is null)
+            throw new InvalidOperationException(
+                "Prepared FULL_REPLACE generation has no matching durable Metadata snapshot record.");
+
+        byte[] expectedManifest = FullReplaceTransferProtocol.EncodeBegin(prepared.Manifest);
+        if (state.Generation != prepared.Generation ||
+            state.SnapshotToken != prepared.Snapshot.Token ||
+            state.SourceFeedWatermark != prepared.SourceChangeFeedWatermark ||
+            state.HlcWallFloor != prepared.HlcWallFloor ||
+            state.HlcLogicalFloor != prepared.HlcLogicalFloor ||
+            !state.ManifestBytes.AsSpan().SequenceEqual(expectedManifest))
+            throw new InvalidDataException(
+                "Prepared FULL_REPLACE object does not match its exact durable provider snapshot record.");
+
+        NamespaceRosterMember localMember = roster.Members.FirstOrDefault(
+            member => member.NodeId == localReplica)
+            ?? throw new InvalidDataException("Local replica is absent from the accepted FULL_REPLACE roster.");
+        MetadataBaselineReport? localReport = gcStore.ReadMetadataBaselineReports(
+                roster, prepared.Generation, prepared.Digest)
+            .FirstOrDefault(report => report.MemberNodeId == localReplica);
+        if (localMember.Status != NamespaceMemberStatus.Active ||
+            localReport is null ||
+            localReport.NamespaceId != prepared.NamespaceId ||
+            localReport.RosterGeneration != roster.RosterGeneration ||
+            !localReport.RosterDigest.AsSpan().SequenceEqual(NamespaceRosterProtocol.ComputeDigest(roster)) ||
+            localReport.FullReplaceGeneration != prepared.Generation ||
+            !localReport.SnapshotDigest.AsSpan().SequenceEqual(prepared.Digest) ||
+            localReport.SnapshotEntryCount != prepared.ExpectedEntryCount ||
+            localReport.ProviderChangeFeedWatermark != prepared.SourceChangeFeedWatermark ||
+            localReport.HlcWallFloor != prepared.HlcWallFloor ||
+            localReport.HlcLogicalFloor != prepared.HlcLogicalFloor ||
+            localReport.MemberTransportEpoch != localMember.TransportPeerEpoch)
+            throw new InvalidOperationException(
+                "Prepared FULL_REPLACE generation has no matching accepted local MBR1 evidence for the current roster.");
     }
 
     /// <summary>
