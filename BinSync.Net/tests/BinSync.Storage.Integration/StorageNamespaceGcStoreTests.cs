@@ -1793,7 +1793,7 @@ public sealed class StorageNamespaceGcStoreTests
             // origin horizon independently covers their provenance.
             metadata.RegisterInterestedPeer(scope, local, sender, 2, namespaceId);
             metadata.CompletePeerInitialSync(scope, local, sender, 2, namespaceId,
-                new[] { new MetadataPeerStreamBaseline(sender, 0, 3) });
+                new[] { new MetadataPeerStreamBaseline(NodeId.From(Id(4)), 0, 3) });
             metadata.RetireInterestedPeer(scope, local, sender, 1, 2, namespaceId);
             Assert.Equal(1U, metadata.GetRetiredPeerEpoch(scope, local, sender, namespaceId));
             Assert.Equal(0, metadata.CompactChangeLedger(
