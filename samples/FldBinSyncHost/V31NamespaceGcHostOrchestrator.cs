@@ -865,9 +865,9 @@ public sealed class V31NamespaceGcHostOrchestrator
 
     /// <summary>
     /// Capture a promoted member's MBR1 report after its roster status becomes Active.
-    /// The provider identity callback runs while the same Host commit guard used for
-    /// Metadata capture is held; the installed FRA2 evidence is re-issued against the
-    /// new accepted roster before the report is durably accepted.
+    /// The provider identity callback and durable report creation run under the full
+    /// coordinator application commit barrier; the installed FRA2 evidence is re-issued
+    /// against the new accepted roster before the report is durably accepted.
     /// </summary>
     public MetadataBaselineReport CapturePromotedActiveMemberMetadataBaseline(
         StorageMetadataStore metadataStore,
@@ -894,12 +894,13 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new ArgumentException("A 32-byte member seed and non-zero MBR1 report sequence are required.");
             EnsureNamespaceGcBinding(gcStore, trustStore);
             if (!_coordinator.UsesMetadataPeerStateStore(metadataStore) ||
+                !_coordinator.UsesMetadataScope(scopeId) ||
                 !_coordinator.IsMetadataStoreOwnedPublication)
                 throw new InvalidOperationException(
                     "Promoted-member MBR1 capture requires the coordinator's Metadata Store-owned publication cutover.");
 
-            using IDisposable commitGuard = _acquireHostCommitLease()
-                ?? throw new InvalidOperationException("The Host commit guard is unavailable for promoted-member MBR1 capture.");
+            using IDisposable commitGuard =
+                _coordinator.AcquireApplicationCommitGuard(_acquireHostCommitLease);
             if (!gcStore.TryReadNamespaceRoster(_coordinator.NamespaceId, trustStore,
                     out NamespaceRosterCertificate? roster) || roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for promoted-member MBR1 capture.");
@@ -970,6 +971,7 @@ public sealed class V31NamespaceGcHostOrchestrator
             if (metadataStore is not IMetadataPeerStateStore peerStateStore ||
                 metadataStore is not IMetadataBaselineCommitStore baselineCommitStore ||
                 !_coordinator.UsesMetadataPeerStateStore(peerStateStore) ||
+                !_coordinator.UsesMetadataScope(scopeId) ||
                 identity.NamespaceId != _coordinator.NamespaceId ||
                 identity.RosterGeneration == 0 ||
                 identity.Generation == Guid.Empty ||
@@ -1042,11 +1044,11 @@ public sealed class V31NamespaceGcHostOrchestrator
                     roster, identity.Generation, identity.SnapshotDigest);
             }
 
-            // Network exchange deliberately runs without the Host commit gate.
-            // Reacquire it only for the final atomic Metadata baseline application so
-            // concurrent provider/Metadata writers cannot cross the apply boundary.
-            using IDisposable commitGuard = _acquireHostCommitLease()
-                ?? throw new InvalidOperationException("The Host commit guard is unavailable for MBR1 baseline application.");
+            // Network exchange deliberately runs without the application commit gate.
+            // Reacquire the full coordinator barrier only for the final atomic Metadata
+            // baseline application so provider/Metadata writers cannot cross the cutover.
+            using IDisposable commitGuard =
+                _coordinator.AcquireApplicationCommitGuard(_acquireHostCommitLease);
             return baselineCommitStore.ApplyFullReplaceBaseline(
                 scopeId, _coordinator.LocalReplicaId, roster,
                 identity.Generation, identity.SnapshotDigest);
@@ -1059,8 +1061,8 @@ public sealed class V31NamespaceGcHostOrchestrator
 
     /// <summary>
     /// Compact one bounded page of payloads already covered by the applied FULL_REPLACE
-    /// baseline. The host commit lease excludes provider/Metadata writers while the
-    /// durable store revalidates the marker and member-signed evidence.
+    /// baseline. The full coordinator application barrier excludes provider/Metadata
+    /// writers while the durable store revalidates the marker and member-signed evidence.
     /// </summary>
     public int CompactAppliedFullReplaceBaselinePayloadsBounded(
         IMetadataStore metadataStore,
@@ -1100,8 +1102,8 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new InvalidOperationException(
                     "Baseline payload compaction identity is not bound to the currently accepted roster.");
 
-            using IDisposable commitGuard = _acquireHostCommitLease()
-                ?? throw new InvalidOperationException("The Host commit guard is unavailable for baseline payload compaction.");
+            using IDisposable commitGuard =
+                _coordinator.AcquireApplicationCommitGuard(_acquireHostCommitLease);
             return compactionStore.CompactFullReplaceBaselinePayloadsBounded(
                 scopeId, _coordinator.LocalReplicaId, roster,
                 identity.Generation, identity.SnapshotDigest, maxEntriesPerStream);
