@@ -1483,6 +1483,129 @@ public sealed class StorageMetadataBaselineCommitTests
                 fixture.SnapshotDigest, maxEntriesPerStream: 1));
             Assert.Equal(beforeRejectedReuse, storage.LastCommitSeq);
 
+            // Rejoin does not inherit the old roster's MBR1/RCP2 evidence. Rebuild
+            // the complete current-generation proof for the same installed snapshot,
+            // now bound to the replacement transport epoch.
+            foreach (var member in rejoined.Members.Where(member =>
+                         member.Status == NamespaceMemberStatus.Active))
+            {
+                int keyIndex = member.NodeId == fixture.Local ? 0 : 1;
+                fixture.Gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                    new FullReplaceInstalledAck
+                    {
+                        NamespaceId = NamespaceId,
+                        RosterGeneration = rejoined.RosterGeneration,
+                        RosterDigest = NamespaceRosterProtocol.ComputeDigest(rejoined),
+                        Generation = fixture.Generation,
+                        Digest = fixture.SnapshotDigest,
+                        MemberNodeId = member.NodeId,
+                        MemberTransportEpoch = member.TransportPeerEpoch,
+                        HlcWallFloor = 100,
+                        HlcLogicalFloor = 2,
+                        Installed = true
+                    }, fixture.Keys[keyIndex].Seed), rejoined);
+            }
+
+            var rejoinedFrontiers = new List<AppliedOriginFrontierReport>();
+            foreach (var member in rejoined.Members.Where(member =>
+                         member.Status == NamespaceMemberStatus.Active))
+            {
+                int keyIndex = member.NodeId == fixture.Local ? 0 : 1;
+                rejoinedFrontiers.Add(fixture.Gc.AcceptOriginFrontier(
+                    OriginFrontierProtocol.Sign(new AppliedOriginFrontierReport
+                    {
+                        NamespaceId = NamespaceId,
+                        RosterGeneration = rejoined.RosterGeneration,
+                        RosterDigest = NamespaceRosterProtocol.ComputeDigest(rejoined),
+                        MemberNodeId = member.NodeId,
+                        MemberTransportEpoch = member.TransportPeerEpoch,
+                        ReportSequence = 1,
+                        FinalForAuthor = false,
+                        UnpublishedDraftCount = 0,
+                        MaxUnpublishedDraftHlcWall = 0,
+                        MaxUnpublishedDraftHlcLogical = 0,
+                        Entries = Array.Empty<AppliedOriginFrontierEntry>(),
+                        IssuedOrigins = Array.Empty<IssuedOriginFrontierEntry>()
+                    }, fixture.Keys[keyIndex].Seed), rejoined));
+            }
+
+            NamespaceRetentionCheckpoint rejoinedCheckpoint =
+                NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    rejoined, 1, new byte[NamespaceRosterProtocol.DigestSize],
+                    rejoinedFrontiers, fixture.Generation, fixture.SnapshotDigest, 100, 2);
+            fixture.Gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(rejoinedCheckpoint, fixture.Keys[0].Seed),
+                rejoined, fixture.Trust);
+            Assert.True(fixture.Gc.TryReadRetentionCheckpoint(
+                rejoined, fixture.Trust, out NamespaceRetentionCheckpoint? persistedRejoinedCheckpoint));
+            Assert.Equal(fixture.Generation, persistedRejoinedCheckpoint!.FullReplaceGeneration);
+            Assert.Equal(fixture.SnapshotDigest, persistedRejoinedCheckpoint.FullReplaceDigest);
+
+            // The new transport epoch gets fresh peer-stream state. The source-side
+            // MBR1 is captured from Storage rather than copied from the old report.
+            metadata.RegisterInterestedPeerStream(
+                Scope, fixture.Local, fixture.Peer, 12, NamespaceId,
+                fixture.Local, baselineAckedCursor: 0, streamOffset: 1,
+                issuerEpoch: 7, fixture.OutboundDigest);
+            metadata.RegisterInterestedPeerStream(
+                Scope, fixture.Local, fixture.Peer, 12, NamespaceId,
+                fixture.RelayAuthor, baselineAckedCursor: 0, streamOffset: 0,
+                issuerEpoch: 5, new byte[16]);
+
+            MetadataBaselineReport freshLocalReport =
+                metadata.AcceptLocalFullReplaceAndCreateBaselineReport(
+                    Scope, fixture.Local, rejoined,
+                    new FullReplaceInstalledAck
+                    {
+                        NamespaceId = NamespaceId,
+                        RosterGeneration = rejoined.RosterGeneration,
+                        RosterDigest = NamespaceRosterProtocol.ComputeDigest(rejoined),
+                        Generation = fixture.Generation,
+                        Digest = fixture.SnapshotDigest,
+                        MemberNodeId = fixture.Local,
+                        MemberTransportEpoch = 10,
+                        HlcWallFloor = 100,
+                        HlcLogicalFloor = 2,
+                        Installed = true
+                    },
+                    snapshotEntryCount: 4, providerChangeFeedWatermark: 40,
+                    reportSequence: 1, fixture.Keys[0].Seed);
+            Assert.Contains(freshLocalReport.FeedEntries, entry =>
+                entry.TargetPeer == fixture.Peer && entry.TargetTransportEpoch == 12 &&
+                entry.AuthorStream == fixture.Local);
+            Assert.DoesNotContain(freshLocalReport.FeedEntries, entry =>
+                entry.TargetPeer == fixture.Peer && entry.TargetTransportEpoch == 11);
+
+            MetadataBaselineReport oldPeerReport = MetadataBaselineReportProtocol.DecodeAndVerify(
+                fixture.PeerReport, fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
+            var freshPeerReport = new MetadataBaselineReport
+            {
+                NamespaceId = NamespaceId,
+                RosterGeneration = rejoined.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(rejoined),
+                FullReplaceGeneration = fixture.Generation,
+                SnapshotDigest = fixture.SnapshotDigest,
+                SnapshotEntryCount = oldPeerReport.SnapshotEntryCount,
+                ProviderChangeFeedWatermark = oldPeerReport.ProviderChangeFeedWatermark,
+                HlcWallFloor = 100,
+                HlcLogicalFloor = 2,
+                MemberNodeId = fixture.Peer,
+                MemberTransportEpoch = 12,
+                ReportSequence = 1,
+                FeedEntries = oldPeerReport.FeedEntries,
+                ReceiveEntries = oldPeerReport.ReceiveEntries
+            };
+            fixture.Gc.AcceptMetadataBaselineReport(
+                MetadataBaselineReportProtocol.Sign(freshPeerReport, fixture.Keys[1].Seed),
+                rejoined, fixture.Generation, fixture.SnapshotDigest);
+
+            Assert.Equal(2, fixture.Gc.ReadMetadataBaselineReports(
+                rejoined, fixture.Generation, fixture.SnapshotDigest).Count);
+            Assert.True(metadata.ApplyFullReplaceBaseline(
+                Scope, fixture.Local, rejoined, fixture.Generation, fixture.SnapshotDigest));
+            Assert.True(metadata.IsFullReplaceBaselineApplied(
+                Scope, fixture.Local, rejoined, fixture.Generation, fixture.SnapshotDigest));
+
             ulong lease = metadata.AcquireOutboundLease(
                 Scope, fixture.Local, NamespaceId, fixture.Local, Guid.NewGuid());
             MetadataOutboundPage outbound = metadata.ReadOutbound(
