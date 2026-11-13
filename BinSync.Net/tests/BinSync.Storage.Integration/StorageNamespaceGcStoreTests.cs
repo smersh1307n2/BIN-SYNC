@@ -1461,4 +1461,130 @@ public sealed class StorageNamespaceGcStoreTests
         }
     }
 
+
+    [Fact]
+    public void Change_id_gc_requires_signed_origin_horizon_and_empty_external_references_and_keeps_replay_fence()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-changeid-gc-proof-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        const string scope = "changeid-gc-proof";
+        const int namespaceId = 19;
+        NodeId local = NodeId.From(Id(0x7F));
+        NodeId sender = NodeId.From(Id(2));
+        BatchId changeId = BatchId.From(Id(0x67));
+
+        IApplicationGcReferenceScanner Scanner(bool hasChangeIdReference)
+            => new DelegateApplicationGcReferenceScanner((_, _, _) =>
+                new DelegateApplicationGcReferenceScan(
+                    new MemoryStream(),
+                    new ApplicationDraftHorizon(0, 0, 0),
+                    (_, _, _, _) => false,
+                    id => id == changeId && hasChangeIdReference,
+                    (_, _) => false));
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 912);
+            using var metadata = new StorageMetadataStore(storage);
+            var gc = new StorageNamespaceGcStore(
+                storage, scope, local,
+                new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
+            NamespaceRosterCertificate roster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(Roster(1, new byte[32], keys), keys[0].Seed), trust);
+            metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
+
+            metadata.RegisterInterestedPeer(scope, local, sender, 1, namespaceId);
+            var incoming = new MetadataIncomingBatch
+            {
+                ScopeId = scope,
+                LocalReplica = local,
+                SenderPeer = sender,
+                SenderEpoch = 3,
+                TransportPeerEpoch = 1,
+                AuthorStreamNodeId = sender,
+                NamespaceId = namespaceId,
+                BatchId = BatchId.From(Id(0x66)),
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)0x68, 16).ToArray(),
+                HeaderFingerprint = Enumerable.Repeat((byte)0x69, 16).ToArray(),
+                Operations = new[]
+                {
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = sender,
+                        ChangeId = changeId,
+                        OriginAuthorEpoch = 3,
+                        OriginSequence = 50,
+                        Fingerprint = Enumerable.Repeat((byte)0x6A, 16).ToArray(),
+                        Payload = new byte[] { 0x6B }
+                    }
+                }
+            };
+            Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, changeId, out _, out OperationOrigin origin, out _));
+            Assert.Equal(sender, origin.AuthorNodeId);
+            Assert.Equal(3U, origin.AuthorEpoch);
+            Assert.Equal(50UL, origin.Sequence);
+
+            // The signed all-active-member horizon is the first independent gate.
+            var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+            var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { report0, report1 });
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+            Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, sender, 3, 50));
+
+            // A host-owned immutable snapshot reference must block reclamation even
+            // after the signed causal horizon has advanced.
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, EmptyProvider(),
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: true)));
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, changeId, out _, out _, out _));
+
+            // Once the host confirms no reference remains, the ledger row can be
+            // removed. The signed checkpoint remains the durable stale-replay fence.
+            Assert.Equal(1, metadata.CompactChangeLedger(
+                scope, local, namespaceId, EmptyProvider(),
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+            Assert.False(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, changeId, out _, out _, out _));
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, EmptyProvider(),
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+
+            var staleReplay = new MetadataIncomingBatch
+            {
+                ScopeId = scope,
+                LocalReplica = local,
+                SenderPeer = sender,
+                SenderEpoch = 3,
+                TransportPeerEpoch = 1,
+                AuthorStreamNodeId = sender,
+                NamespaceId = namespaceId,
+                BatchId = BatchId.From(Id(0x6C)),
+                CursorStart = 2,
+                CursorEnd = 2,
+                PreviousBatchDigest = incoming.BatchDigest.ToArray(),
+                BatchDigest = Enumerable.Repeat((byte)0x6D, 16).ToArray(),
+                HeaderFingerprint = Enumerable.Repeat((byte)0x6E, 16).ToArray(),
+                Operations = incoming.Operations
+            };
+            Assert.Throws<InvalidDataException>(() => metadata.AcceptIncomingBatch(staleReplay));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+
+        static IDataProvider EmptyProvider() => new EmptyGcDataProvider();
+    }
+
+
 }
