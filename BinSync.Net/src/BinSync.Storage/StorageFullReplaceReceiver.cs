@@ -24,6 +24,8 @@ public sealed class StorageFullReplaceReceiver
     private readonly byte[] _localMemberSeed;
     private readonly Func<IFullReplaceCommitLease?> _acquireCommitGuard;
     private readonly Action<ulong, uint> _advanceHlcAndRefresh;
+    private readonly StorageMetadataStore? _metadataStore;
+    private readonly ulong _baselineReportSequence;
     private NamespaceRosterCertificate? _roster;
     private FullReplaceTransferProtocol.Begin? _manifest;
 
@@ -40,7 +42,9 @@ public sealed class StorageFullReplaceReceiver
         string scopeId,
         IApplicationGcReferenceScanner externalState,
         Func<IFullReplaceCommitLease?> acquireCommitGuard,
-        Action<ulong, uint> advanceHlcAndRefresh)
+        Action<ulong, uint> advanceHlcAndRefresh,
+        StorageMetadataStore? metadataStore = null,
+        ulong baselineReportSequence = 1)
     {
         ArgumentNullException.ThrowIfNull(provider);
         _provider = provider;
@@ -66,6 +70,13 @@ public sealed class StorageFullReplaceReceiver
         _acquireCommitGuard = acquireCommitGuard
             ?? throw new ArgumentNullException(nameof(acquireCommitGuard));
         _advanceHlcAndRefresh = advanceHlcAndRefresh ?? throw new ArgumentNullException(nameof(advanceHlcAndRefresh));
+        if (metadataStore is not null &&
+            (baselineReportSequence == 0 || !metadataStore.IsBoundTo(gcStore as StorageNamespaceGcStore
+                ?? throw new ArgumentException("MBR1 receiver capture requires StorageNamespaceGcStore.", nameof(gcStore)),
+                scopeId, localMember)))
+            throw new ArgumentException("MBR1 receiver capture requires a non-zero report sequence and the exact shared Metadata/namespace-GC scope.", nameof(metadataStore));
+        _metadataStore = metadataStore;
+        _baselineReportSequence = baselineReportSequence;
         _namespaceId = namespaceId;
         _authorityPeer = authorityPeer;
         _authorityPeerEpoch = authorityPeerEpoch;
@@ -257,7 +268,18 @@ public sealed class StorageFullReplaceReceiver
                     Installed = true
                 };
                 byte[] signed = FullReplaceInstalledAckProtocol.Sign(acknowledgement, _localMemberSeed);
-                return _gcStore.AcceptFullReplaceInstalledAck(signed, roster);
+                FullReplaceInstalledAck accepted = _gcStore.AcceptFullReplaceInstalledAck(signed, roster);
+                NamespaceRosterMember localMember = roster.Members.FirstOrDefault(
+                    member => member.NodeId == _localMember)
+                    ?? throw new InvalidDataException("Local member disappeared from the accepted FULL_REPLACE roster.");
+                if (_metadataStore is not null && localMember.Status == NamespaceMemberStatus.Active)
+                {
+                    _ = _metadataStore.AcceptLocalFullReplaceAndCreateBaselineReport(
+                        _scopeId, _localMember, roster, accepted,
+                        manifest.ExpectedEntryCount, manifest.SourceChangeFeedWatermark,
+                        _baselineReportSequence, _localMemberSeed);
+                }
+                return accepted;
             }
         }
     }
