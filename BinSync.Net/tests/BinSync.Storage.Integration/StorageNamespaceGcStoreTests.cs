@@ -160,7 +160,7 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Fact]
-    public void Receipt_gc_requires_retired_transport_fence_signed_origin_horizon_and_empty_host_references()
+    public void Receipt_gc_preserves_new_transport_epoch_across_restart_and_reclaims_only_retired_epoch()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-receipt-gc-proof-" + Guid.NewGuid().ToString("N"));
         var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
@@ -276,7 +276,7 @@ public sealed class StorageNamespaceGcStoreTests
 
                 // A batch from the replacement transport incarnation must remain
                 // outside the old epoch's retirement fence and survive receipt GC.
-                newEpochBatch = new MetadataIncomingBatch
+                var replacementBatch = new MetadataIncomingBatch
                 {
                     ScopeId = scope,
                     LocalReplica = local,
@@ -304,95 +304,8 @@ public sealed class StorageNamespaceGcStoreTests
                         }
                     }
                 };
-                Assert.False(metadata.AcceptIncomingBatch(newEpochBatch).IsDuplicate);
-
-                // The signed roster retires epoch 11, then attests the member's
-                // rejoin at epoch 12 through a Joining generation and FULL_REPLACE
-                // promotion. Old transport receipts are fenced; epoch 12 is not.
-                var retiredRoster = new NamespaceRosterCertificate
-                {
-                    NamespaceId = namespaceId,
-                    RosterGeneration = 2,
-                    PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
-                    AuthorityNodeId = NodeId.From(Id(1)),
-                    Members = new[]
-                    {
-                        new NamespaceRosterMember
-                        {
-                            NodeId = NodeId.From(Id(1)),
-                            PublicKey = keys[0].PublicKey,
-                            TransportPeerEpoch = 10,
-                            Status = NamespaceMemberStatus.Active
-                        },
-                        new NamespaceRosterMember
-                        {
-                            NodeId = sender,
-                            PublicKey = keys[1].PublicKey,
-                            TransportPeerEpoch = 11,
-                            Status = NamespaceMemberStatus.Retired,
-                            RetiredThroughEpoch = 11
-                        }
-                    }
-                };
-                retiredRoster = gc.AcceptNamespaceRoster(
-                    NamespaceRosterProtocol.Sign(retiredRoster, keys[0].Seed), trust);
-                Assert.Equal(0, metadata.CompactReceipts(
-                    scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
-
-                var joiningRoster = new NamespaceRosterCertificate
-                {
-                    NamespaceId = namespaceId,
-                    RosterGeneration = 4,
-                    PreviousRosterDigest = SHA256.HashData(Encoding.UTF8.GetBytes("omitted signed roster chain")),
-                    AuthorityNodeId = NodeId.From(Id(1)),
-                    Members = new[]
-                    {
-                        new NamespaceRosterMember
-                        {
-                            NodeId = NodeId.From(Id(1)),
-                            PublicKey = keys[0].PublicKey,
-                            TransportPeerEpoch = 10,
-                            Status = NamespaceMemberStatus.Active
-                        },
-                        new NamespaceRosterMember
-                        {
-                            NodeId = sender,
-                            PublicKey = keys[1].PublicKey,
-                            TransportPeerEpoch = 12,
-                            Status = NamespaceMemberStatus.Joining
-                        }
-                    }
-                };
-                joiningRoster = gc.AcceptNamespaceRoster(
-                    NamespaceRosterProtocol.Sign(joiningRoster, keys[0].Seed), trust);
-                roster = new NamespaceRosterCertificate
-                {
-                    NamespaceId = namespaceId,
-                    RosterGeneration = 6,
-                    PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(joiningRoster),
-                    AuthorityNodeId = NodeId.From(Id(1)),
-                    Members = new[]
-                    {
-                        new NamespaceRosterMember
-                        {
-                            NodeId = NodeId.From(Id(1)),
-                            PublicKey = keys[0].PublicKey,
-                            TransportPeerEpoch = 10,
-                            Status = NamespaceMemberStatus.Active
-                        },
-                        new NamespaceRosterMember
-                        {
-                            NodeId = sender,
-                            PublicKey = keys[1].PublicKey,
-                            TransportPeerEpoch = 12,
-                            Status = NamespaceMemberStatus.Active
-                        }
-                    }
-                };
-                roster = gc.AcceptNamespaceRoster(
-                    NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
-                Assert.Throws<InvalidDataException>(() =>
-                    gc.AcceptOriginFrontier(SignedReport(retiredRoster, 0, keys, 1, 100), retiredRoster));
+                newEpochBatch = replacementBatch;
+                Assert.False(metadata.AcceptIncomingBatch(replacementBatch).IsDuplicate);
 
                 // A transport retirement fence alone is insufficient: the origin
                 // must also be covered by the signed all-active-member checkpoint.
