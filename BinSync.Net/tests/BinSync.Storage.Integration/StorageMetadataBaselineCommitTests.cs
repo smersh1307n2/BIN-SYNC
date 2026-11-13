@@ -372,10 +372,20 @@ public sealed class StorageMetadataBaselineCommitTests
                 peer = fixture.Peer;
                 relayAuthor = fixture.RelayAuthor;
 
+                Assert.False(metadata.IsFullReplaceBaselineApplied(
+                    Scope, local, fixture.Roster, generation, snapshotDigest));
                 ulong before = storage.LastCommitSeq;
                 Assert.True(metadata.ApplyFullReplaceBaseline(
                     Scope, local, fixture.Roster, generation, snapshotDigest));
                 Assert.Equal(before + 1, storage.LastCommitSeq);
+                Assert.True(metadata.IsFullReplaceBaselineApplied(
+                    Scope, local, fixture.Roster, generation, snapshotDigest));
+                Assert.Throws<InvalidDataException>(() => metadata.IsFullReplaceBaselineApplied(
+                    Scope, local, fixture.Roster, generation, Digest(99)));
+                Assert.Equal(0, metadata.CompactRelayThroughBounded(
+                    Scope, local, NamespaceId, relayAuthor, 0, maxEntries: 1));
+                Assert.Throws<ArgumentOutOfRangeException>(() => metadata.CompactRelayThroughBounded(
+                    Scope, local, NamespaceId, relayAuthor, 0, maxEntries: 4097));
                 Assert.True(metadata.IsPeerInitialSyncComplete(Scope, local, peer, 11, NamespaceId));
 
                 MetadataPeerStreamState outbound = metadata.GetPeerStreamState(
@@ -433,6 +443,8 @@ public sealed class StorageMetadataBaselineCommitTests
                 trust.Allow(local, BatchSignature.GenerateKeyPair().PublicKey, TrustMode.PreShared);
                 // The persisted marker and stream rows are validated during Metadata partition reopen.
                 using var metadata = new StorageMetadataStore(storage);
+                Assert.True(metadata.IsFullReplaceBaselineApplied(
+                    Scope, local, CreateFixture(storage).Roster, generation, snapshotDigest));
                 Assert.True(metadata.IsPeerInitialSyncComplete(Scope, local, peer, 11, NamespaceId));
                 Assert.Equal(1UL, metadata.GetPeerStreamState(
                     Scope, local, peer, 11, NamespaceId, local).StreamOffset);
