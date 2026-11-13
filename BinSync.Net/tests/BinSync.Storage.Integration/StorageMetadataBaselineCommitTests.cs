@@ -384,6 +384,18 @@ public sealed class StorageMetadataBaselineCommitTests
                     Scope, local, fixture.Roster, generation, snapshotDigest));
                 Assert.Throws<InvalidDataException>(() => metadata.IsFullReplaceBaselineApplied(
                     Scope, local, fixture.Roster, generation, Enumerable.Repeat((byte)99, 32).ToArray()));
+                var staleRoster = new NamespaceRosterCertificate
+                {
+                    NamespaceId = fixture.Roster.NamespaceId,
+                    RosterGeneration = fixture.Roster.RosterGeneration + 1,
+                    PreviousRosterDigest = fixture.Roster.PreviousRosterDigest,
+                    AuthorityNodeId = fixture.Roster.AuthorityNodeId,
+                    Members = fixture.Roster.Members,
+                    RetiredOriginEpochs = fixture.Roster.RetiredOriginEpochs,
+                    Signature = fixture.Roster.Signature
+                };
+                Assert.Throws<InvalidDataException>(() => metadata.IsFullReplaceBaselineApplied(
+                    Scope, local, staleRoster, generation, snapshotDigest));
                 Assert.Equal(0, metadata.CompactRelayThroughBounded(
                     Scope, local, NamespaceId, relayAuthor, 0, maxEntries: 1));
                 Assert.Throws<ArgumentOutOfRangeException>(() => metadata.CompactRelayThroughBounded(
@@ -442,9 +454,10 @@ public sealed class StorageMetadataBaselineCommitTests
             {
                 var gc = new StorageNamespaceGcStore(storage, Scope, local);
                 var trust = new TrustStore();
-                trust.Allow(local, BatchSignature.GenerateKeyPair().PublicKey, TrustMode.PreShared);
+                trust.Allow(local, fixture.Keys[0].PublicKey, TrustMode.PreShared);
                 // The persisted marker and stream rows are validated during Metadata partition reopen.
                 using var metadata = new StorageMetadataStore(storage);
+                metadata.AttachNamespaceGcGuard(gc, trust, Scope, local);
                 Assert.True(metadata.IsFullReplaceBaselineApplied(
                     Scope, local, roster, generation, snapshotDigest));
                 Assert.True(metadata.IsPeerInitialSyncComplete(Scope, local, peer, 11, NamespaceId));
