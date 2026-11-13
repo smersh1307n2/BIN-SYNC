@@ -9,7 +9,26 @@ public sealed record MetadataBaselineExchangeIdentity(
     ulong RosterGeneration,
     byte[] RosterDigest,
     Guid Generation,
-    byte[] SnapshotDigest);
+    byte[] SnapshotDigest)
+{
+    public static MetadataBaselineExchangeIdentity FromInstalledAck(
+        NamespaceRosterCertificate acceptedRoster, FullReplaceInstalledAck installedAck)
+    {
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        ArgumentNullException.ThrowIfNull(installedAck);
+        byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(acceptedRoster);
+        if (!installedAck.Installed ||
+            installedAck.NamespaceId != acceptedRoster.NamespaceId ||
+            installedAck.RosterGeneration != acceptedRoster.RosterGeneration ||
+            !installedAck.RosterDigest.AsSpan().SequenceEqual(rosterDigest) ||
+            installedAck.Generation == Guid.Empty ||
+            installedAck.Digest.Length != MetadataBaselineReportProtocol.DigestSize)
+            throw new InvalidDataException("Installed FRA2 ACK does not identify the supplied accepted roster and FULL_REPLACE cut.");
+        return new MetadataBaselineExchangeIdentity(
+            acceptedRoster.NamespaceId, acceptedRoster.RosterGeneration,
+            rosterDigest, installedAck.Generation, installedAck.Digest.ToArray());
+    }
+}
 
 /// <summary>
 /// Provider facts read under the Host commit guard when a Joining member is promoted
