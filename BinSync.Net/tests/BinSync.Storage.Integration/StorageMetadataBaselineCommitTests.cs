@@ -358,6 +358,7 @@ public sealed class StorageMetadataBaselineCommitTests
             byte[] relayDigest;
             NodeId local, peer, relayAuthor;
             NamespaceRosterCertificate roster;
+            byte[] localPublicKey;
 
             using (var storage = StorageDatabase.Open(directory, 912))
             {
@@ -372,6 +373,7 @@ public sealed class StorageMetadataBaselineCommitTests
                 local = fixture.Local;
                 peer = fixture.Peer;
                 roster = fixture.Roster;
+                localPublicKey = fixture.Keys[0].PublicKey.ToArray();
                 relayAuthor = fixture.RelayAuthor;
 
                 Assert.False(metadata.IsFullReplaceBaselineApplied(
@@ -454,7 +456,7 @@ public sealed class StorageMetadataBaselineCommitTests
             {
                 var gc = new StorageNamespaceGcStore(storage, Scope, local);
                 var trust = new TrustStore();
-                trust.Allow(local, fixture.Keys[0].PublicKey, TrustMode.PreShared);
+                trust.Allow(local, localPublicKey, TrustMode.PreShared);
                 // The persisted marker and stream rows are validated during Metadata partition reopen.
                 using var metadata = new StorageMetadataStore(storage);
                 metadata.AttachNamespaceGcGuard(gc, trust, Scope, local);
