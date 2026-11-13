@@ -381,7 +381,7 @@ public sealed class StorageMetadataBaselineCommitTests
 
             MetadataBaselineReport report = fixture.Metadata.AcceptLocalFullReplaceAndCreateBaselineReport(
                 Scope, fixture.Local, accepted, installedAck,
-                snapshotEntryCount: 3, providerChangeFeedWatermark: 40,
+                snapshotEntryCount: 4, providerChangeFeedWatermark: 40,
                 reportSequence: 1, fixture.Keys[0].Seed);
 
             Assert.Equal(accepted.RosterGeneration, report.RosterGeneration);
