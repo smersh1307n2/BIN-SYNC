@@ -11,6 +11,12 @@ namespace BinSync.Storage.Integration;
 /// Each test kills the child at a distinct durability boundary, then reopens the
 /// same Storage partition and proves recovery or duplicate replay before ACK.
 /// </summary>
+[CollectionDefinition("Process crash integration", DisableParallelization = true)]
+public sealed class ProcessCrashIntegrationCollection
+{
+}
+
+[Collection("Process crash integration")]
 public sealed class AsyncCoordinatorProcessCrashTests
 {
     private const ulong PartitionId = 481;
