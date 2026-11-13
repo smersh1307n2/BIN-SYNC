@@ -60,11 +60,12 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         byte[] digest = new byte[32];
         digest[0] = 0x72;
 
-        using var writerStarted = new ManualResetEventSlim();
+        var writerStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         using var commitGuard = database.AcquireCommitGuard();
         Task writer = Task.Run(() =>
         {
-            writerStarted.Set();
+            writerStarted.TrySetResult(true);
             provider.BeginFullReplace(generation, 0, 1, digest);
             provider.StageFullReplacePage(generation, 0, new[]
             {
@@ -82,8 +83,9 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             });
         });
 
-        Assert.True(writerStarted.Wait(TimeSpan.FromSeconds(5)));
-        Assert.False(writer.Wait(TimeSpan.FromMilliseconds(150)));
+        await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(TimeSpan.FromMilliseconds(150));
+        Assert.False(writer.IsCompleted);
         commitGuard.Dispose();
         await writer.WaitAsync(TimeSpan.FromSeconds(5));
 
