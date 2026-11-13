@@ -345,6 +345,62 @@ public sealed class StorageMetadataBaselineCommitTests
     }
 
     [Fact]
+    public void Newly_active_member_can_capture_a_fresh_mbr1_report_for_its_installed_generation()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-promoted-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 913);
+            Fixture fixture = CreateFixture(storage);
+            var promotedRoster = new NamespaceRosterCertificate
+            {
+                NamespaceId = fixture.Roster.NamespaceId,
+                RosterGeneration = fixture.Roster.RosterGeneration + 1,
+                PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(fixture.Roster),
+                AuthorityNodeId = fixture.Roster.AuthorityNodeId,
+                Members = fixture.Roster.Members,
+                RetiredOriginEpochs = fixture.Roster.RetiredOriginEpochs
+            };
+            NamespaceRosterCertificate accepted = fixture.Gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(promotedRoster, fixture.Keys[0].Seed), fixture.Trust);
+            byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(accepted);
+            var localMember = accepted.Members.Single(member => member.NodeId == fixture.Local);
+            var installedAck = new FullReplaceInstalledAck
+            {
+                NamespaceId = accepted.NamespaceId,
+                RosterGeneration = accepted.RosterGeneration,
+                RosterDigest = rosterDigest,
+                Generation = fixture.Generation,
+                Digest = fixture.SnapshotDigest,
+                MemberNodeId = fixture.Local,
+                MemberTransportEpoch = localMember.TransportPeerEpoch,
+                HlcWallFloor = 100,
+                HlcLogicalFloor = 2,
+                Installed = true
+            };
+
+            MetadataBaselineReport report = fixture.Metadata.AcceptLocalFullReplaceAndCreateBaselineReport(
+                Scope, fixture.Local, accepted, installedAck,
+                snapshotEntryCount: 3, providerChangeFeedWatermark: 40,
+                reportSequence: 1, fixture.Keys[0].Seed);
+
+            Assert.Equal(accepted.RosterGeneration, report.RosterGeneration);
+            Assert.Equal(fixture.Generation, report.FullReplaceGeneration);
+            Assert.Equal(fixture.SnapshotDigest, report.SnapshotDigest);
+            Assert.Equal(fixture.Local, report.MemberNodeId);
+            Assert.Equal(localMember.TransportPeerEpoch, report.MemberTransportEpoch);
+            Assert.Equal(1UL, report.ReportSequence);
+            Assert.Equal(report, Assert.Single(fixture.Gc.ReadMetadataBaselineReports(
+                accepted, fixture.Generation, fixture.SnapshotDigest),
+                item => item.MemberNodeId == fixture.Local));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Full_replace_baseline_commits_both_directions_atomically_and_survives_reopen()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-apply-" + Guid.NewGuid().ToString("N"));
