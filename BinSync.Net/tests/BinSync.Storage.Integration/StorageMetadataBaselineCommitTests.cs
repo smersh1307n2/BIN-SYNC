@@ -1385,6 +1385,51 @@ public sealed class StorageMetadataBaselineCommitTests
             joining = fixture.Gc.AcceptNamespaceRoster(
                 NamespaceRosterProtocol.Sign(joining, fixture.Keys[0].Seed), fixture.Trust);
 
+            // Establish fresh current-generation evidence for the Active roster
+            // before the returning member can ACK and be promoted.
+            byte[] joiningRosterDigest = NamespaceRosterProtocol.ComputeDigest(joining);
+            fixture.Gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                new AppliedOriginFrontierReport
+                {
+                    NamespaceId = NamespaceId,
+                    RosterGeneration = joining.RosterGeneration,
+                    RosterDigest = joiningRosterDigest,
+                    MemberNodeId = fixture.Local,
+                    MemberTransportEpoch = 10,
+                    ReportSequence = 1,
+                    FinalForAuthor = false,
+                    UnpublishedDraftCount = 0,
+                    MaxUnpublishedDraftHlcWall = 0,
+                    MaxUnpublishedDraftHlcLogical = 0,
+                    Entries = Array.Empty<AppliedOriginFrontierEntry>(),
+                    IssuedOrigins = Array.Empty<IssuedOriginFrontierEntry>()
+                }, fixture.Keys[0].Seed), joining);
+
+            fixture.Gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                new FullReplaceInstalledAck
+                {
+                    NamespaceId = NamespaceId,
+                    RosterGeneration = joining.RosterGeneration,
+                    RosterDigest = joiningRosterDigest,
+                    Generation = fixture.Generation,
+                    Digest = fixture.SnapshotDigest,
+                    MemberNodeId = fixture.Local,
+                    MemberTransportEpoch = 10,
+                    HlcWallFloor = 100,
+                    HlcLogicalFloor = 2,
+                    Installed = true
+                }, fixture.Keys[0].Seed), joining);
+
+            IReadOnlyList<AppliedOriginFrontierReport> joiningFrontiers =
+                fixture.Gc.ReadOriginFrontiers(joining);
+            NamespaceRetentionCheckpoint joiningCheckpoint =
+                NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    joining, 1, new byte[NamespaceRosterProtocol.DigestSize], joiningFrontiers,
+                    fixture.Generation, fixture.SnapshotDigest, 100, 2);
+            fixture.Gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(joiningCheckpoint, fixture.Keys[0].Seed),
+                joining, fixture.Trust);
+
             // A returning member must install and sign the current FULL_REPLACE
             // generation under its new transport epoch before promotion to Active.
             fixture.Gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
