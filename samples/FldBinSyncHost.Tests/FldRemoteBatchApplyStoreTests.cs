@@ -70,8 +70,11 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             releaseGuard.Wait();
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
+        var writerStarted = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         Task writer = Task.Run(() =>
         {
+            writerStarted.TrySetResult(true);
             provider.BeginFullReplace(generation, 0, 1, digest);
             provider.StageFullReplacePage(generation, 0, new[]
             {
@@ -92,6 +95,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         try
         {
             await guardAcquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
             await Task.Delay(TimeSpan.FromMilliseconds(150));
             Assert.False(writer.IsCompleted);
         }
