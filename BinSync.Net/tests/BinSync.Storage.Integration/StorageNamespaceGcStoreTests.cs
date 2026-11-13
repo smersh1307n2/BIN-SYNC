@@ -1463,6 +1463,143 @@ public sealed class StorageNamespaceGcStoreTests
 
 
     [Fact]
+    public void Change_id_gc_keeps_pushed_peer_reservation_across_reopen_until_acknowledged()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-changeid-reservation-reopen-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        const string scope = "changeid-reservation-reopen";
+        const int namespaceId = 19;
+        NodeId local = NodeId.From(Id(0x7F));
+        NodeId sender = NodeId.From(Id(2));
+        NodeId downstream = NodeId.From(Id(3));
+        BatchId changeId = BatchId.From(Id(0x74));
+        var reservation = new MetadataOutboundBatchReservation
+        {
+            BatchId = BatchId.From(Id(0x75)),
+            IssuerEpoch = 3,
+            CursorStart = 1,
+            CursorEnd = 1,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)0x76, 16).ToArray(),
+            Payload = new byte[] { 0x77 }
+        };
+
+        IApplicationGcReferenceScanner Scanner()
+            => new DelegateApplicationGcReferenceScanner((_, _, _) =>
+                new DelegateApplicationGcReferenceScan(
+                    new MemoryStream(),
+                    new ApplicationDraftHorizon(0, 0, 0),
+                    (_, _, _, _) => false,
+                    _ => false,
+                    (_, _) => false));
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 913))
+            using (var metadata = new StorageMetadataStore(storage))
+            using (var provider = new StorageDataProvider(storage))
+            {
+                var gc = new StorageNamespaceGcStore(
+                    storage, scope, local,
+                    new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
+                NamespaceRosterCertificate roster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(Roster(1, new byte[32], keys), keys[0].Seed), trust);
+                metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
+
+                metadata.RegisterInterestedPeer(scope, local, sender, 1, namespaceId);
+                var incoming = new MetadataIncomingBatch
+                {
+                    ScopeId = scope,
+                    LocalReplica = local,
+                    SenderPeer = sender,
+                    SenderEpoch = 3,
+                    TransportPeerEpoch = 1,
+                    AuthorStreamNodeId = sender,
+                    NamespaceId = namespaceId,
+                    BatchId = BatchId.From(Id(0x78)),
+                    CursorStart = 1,
+                    CursorEnd = 1,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)0x79, 16).ToArray(),
+                    HeaderFingerprint = Enumerable.Repeat((byte)0x7A, 16).ToArray(),
+                    Operations = new[]
+                    {
+                        new MetadataOperation
+                        {
+                            AuthorNodeId = sender,
+                            ChangeId = changeId,
+                            OriginAuthorEpoch = 3,
+                            OriginSequence = 50,
+                            Fingerprint = Enumerable.Repeat((byte)0x7B, 16).ToArray(),
+                            Payload = new byte[] { 0x7C },
+                            RelayEligible = false
+                        }
+                    }
+                };
+                Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
+
+                var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+                var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+                var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    roster, 1, new byte[32], new[] { report0, report1 });
+                gc.AcceptRetentionCheckpoint(
+                    NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+                Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, sender, 3, 50));
+
+                metadata.RegisterInterestedPeer(scope, local, downstream, 1, namespaceId);
+                metadata.CompletePeerInitialSync(scope, local, downstream, 1, namespaceId,
+                    new[] { new MetadataPeerStreamBaseline(sender, 0, 3) });
+                metadata.ReserveOutboundBatch(scope, local, downstream, 1,
+                    namespaceId, sender, reservation);
+                metadata.MarkOutboundBatchPushed(scope, local, downstream, 1,
+                    namespaceId, sender, reservation.BatchId);
+
+                Assert.Equal(0, metadata.CompactChangeLedger(
+                    scope, local, namespaceId, provider,
+                    16, () => new MemoryStream(), Scanner()));
+            }
+
+            // The immutable reservation and its pushed cursor must survive a
+            // process/store restart; the signed origin checkpoint is durable too.
+            using (var reopenedStorage = StorageDatabase.Open(directory, 913))
+            using (var reopenedMetadata = new StorageMetadataStore(reopenedStorage))
+            using (var reopenedProvider = new StorageDataProvider(reopenedStorage))
+            {
+                var reopenedGc = new StorageNamespaceGcStore(
+                    reopenedStorage, scope, local,
+                    new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
+                reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
+                var state = reopenedMetadata.GetPeerStreamState(
+                    scope, local, downstream, 1, namespaceId, sender);
+                Assert.Equal(0UL, state.AckedCursor);
+                Assert.Equal(1UL, state.PushedCursor);
+                Assert.NotNull(state.PendingBatch);
+                Assert.True(reopenedMetadata.TryGetChangeIdentity(
+                    scope, local, namespaceId, changeId, out _, out _, out _));
+                Assert.Equal(0, reopenedMetadata.CompactChangeLedger(
+                    scope, local, namespaceId, reopenedProvider,
+                    16, () => new MemoryStream(), Scanner()));
+
+                reopenedMetadata.AcknowledgePeerBatch(scope, local, downstream, 1,
+                    namespaceId, sender, reservation.BatchId, 1, reservation.BatchDigest.ToArray());
+                Assert.Equal(1UL, reopenedMetadata.GetPeerStreamState(
+                    scope, local, downstream, 1, namespaceId, sender).AckedCursor);
+                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
+                    scope, local, namespaceId, reopenedProvider,
+                    16, () => new MemoryStream(), Scanner()));
+                Assert.False(reopenedMetadata.TryGetChangeIdentity(
+                    scope, local, namespaceId, changeId, out _, out _, out _));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Change_id_gc_requires_signed_origin_horizon_and_empty_external_references_and_keeps_replay_fence()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-changeid-gc-proof-" + Guid.NewGuid().ToString("N"));
