@@ -284,7 +284,7 @@ public sealed class AsyncCoordinatorProcessCrashTests
                 beforeApply: null,
                 beforeApplyWithOperationDecisions: (batch, payload, peer) =>
                 {
-                    StorageRemoteApplyPlan plan = coordinator.BeginRemoteBatchBeforeNodeApply(
+                    StorageRemoteApplyPlan plan = coordinator.BeginRemoteBatchBeforeNodeApplyCore(
                         batch, payload.ToArray(), peer, checked((uint)acceptor.PeerEpoch));
                     signalAndBlock();
                     return plan.ApplyOperations;
