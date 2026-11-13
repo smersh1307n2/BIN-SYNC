@@ -12,4 +12,5 @@ public static class NamespaceGcFrames
     public const byte FullReplaceAck = 0x1A;
     public const byte FullReplaceAbort = 0x1B;
     public const byte FullReplaceReady = 0x1C;
+    public const byte MetadataBaselineReport = 0x1D;
 }
