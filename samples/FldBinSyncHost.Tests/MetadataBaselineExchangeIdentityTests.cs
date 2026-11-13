@@ -19,7 +19,8 @@ public sealed class MetadataBaselineExchangeIdentityTests
         {
             NamespaceId = 17,
             RosterGeneration = 4,
-            PreviousRosterDigest = new byte[NamespaceRosterProtocol.DigestSize],
+            PreviousRosterDigest = Enumerable.Repeat((byte)0xA5,
+                NamespaceRosterProtocol.DigestSize).ToArray(),
             AuthorityNodeId = local,
             Members = new[]
             {
