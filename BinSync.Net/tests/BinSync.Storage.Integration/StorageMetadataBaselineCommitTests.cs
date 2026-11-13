@@ -590,8 +590,8 @@ public sealed class StorageMetadataBaselineCommitTests
                 Scope, fixture.Local, fixture.Peer, 11, NamespaceId,
                 new[]
                 {
-                    new MetadataPeerStreamBaseline(fixture.Local, 7, 1),
-                    new MetadataPeerStreamBaseline(fixture.RelayAuthor, 5, 0)
+                    new MetadataPeerStreamBaseline(fixture.Local, 1, 7),
+                    new MetadataPeerStreamBaseline(fixture.RelayAuthor, 0, 5)
                 });
             var reservation = new MetadataOutboundBatchReservation
             {
@@ -703,7 +703,12 @@ public sealed class StorageMetadataBaselineCommitTests
                         ReceiveCursor = 0,
                         LastBatchDigest = new byte[16]
                     }
-                }).ToArray()
+                })
+                .OrderBy(entry => Convert.ToHexString(entry.SenderPeer.ToArray()), StringComparer.Ordinal)
+                .ThenBy(entry => entry.SenderTransportEpoch)
+                .ThenBy(entry => Convert.ToHexString(entry.AuthorStream.ToArray()), StringComparer.Ordinal)
+                .ThenBy(entry => entry.IssuerEpoch)
+                .ToArray()
             };
             Assert.Equal(7U, oldFeed.IssuerEpoch);
             Assert.Equal(7U, oldReceive.IssuerEpoch);
