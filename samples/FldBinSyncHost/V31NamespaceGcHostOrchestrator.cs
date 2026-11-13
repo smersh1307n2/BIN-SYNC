@@ -871,7 +871,6 @@ public sealed class V31NamespaceGcHostOrchestrator
     /// </summary>
     public async Task<bool> ExchangeAndApplyMetadataBaselineAsync(
         MetadataBaselineExchangeIdentity identity,
-        PreparedFullReplaceSnapshot prepared,
         StorageMetadataStore metadataStore,
         IMetadataNamespaceGcStore gcStore,
         TrustStore trustStore,
@@ -884,7 +883,7 @@ public sealed class V31NamespaceGcHostOrchestrator
         await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            ArgumentNullException.ThrowIfNull(prepared);
+            ArgumentNullException.ThrowIfNull(identity);
             ArgumentNullException.ThrowIfNull(metadataStore);
             ArgumentNullException.ThrowIfNull(gcStore);
             ArgumentNullException.ThrowIfNull(trustStore);
@@ -894,22 +893,25 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new ArgumentException("A 32-byte member seed and non-zero MBR1 report sequence are required.");
             EnsureNamespaceGcBinding(gcStore, trustStore);
             if (!_coordinator.UsesMetadataPeerStateStore(metadataStore) ||
-                prepared.NamespaceId != _coordinator.NamespaceId ||
-                prepared.RosterGeneration == 0 ||
-                prepared.Generation == Guid.Empty ||
-                prepared.Digest.Length != MetadataBaselineReportProtocol.DigestSize)
-                throw new InvalidOperationException("MBR1 orchestration is not bound to the coordinator and prepared FULL_REPLACE generation.");
+                identity.NamespaceId != _coordinator.NamespaceId ||
+                identity.RosterGeneration == 0 ||
+                identity.Generation == Guid.Empty ||
+                identity.RosterDigest is null ||
+                identity.RosterDigest.Length != NamespaceRosterProtocol.DigestSize ||
+                identity.SnapshotDigest is null ||
+                identity.SnapshotDigest.Length != MetadataBaselineReportProtocol.DigestSize)
+                throw new InvalidOperationException("MBR1 orchestration is not bound to the coordinator and installed FULL_REPLACE identity.");
 
             if (!gcStore.TryReadNamespaceRoster(_coordinator.NamespaceId, trustStore,
                     out NamespaceRosterCertificate? roster) || roster is null ||
-                roster.RosterGeneration != prepared.RosterGeneration ||
-                !NamespaceRosterProtocol.ComputeDigest(roster).AsSpan().SequenceEqual(prepared.RosterDigest))
-                throw new InvalidOperationException("Prepared FULL_REPLACE snapshot is not bound to the currently accepted roster.");
+                roster.RosterGeneration != identity.RosterGeneration ||
+                !NamespaceRosterProtocol.ComputeDigest(roster).AsSpan().SequenceEqual(identity.RosterDigest))
+                throw new InvalidOperationException("FULL_REPLACE exchange identity is not bound to the currently accepted roster.");
 
             NamespaceRosterMember local = FindRosterMember(roster, _coordinator.LocalReplicaId);
             if (local.Status != NamespaceMemberStatus.Active)
                 throw new InvalidOperationException("Only an Active member may participate in the MBR1 baseline exchange.");
-            if (!gcStore.AreAllActiveMembersInstalled(roster, prepared.Generation, prepared.Digest))
+            if (!gcStore.AreAllActiveMembersInstalled(roster, identity.Generation, identity.SnapshotDigest))
                 throw new InvalidOperationException("Every Active member must durably install the exact FULL_REPLACE generation before MBR1 exchange.");
             if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore,
                     out NamespaceRetentionCheckpoint? checkpoint) || checkpoint is null ||
@@ -932,7 +934,7 @@ public sealed class V31NamespaceGcHostOrchestrator
                     roster, prepared.Generation, prepared.Digest)
                 .FirstOrDefault(report => report.MemberNodeId == _coordinator.LocalReplicaId)
                 ?? throw new InvalidOperationException(
-                    "Local MBR1 report was not captured and durably accepted inside the FULL_REPLACE snapshot/install commit interval.");
+                    "Local MBR1 report was not captured and durably accepted for this installed FULL_REPLACE identity.");
             if (localReport.MemberTransportEpoch != local.TransportPeerEpoch ||
                 localReport.ReportSequence != reportSequence)
                 throw new InvalidDataException("Durable local MBR1 report does not match the current Active member epoch or requested report sequence.");
