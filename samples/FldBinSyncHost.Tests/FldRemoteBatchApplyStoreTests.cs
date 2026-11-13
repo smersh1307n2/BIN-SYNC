@@ -60,12 +60,18 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
         byte[] digest = new byte[32];
         digest[0] = 0x72;
 
-        var writerStarted = new TaskCompletionSource<bool>(
+        var guardAcquired = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        using var commitGuard = database.AcquireCommitGuard();
+        using var releaseGuard = new ManualResetEventSlim();
+        Task guardOwner = Task.Factory.StartNew(() =>
+        {
+            using IDisposable commitGuard = database.AcquireCommitGuard();
+            guardAcquired.TrySetResult(true);
+            releaseGuard.Wait();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
         Task writer = Task.Run(() =>
         {
-            writerStarted.TrySetResult(true);
             provider.BeginFullReplace(generation, 0, 1, digest);
             provider.StageFullReplacePage(generation, 0, new[]
             {
@@ -83,10 +89,17 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             });
         });
 
-        await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await Task.Delay(TimeSpan.FromMilliseconds(150));
-        Assert.False(writer.IsCompleted);
-        commitGuard.Dispose();
+        try
+        {
+            await guardAcquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Task.Delay(TimeSpan.FromMilliseconds(150));
+            Assert.False(writer.IsCompleted);
+        }
+        finally
+        {
+            releaseGuard.Set();
+            await guardOwner.WaitAsync(TimeSpan.FromSeconds(5));
+        }
         await writer.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.True(provider.TryGetFullReplaceProgress(generation, out ProviderFullReplaceProgress? progress));
