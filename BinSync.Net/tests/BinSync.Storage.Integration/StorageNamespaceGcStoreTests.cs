@@ -1542,9 +1542,44 @@ public sealed class StorageNamespaceGcStoreTests
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
             Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, sender, 3, 50));
 
-            // Relay payload is an independent live reference. Even with a signed
-            // origin horizon and no host/provider references, its ChangeId cannot
-            // be reclaimed until the relay consumer ACKs and payload compaction runs.
+            // An interested downstream peer receives the immutable relay stream.
+            // Its pushed-but-unacknowledged reservation is an independent namespace
+            // GC barrier, even though the origin horizon is already signed.
+            NodeId downstream = NodeId.From(Id(3));
+            metadata.RegisterInterestedPeer(scope, local, downstream, 1, namespaceId);
+            metadata.CompletePeerInitialSync(scope, local, downstream, 1, namespaceId,
+                new[] { new MetadataPeerStreamBaseline(sender, 0, 3) });
+            var reservation = new MetadataOutboundBatchReservation
+            {
+                BatchId = BatchId.From(Id(0x70)),
+                IssuerEpoch = 3,
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)0x71, 16).ToArray(),
+                Payload = new byte[] { 0x72 }
+            };
+            metadata.ReserveOutboundBatch(scope, local, downstream, 1,
+                namespaceId, sender, reservation);
+            metadata.MarkOutboundBatchPushed(scope, local, downstream, 1,
+                namespaceId, sender, reservation.BatchId);
+            var reservedState = metadata.GetPeerStreamState(
+                scope, local, downstream, 1, namespaceId, sender);
+            Assert.Equal(0UL, reservedState.AckedCursor);
+            Assert.Equal(1UL, reservedState.PushedCursor);
+            Assert.NotNull(reservedState.PendingBatch);
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+
+            metadata.AcknowledgePeerBatch(scope, local, downstream, 1,
+                namespaceId, sender, reservation.BatchId, 1, reservation.BatchDigest.ToArray());
+            Assert.Equal(1UL, metadata.GetPeerStreamState(
+                scope, local, downstream, 1, namespaceId, sender).AckedCursor);
+
+            // Relay payload remains an independent live reference after peer ACK.
+            // It is released only when the relay consumer ACKs and bounded
+            // payload compaction completes.
             Assert.Equal(0, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
                 16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
