@@ -4396,8 +4396,8 @@ private static bool ValidateIncomingBatchForStaging(
         PartitionKey partitionKey, PartitionState current, byte storageKind,
         int namespaceId, NodeId author, ulong safeThroughSequence, bool relay, int maxEntries)
     {
-        if (maxEntries <= 0 || maxEntries > 4096)
-            throw new ArgumentOutOfRangeException(nameof(maxEntries), "A payload compaction page must contain 1..4096 entries.");
+        if (maxEntries <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxEntries));
         if ((relay && storageKind != 20) || (!relay && storageKind != 21))
             throw new ArgumentOutOfRangeException(nameof(storageKind));
         byte[] root = PartitionRoot(partitionKey);
