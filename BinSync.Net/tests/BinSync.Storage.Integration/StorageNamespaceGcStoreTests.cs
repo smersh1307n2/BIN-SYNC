@@ -1662,6 +1662,9 @@ public sealed class StorageNamespaceGcStoreTests
         NodeId local = NodeId.From(Id(0x7F));
         NodeId sender = NodeId.From(Id(2));
         BatchId changeId = BatchId.From(Id(0x67));
+        BatchId secondChangeId = BatchId.From(Id(0x68));
+        BatchId thirdChangeId = BatchId.From(Id(0x69));
+        var changeIds = new HashSet<BatchId> { changeId, secondChangeId, thirdChangeId };
         MetadataIncomingBatch? staleReplay = null;
 
         IApplicationGcReferenceScanner Scanner(bool hasChangeIdReference)
@@ -1670,7 +1673,7 @@ public sealed class StorageNamespaceGcStoreTests
                     new MemoryStream(),
                     new ApplicationDraftHorizon(0, 0, 0),
                     (_, _, _, _) => false,
-                    id => id == changeId && hasChangeIdReference,
+                    id => hasChangeIdReference && changeIds.Contains(id),
                     (_, _) => false));
 
         try
@@ -1713,6 +1716,26 @@ public sealed class StorageNamespaceGcStoreTests
                         Fingerprint = Enumerable.Repeat((byte)0x6A, 16).ToArray(),
                         Payload = new byte[] { 0x6B },
                         RelayEligible = true
+                    },
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = sender,
+                        ChangeId = secondChangeId,
+                        OriginAuthorEpoch = 3,
+                        OriginSequence = 51,
+                        Fingerprint = Enumerable.Repeat((byte)0x6F, 16).ToArray(),
+                        Payload = new byte[] { 0x70 },
+                        RelayEligible = false
+                    },
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = sender,
+                        ChangeId = thirdChangeId,
+                        OriginAuthorEpoch = 3,
+                        OriginSequence = 52,
+                        Fingerprint = Enumerable.Repeat((byte)0x71, 16).ToArray(),
+                        Payload = new byte[] { 0x72 },
+                        RelayEligible = false
                     }
                 }
             };
@@ -1722,6 +1745,12 @@ public sealed class StorageNamespaceGcStoreTests
             Assert.Equal(sender, origin.AuthorNodeId);
             Assert.Equal(3U, origin.AuthorEpoch);
             Assert.Equal(50UL, origin.Sequence);
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, secondChangeId, out _, out OperationOrigin secondOrigin, out _));
+            Assert.Equal(51UL, secondOrigin.Sequence);
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, thirdChangeId, out _, out OperationOrigin thirdOrigin, out _));
+            Assert.Equal(52UL, thirdOrigin.Sequence);
 
             // The signed all-active-member horizon is the first independent gate.
             var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
@@ -1798,14 +1827,27 @@ public sealed class StorageNamespaceGcStoreTests
 
             // Once the host confirms no reference remains, the ledger row can be
             // removed. The signed checkpoint remains the durable stale-replay fence.
+            // Reclaim a single ledger identity per durable transaction. Repeated
+            // bounded calls must make monotonic progress without skipping candidates.
             Assert.Equal(1, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
-                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
-            Assert.False(metadata.TryGetChangeIdentity(
-                scope, local, namespaceId, changeId, out _, out _, out _));
+                1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, secondChangeId, out _, out _, out _));
+            Assert.Equal(1, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, thirdChangeId, out _, out _, out _));
+            Assert.Equal(1, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+            foreach (BatchId id in changeIds)
+                Assert.False(metadata.TryGetChangeIdentity(
+                    scope, local, namespaceId, id, out _, out _, out _));
             Assert.Equal(0, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
-                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+                1, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
 
             staleReplay = new MetadataIncomingBatch
             {
