@@ -345,6 +345,8 @@ public static class StorageFullReplaceSender
     /// </summary>
     public static void ValidatePreparedSnapshotPersistence(
         PreparedFullReplaceSnapshot prepared,
+        IDataProvider provider,
+        StorageSyncCoordinator coordinator,
         StorageMetadataStore metadataStore,
         string scopeId,
         NodeId localReplica,
@@ -352,12 +354,27 @@ public static class StorageFullReplaceSender
         NamespaceRosterCertificate roster)
     {
         ArgumentNullException.ThrowIfNull(prepared);
+        ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(metadataStore);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero)
             throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
         ArgumentNullException.ThrowIfNull(gcStore);
         ArgumentNullException.ThrowIfNull(roster);
+
+        if (!coordinator.UsesDataProvider(provider) ||
+            !ReferenceEquals(prepared.Provider, provider))
+            throw new ArgumentException(
+                "Prepared FULL_REPLACE snapshot must belong to the exact provider instance owned by the coordinator.",
+                nameof(provider));
+        if (!coordinator.UsesMetadataPeerStateStore(metadataStore) ||
+            !coordinator.UsesMetadataScope(scopeId) ||
+            coordinator.NamespaceId != prepared.NamespaceId ||
+            coordinator.LocalReplicaId != localReplica)
+            throw new ArgumentException(
+                "Prepared FULL_REPLACE validation must use the coordinator's exact Metadata store, scope, namespace and local replica.",
+                nameof(metadataStore));
 
         if (!metadataStore.TryGetPreparedFullReplaceSnapshot(
                 scopeId, localReplica, prepared.NamespaceId, prepared.Generation,

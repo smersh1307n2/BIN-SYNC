@@ -82,6 +82,13 @@ public sealed class StorageSyncCoordinator
         return ReferenceEquals(_metadataStore, store);
     }
 
+    /// <summary>True only for the stable Metadata scope configured on this coordinator.</summary>
+    public bool UsesMetadataScope(string scopeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        return string.Equals(_scopeId, scopeId, StringComparison.Ordinal);
+    }
+
     /// <summary>True after the provider-authoritative Metadata Store publication cutover.</summary>
     public bool IsMetadataStoreOwnedPublication =>
         _provider is IProviderPublicationMode publicationMode &&

@@ -317,6 +317,7 @@ public sealed class V31NamespaceGcHostOrchestrator
     /// </summary>
     public async Task<FullReplaceInstalledAck> TransferPreparedFullReplaceToMemberAsync(
         PreparedFullReplaceSnapshot prepared,
+        IDataProvider authorityProvider,
         SyncSession memberSession,
         StorageMetadataStore metadataStore,
         string scopeId,
@@ -329,9 +330,14 @@ public sealed class V31NamespaceGcHostOrchestrator
         try
         {
             ArgumentNullException.ThrowIfNull(prepared);
+            ArgumentNullException.ThrowIfNull(authorityProvider);
             ArgumentNullException.ThrowIfNull(memberSession);
             ArgumentNullException.ThrowIfNull(metadataStore);
             ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+            if (!_coordinator.UsesDataProvider(authorityProvider))
+                throw new ArgumentException(
+                    "FULL_REPLACE retry provider must be the exact instance owned by the coordinator.",
+                    nameof(authorityProvider));
             if (!_coordinator.UsesMetadataPeerStateStore(metadataStore))
                 throw new ArgumentException(
                     "FULL_REPLACE retry Metadata Store must be the exact instance owned by the coordinator.",
@@ -356,7 +362,8 @@ public sealed class V31NamespaceGcHostOrchestrator
             StorageFullReplaceSender.ValidatePreparedSnapshot(
                 prepared, trustStore, roster, _coordinator.LocalReplicaId, authoritySeed);
             StorageFullReplaceSender.ValidatePreparedSnapshotPersistence(
-                prepared, metadataStore, scopeId, _coordinator.LocalReplicaId, gcStore, roster);
+                prepared, authorityProvider, _coordinator, metadataStore, scopeId,
+                _coordinator.LocalReplicaId, gcStore, roster);
             NamespaceRosterMember authority = FindRosterMember(
                 roster, roster.AuthorityNodeId);
             if (authority.Status != NamespaceMemberStatus.Active)

@@ -18,6 +18,28 @@ public sealed class StorageSyncCoordinatorTests
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "binsync-storage-coordinator-" + Guid.NewGuid().ToString("N"));
 
+    [Fact]
+    public void Coordinator_exposes_exact_provider_metadata_and_scope_bindings()
+    {
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "coordinator-identity-bindings"), 589);
+        using var provider = new StorageDataProvider(storage);
+        using var otherProvider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var otherMetadata = new StorageMetadataStore(storage);
+        using var node = NewNode(0xD1);
+        const string scope = "coordinator-identity-bindings";
+        var coordinator = new StorageSyncCoordinator(node, provider, 17, metadata, scope);
+
+        Assert.True(coordinator.UsesDataProvider(provider));
+        Assert.False(coordinator.UsesDataProvider(otherProvider));
+        Assert.True(coordinator.UsesMetadataPeerStateStore(metadata));
+        Assert.False(coordinator.UsesMetadataPeerStateStore(otherMetadata));
+        Assert.True(coordinator.UsesMetadataScope(scope));
+        Assert.False(coordinator.UsesMetadataScope(scope + "-other"));
+        Assert.False(coordinator.UsesMetadataScope(string.Empty));
+    }
+
+
     private sealed class RecordingAsyncRemoteBatchStore : IAsyncProviderRemoteBatchCommitStore
     {
         private readonly IDataProvider _provider;
