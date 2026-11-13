@@ -3624,3 +3624,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added a direct FLD provider FULL_REPLACE staging test: `BeginFullReplace` and `StageFullReplacePage` remain blocked while another thread owns the database commit lease, then complete after release.
 - [!] This proves serialization for the audited provider/Metadata mutation paths and wrapper-instance sharing. It does not yet prove every higher-level host workflow uses the intended admission API, nor does it authorize physical GC by default.
 - [ ] Next: audit all public host orchestration entry points and receiver retry/recovery paths for lease ordering and exact-instance binding; add cross-process restart tests around concurrent FULL_REPLACE stage/commit and GC reference snapshots. Keep physical GC feature switches disabled by default.
+
+## 1.142. FULL_REPLACE MBR1 host operations use the application barrier — 2026-11-13
+
+- [x C] Promoted-member MBR1 capture now verifies the coordinator's exact Metadata scope and executes provider identity capture plus durable report creation under `StorageSyncCoordinator.AcquireApplicationCommitGuard`, not only the Host-local lease.
+- [x C] MBR1 full-mesh exchange still performs network I/O outside the commit barrier; after all authenticated reports are accepted, the final atomic baseline application reacquires the complete coordinator application barrier. The supplied Metadata scope must match the coordinator before the exchange starts.
+- [x C] Bounded post-baseline payload compaction now validates the exact coordinator Metadata scope and holds the same full application barrier while revalidating and compacting the durable marker.
+- [x C/A] Removed the three remaining Host-only lease acquisitions from these public orchestrator paths. The lock order is delegated to the coordinator's established application barrier (coordinator/Node/Host/provider), while Metadata storage retains its shared Storage transaction gate.
+- [!] This closes three identified host-orchestration admission gaps only. It does not prove every receiver retry/recovery or external application mutation path is fenced, and does not authorize physical tombstone/ChangeId/receipt GC.
+- [ ] T Exact-head BinSync.Net and FLD Storage Integration push/PR workflows must pass. Continue auditing receiver retry/recovery entry points, restart/crash cuts, and end-to-end tombstone GC under concurrent writers before considering any production GC enablement.
