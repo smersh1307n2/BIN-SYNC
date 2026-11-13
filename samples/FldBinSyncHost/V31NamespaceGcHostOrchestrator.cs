@@ -745,15 +745,14 @@ public sealed class V31NamespaceGcHostOrchestrator
                     session.PeerEpoch == member.TransportPeerEpoch)))
                 throw new ArgumentException("MBR1 exchange requires exactly one authenticated session for every other Active roster member.", nameof(activeMemberSessions));
 
-            MetadataBaselineReport localReport;
-            using (IDisposable hostLease = _acquireHostCommitLease()
-                ?? throw new InvalidOperationException("The composed Host commit lease is unavailable; MBR1 cut was not captured."))
-            {
-                localReport = metadataStore.CreateMetadataBaselineReport(
-                    scopeId, _coordinator.LocalReplicaId, roster, prepared.Generation,
-                    prepared.Digest, prepared.ExpectedEntryCount,
-                    prepared.SourceChangeFeedWatermark, reportSequence, memberSeed);
-            }
+            MetadataBaselineReport localReport = gcStore.ReadMetadataBaselineReports(
+                    roster, prepared.Generation, prepared.Digest)
+                .FirstOrDefault(report => report.MemberNodeId == _coordinator.LocalReplicaId)
+                ?? throw new InvalidOperationException(
+                    "Local MBR1 report was not captured and durably accepted inside the FULL_REPLACE snapshot/install commit interval.");
+            if (localReport.MemberTransportEpoch != local.TransportPeerEpoch ||
+                localReport.ReportSequence != reportSequence)
+                throw new InvalidDataException("Durable local MBR1 report does not match the current Active member epoch or requested report sequence.");
 
             byte[] localEncoded = MetadataBaselineReportProtocol.EncodeEnvelope(localReport);
             _ = gcStore.AcceptMetadataBaselineReport(
