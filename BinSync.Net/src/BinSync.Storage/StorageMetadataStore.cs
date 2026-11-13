@@ -2645,6 +2645,8 @@ private static bool ValidateIncomingBatchForStaging(
                 foreach (var author in authorKinds.OrderBy(pair =>
                              Convert.ToHexString(pair.Key.ToArray()), StringComparer.Ordinal))
                 {
+                    if (author.Key == peer.NodeId)
+                        continue;
                     var streamKey = new PeerStreamKey(peer.NodeId, peer.TransportPeerEpoch,
                         namespaceId, author.Key);
                     if (!current.PeerStreams.TryGetValue(streamKey, out PeerStreamStateValue? state))
