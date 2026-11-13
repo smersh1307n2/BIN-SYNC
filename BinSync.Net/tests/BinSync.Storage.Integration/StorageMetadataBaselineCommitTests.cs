@@ -1229,4 +1229,61 @@ public sealed class StorageMetadataBaselineCommitTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public void Full_replace_baseline_payload_compaction_rejects_retired_roster_after_marker()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-payload-retired-roster-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 922);
+            Fixture fixture = CreateFixture(storage);
+            using StorageMetadataStore metadata = fixture.Metadata;
+            Assert.True(metadata.ApplyFullReplaceBaseline(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+
+            NamespaceRosterCertificate retiredRoster = new()
+            {
+                NamespaceId = fixture.Roster.NamespaceId,
+                RosterGeneration = checked(fixture.Roster.RosterGeneration + 1),
+                PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(fixture.Roster),
+                AuthorityNodeId = fixture.Roster.AuthorityNodeId,
+                Members = fixture.Roster.Members.Select(member => new NamespaceRosterMember
+                {
+                    NodeId = member.NodeId,
+                    PublicKey = member.PublicKey.ToArray(),
+                    TransportPeerEpoch = member.TransportPeerEpoch,
+                    Status = member.NodeId == fixture.Peer
+                        ? NamespaceMemberStatus.Retired
+                        : member.Status,
+                    RetiredThroughEpoch = member.NodeId == fixture.Peer
+                        ? member.TransportPeerEpoch
+                        : member.RetiredThroughEpoch
+                }).ToArray(),
+                RetiredOriginEpochs = fixture.Roster.RetiredOriginEpochs
+            };
+            fixture.Gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(retiredRoster, fixture.Keys[0].Seed), fixture.Trust);
+
+            ulong beforeCompaction = storage.LastCommitSeq;
+            Assert.Throws<InvalidDataException>(() =>
+                metadata.CompactFullReplaceBaselinePayloadsBounded(
+                    Scope, fixture.Local, fixture.Roster, fixture.Generation,
+                    fixture.SnapshotDigest, maxEntriesPerStream: 1));
+            Assert.Equal(beforeCompaction, storage.LastCommitSeq);
+
+            ulong lease = metadata.AcquireOutboundLease(
+                Scope, fixture.Local, NamespaceId, fixture.Local, Guid.NewGuid());
+            MetadataOutboundPage outbound = metadata.ReadOutbound(
+                Scope, fixture.Local, NamespaceId, fixture.Local, lease, afterSequence: 0, limit: 10);
+            Assert.Equal(new ulong[] { 1, 2 }, outbound.Items.Select(item => item.Sequence));
+            MetadataRelayPage relay = metadata.ReadRelay(
+                Scope, fixture.Local, NamespaceId, fixture.RelayAuthor, afterSequence: 0, limit: 10);
+            Assert.Single(relay.Items);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
 }
