@@ -90,6 +90,53 @@ public partial class SyncSession
         return FullReplaceInstalledAckProtocol.DecodeAndVerify(frame.Payload, acceptedRoster);
     }
 
+    /// <summary>
+    /// Send one member-owned MBR1 report. The supplied seed must correspond to the
+    /// report member in the accepted roster; the receiver binds that identity to
+    /// this authenticated session peer before durable acceptance.
+    /// </summary>
+    public async Task SendMetadataBaselineReportAsync(
+        MetadataBaselineReport report, byte[] memberSeed,
+        NamespaceRosterCertificate acceptedRoster, Guid expectedGeneration,
+        ReadOnlyMemory<byte> expectedSnapshotDigest, ulong frameSequence = 1,
+        CancellationToken ct = default)
+    {
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(memberSeed);
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        byte[] encoded = MetadataBaselineReportProtocol.Sign(report, memberSeed);
+        _ = MetadataBaselineReportProtocol.DecodeAndVerify(
+            encoded, acceptedRoster, expectedGeneration, expectedSnapshotDigest.Span);
+        await SendFrameAsync(NamespaceGcFrames.MetadataBaselineReport, SessionWire.ControlStreamId,
+            frameSequence, encoded, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Receive and cryptographically validate MBR1, then bind its signer and transport
+    /// epoch to the authenticated session peer. Callers durably accept the returned
+    /// report only after this method succeeds.
+    /// </summary>
+    public async Task<MetadataBaselineReport> ReceiveMetadataBaselineReportAsync(
+        NamespaceRosterCertificate acceptedRoster, Guid expectedGeneration,
+        ReadOnlyMemory<byte> expectedSnapshotDigest, CancellationToken ct = default)
+    {
+        EnsureV31Capability(SessionCapabilities.NamespaceRosterV31 | SessionCapabilities.FullReplaceV31);
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        byte[] raw = await ReceiveExpectedExclusiveAsync(NamespaceGcFrames.MetadataBaselineReport, ct)
+            .ConfigureAwait(false);
+        var frame = ParseExpectedSessionFrame(raw, NamespaceGcFrames.MetadataBaselineReport);
+        ValidateControlStream(frame);
+        MetadataBaselineReport report = MetadataBaselineReportProtocol.DecodeAndVerify(
+            frame.Payload, acceptedRoster, expectedGeneration, expectedSnapshotDigest.Span);
+        if (PeerNodeId.IsZero || PeerEpoch <= 0 ||
+            report.MemberNodeId != PeerNodeId ||
+            report.MemberTransportEpoch != checked((uint)PeerEpoch))
+            throw new InvalidDataException(
+                "MBR1 signer identity/transport epoch does not match the authenticated session peer.");
+        return report;
+    }
+
     private void EnsureV31Capability(SessionCapabilities capability)
     {
         if ((NegotiatedCapabilities & capability) != capability)
