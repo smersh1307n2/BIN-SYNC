@@ -44,7 +44,7 @@ public sealed class StorageFullReplaceReceiver
         Func<IFullReplaceCommitLease?> acquireCommitGuard,
         Action<ulong, uint> advanceHlcAndRefresh,
         StorageMetadataStore? metadataStore = null,
-        ulong baselineReportSequence = 1)
+        ulong baselineReportSequence = 0)
     {
         ArgumentNullException.ThrowIfNull(provider);
         _provider = provider;
