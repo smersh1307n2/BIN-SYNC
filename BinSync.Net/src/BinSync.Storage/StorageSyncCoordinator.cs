@@ -7,6 +7,9 @@ public sealed record StorageRemoteApplyPlan(
     Guid ApplyToken, MetadataIncomingBatch Batch, bool FinalizeMetadata, bool IsDuplicate,
     IReadOnlyList<bool> ApplyOperations);
 
+public sealed record StoragePayloadCompactionResult(
+    NodeId Author, bool IsRelay, ulong SafeThroughSequence, int RemovedEntries);
+
 /// <summary>
 /// Typed proof that the application, Node, host, Metadata and provider commit gates
 /// are all held for one synchronous tombstone-reclamation pass.
@@ -202,6 +205,83 @@ public sealed class StorageSyncCoordinator
                     _scopeId!, _node.NodeId, _namespaceId, author, safeThrough);
             result.Add((author, safeThrough));
         }
+        return result;
+    }
+
+    /// <summary>
+    /// Perform one bounded, retryable page of outbound and relay payload compaction
+    /// after the exact MBR1/FULL_REPLACE baseline marker is durable. The marker is
+    /// revalidated while the shared application/Host commit guard is held. Only
+    /// payload rows are removed; ChangeId, receipt and tombstone metadata are untouched.
+    /// Reinvoke until every result reports zero removals.
+    /// </summary>
+    public IReadOnlyList<StoragePayloadCompactionResult>
+        CompactBaselineAcknowledgedMetadataPayloads(
+            NamespaceRosterCertificate acceptedRoster,
+            Guid fullReplaceGeneration,
+            ReadOnlySpan<byte> snapshotDigest,
+            Func<IDisposable?> acquireHostCommitLease,
+            int maxEntriesPerStream = 512)
+    {
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
+        if (fullReplaceGeneration == Guid.Empty ||
+            snapshotDigest.Length != MetadataBaselineReportProtocol.DigestSize)
+            throw new ArgumentException("FULL_REPLACE baseline identity is invalid.");
+        if (acceptedRoster.NamespaceId != _namespaceId)
+            throw new ArgumentException("Accepted roster namespace does not match this coordinator.", nameof(acceptedRoster));
+        if (maxEntriesPerStream <= 0 || maxEntriesPerStream > 4096)
+            throw new ArgumentOutOfRangeException(nameof(maxEntriesPerStream));
+        if (_metadataStore is not StorageMetadataStore durableMetadata ||
+            _metadataStore is not IMetadataPeerStateStore peerStore ||
+            string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "Baseline-gated payload compaction requires the durable StorageMetadataStore and stable scope.");
+
+        using IDisposable commitGuard = AcquireApplicationCommitGuard(acquireHostCommitLease);
+        if (!durableMetadata.IsFullReplaceBaselineApplied(
+                _scopeId!, _node.NodeId, acceptedRoster, fullReplaceGeneration, snapshotDigest))
+            throw new InvalidOperationException(
+                "Payload compaction is blocked until the exact FULL_REPLACE MBR1 baseline marker is durable.");
+
+        IReadOnlyList<NodeId> outboundAuthors = peerStore.ReadOutboundAuthors(
+            _scopeId!, _node.NodeId, _namespaceId);
+        IReadOnlyList<NodeId> relayAuthors = peerStore.ReadRelayAuthors(
+            _scopeId!, _node.NodeId, _namespaceId);
+        var seen = new HashSet<NodeId>();
+        var result = new List<StoragePayloadCompactionResult>(
+            checked(outboundAuthors.Count + relayAuthors.Count));
+
+        foreach (NodeId author in outboundAuthors)
+        {
+            if (author.IsZero || !seen.Add(author))
+                throw new InvalidDataException("Metadata outbound author set contains a zero or duplicate identity.");
+            ulong safeThrough = peerStore.GetSafePeerStreamCompactionCursor(
+                _scopeId!, _node.NodeId, _namespaceId, author);
+            ulong highWatermark = durableMetadata.GetOutboundHighWatermark(
+                _scopeId!, _node.NodeId, _namespaceId, author);
+            if (safeThrough > highWatermark)
+                throw new InvalidDataException("Outbound peer ACK exceeds its durable payload high watermark.");
+            int removed = safeThrough == 0 ? 0 : durableMetadata.CompactOutboundThroughBounded(
+                _scopeId!, _node.NodeId, _namespaceId, author, safeThrough, maxEntriesPerStream);
+            result.Add(new StoragePayloadCompactionResult(author, false, safeThrough, removed));
+        }
+
+        foreach (NodeId author in relayAuthors)
+        {
+            if (author.IsZero || author == _node.NodeId || !seen.Add(author))
+                throw new InvalidDataException("Metadata relay author set contains a zero, local or duplicate identity.");
+            ulong safeThrough = peerStore.GetSafePeerStreamCompactionCursor(
+                _scopeId!, _node.NodeId, _namespaceId, author);
+            ulong highWatermark = durableMetadata.GetRelayHighWatermark(
+                _scopeId!, _node.NodeId, _namespaceId, author);
+            if (safeThrough > highWatermark)
+                throw new InvalidDataException("Relay peer ACK exceeds its durable payload high watermark.");
+            int removed = safeThrough == 0 ? 0 : durableMetadata.CompactRelayThroughBounded(
+                _scopeId!, _node.NodeId, _namespaceId, author, safeThrough, maxEntriesPerStream);
+            result.Add(new StoragePayloadCompactionResult(author, true, safeThrough, removed));
+        }
+
         return result;
     }
 
