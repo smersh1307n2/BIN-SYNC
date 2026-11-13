@@ -80,6 +80,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
+    internal bool IsBoundTo(StorageNamespaceGcStore gcStore, string scopeId, NodeId localReplica)
+        => gcStore is not null && gcStore.IsBoundTo(_storage, scopeId, localReplica);
 
     /// <summary>
     /// Reads the immutable per-namespace publication cutover marker for an FLD-backed
