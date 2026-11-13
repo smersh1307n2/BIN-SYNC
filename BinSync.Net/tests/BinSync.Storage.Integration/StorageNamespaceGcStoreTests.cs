@@ -1522,7 +1522,7 @@ public sealed class StorageNamespaceGcStoreTests
                         OriginSequence = 50,
                         Fingerprint = Enumerable.Repeat((byte)0x6A, 16).ToArray(),
                         Payload = new byte[] { 0x6B },
-                        RelayEligible = false
+                        RelayEligible = true
                     }
                 }
             };
@@ -1541,6 +1541,16 @@ public sealed class StorageNamespaceGcStoreTests
             gc.AcceptRetentionCheckpoint(
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
             Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, sender, 3, 50));
+
+            // Relay payload is an independent live reference. Even with a signed
+            // origin horizon and no host/provider references, its ChangeId cannot
+            // be reclaimed until the relay consumer ACKs and payload compaction runs.
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+            metadata.AcknowledgeRelay(scope, local, namespaceId, sender, 1);
+            Assert.Equal(1, metadata.CompactRelayThroughBounded(
+                scope, local, namespaceId, sender, 1, maxEntries: 16));
 
             // A provider snapshot pins the exact source generation and its ChangeId
             // provenance. GC must fail closed while the snapshot handle is alive,
