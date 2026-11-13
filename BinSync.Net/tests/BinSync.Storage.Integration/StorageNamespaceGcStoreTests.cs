@@ -1861,6 +1861,7 @@ public sealed class StorageNamespaceGcStoreTests
 
             using (var reopenedStorage = StorageDatabase.Open(directory, 912))
             using (var reopenedMetadata = new StorageMetadataStore(reopenedStorage))
+            using (var reopenedProvider = new StorageDataProvider(reopenedStorage))
             {
                 var reopenedGc = new StorageNamespaceGcStore(
                     reopenedStorage, scope, local,
