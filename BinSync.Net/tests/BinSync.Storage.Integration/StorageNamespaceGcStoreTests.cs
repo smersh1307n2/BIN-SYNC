@@ -159,6 +159,28 @@ public sealed class StorageNamespaceGcStoreTests
             gc.AcceptFullReplaceInstalledAck(SignedAck(roster, i, keys, generation, digest), roster);
     }
 
+    [Theory]
+    [InlineData(NamespaceMemberStatus.Active, 12u, 0u, 11u, 11u, true)]
+    [InlineData(NamespaceMemberStatus.Active, 12u, 0u, 12u, 12u, false)]
+    [InlineData(NamespaceMemberStatus.Retired, 10u, 9u, 9u, 9u, true)]
+    [InlineData(NamespaceMemberStatus.Retired, 10u, 9u, 10u, 10u, false)]
+    public void Receipt_gc_requires_both_durable_and_current_roster_transport_epoch_fences(
+        NamespaceMemberStatus status, uint currentTransportEpoch, uint rosterRetiredThrough,
+        uint receiptTransportEpoch, uint durableRetiredThrough, bool expected)
+    {
+        var member = new NamespaceRosterMember
+        {
+            NodeId = NodeId.From(Id(2)),
+            PublicKey = BatchSignature.GenerateKeyPair().PublicKey,
+            TransportPeerEpoch = currentTransportEpoch,
+            Status = status,
+            RetiredThroughEpoch = rosterRetiredThrough
+        };
+
+        Assert.Equal(expected, StorageMetadataStore.IsReceiptTransportEpochFenced(
+            member, receiptTransportEpoch, durableRetiredThrough));
+    }
+
     [Fact]
     public void Physical_gc_domains_are_disabled_by_default_and_require_explicit_options()
     {
