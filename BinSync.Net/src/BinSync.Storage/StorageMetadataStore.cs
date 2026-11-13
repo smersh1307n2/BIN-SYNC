@@ -2490,9 +2490,104 @@ private static bool ValidateIncomingBatchForStaging(
             (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        CompactStreamPayload(partitionKey, current, 21,
-            namespaceId, localAuthor, safeThroughSequence, relay: false);
+        _ = CompactStreamPayload(partitionKey, current, 21,
+            namespaceId, localAuthor, safeThroughSequence, relay: false, maxEntries: int.MaxValue);
     
+        }
+    }
+
+    /// <summary>Remove at most one bounded page of already-safe outbound payload rows.</summary>
+    public int CompactOutboundThroughBounded(
+        string scopeId, NodeId localReplica, int namespaceId, NodeId localAuthor,
+        ulong safeThroughSequence, int maxEntries = 512)
+    {
+        if (maxEntries <= 0 || maxEntries > 4096)
+            throw new ArgumentOutOfRangeException(nameof(maxEntries));
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out var current))
+                throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+            var key = new OutboundKey(namespaceId, localAuthor);
+            ulong acknowledged = current.OutboundAck.TryGetValue(key, out var ack) ? ack : 0;
+            ulong peerSafe = GetSafePeerCursor(current, namespaceId, localAuthor);
+            bool hasPeerRequirements = current.InterestedPeers.Any(peer => peer.NamespaceId == namespaceId && peer.Peer != localAuthor) ||
+                current.RequiredPeerStreams.Any(peer => peer.NamespaceId == namespaceId && peer.AuthorStream == localAuthor && peer.Peer != localAuthor);
+            bool hasLocalConsumer = current.OutboundLeases.ContainsKey(key);
+            if ((hasLocalConsumer && safeThroughSequence > acknowledged) ||
+                (hasPeerRequirements && safeThroughSequence > peerSafe) ||
+                (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
+                throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+            return CompactStreamPayload(partitionKey, current, 21,
+                namespaceId, localAuthor, safeThroughSequence, relay: false, maxEntries);
+        }
+    }
+
+    /// <summary>Remove at most one bounded page of already-safe relay payload rows.</summary>
+    public int CompactRelayThroughBounded(
+        string scopeId, NodeId localReplica, int namespaceId, NodeId originalAuthor,
+        ulong safeThroughSequence, int maxEntries = 512)
+    {
+        if (maxEntries <= 0 || maxEntries > 4096)
+            throw new ArgumentOutOfRangeException(nameof(maxEntries));
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, originalAuthor);
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out var current))
+                throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+            var key = new RelayKey(namespaceId, originalAuthor);
+            ulong acknowledged = current.RelayAck.TryGetValue(key, out var ack) ? ack : 0;
+            ulong peerSafe = GetSafePeerCursor(current, namespaceId, originalAuthor);
+            bool hasPeerRequirements = current.InterestedPeers.Any(peer =>
+                peer.NamespaceId == namespaceId && peer.Peer != originalAuthor) ||
+                current.RequiredPeerStreams.Any(peer =>
+                peer.NamespaceId == namespaceId && peer.AuthorStream == originalAuthor && peer.Peer != originalAuthor);
+            bool hasLocalConsumer = current.RelayAck.ContainsKey(key);
+            if ((hasLocalConsumer && safeThroughSequence > acknowledged) ||
+                (hasPeerRequirements && safeThroughSequence > peerSafe) ||
+                (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
+                throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
+            return CompactStreamPayload(partitionKey, current, 20,
+                namespaceId, originalAuthor, safeThroughSequence, relay: true, maxEntries);
+        }
+    }
+
+    /// <summary>
+    /// Returns true only when the exact FULL_REPLACE generation, roster generation and
+    /// snapshot digest have a durable atomic MBR1 baseline-apply marker.
+    /// </summary>
+    public bool IsFullReplaceBaselineApplied(
+        string scopeId, NodeId localReplica, NamespaceRosterCertificate acceptedRoster,
+        Guid generation, ReadOnlySpan<byte> snapshotDigest)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        if (localReplica.IsZero || generation == Guid.Empty ||
+            snapshotDigest.Length != MetadataBaselineReportProtocol.DigestSize)
+            throw new ArgumentException("Baseline marker identity is invalid.");
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out var current))
+                return false;
+            byte[] key = EncodeBaselineApplyMarkerKey(
+                partitionKey, acceptedRoster.NamespaceId, acceptedRoster.RosterGeneration, generation);
+            if (!current.PersistedEntries.TryGetValue(Convert.ToHexString(key), out var row))
+                return false;
+            byte[] value = row.Value;
+            byte[] expectedRosterDigest = NamespaceRosterProtocol.ComputeDigest(acceptedRoster);
+            if (value.Length != 109 || !value.AsSpan(0, 4).SequenceEqual("MBAC"u8) ||
+                value[4] != 1 || !value.AsSpan(5, 32).SequenceEqual(snapshotDigest) ||
+                !value.AsSpan(69, 32).SequenceEqual(expectedRosterDigest) ||
+                BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(101)) <= 0 ||
+                BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(105)) < 0)
+                throw new InvalidDataException("Durable FULL_REPLACE baseline marker is malformed or does not match the requested cut.");
+            return true;
         }
     }
 
@@ -4083,8 +4178,8 @@ private static bool ValidateIncomingBatchForStaging(
             (!hasLocalConsumer && !hasPeerRequirements && safeThroughSequence > 0))
             throw new ArgumentOutOfRangeException(nameof(safeThroughSequence));
 
-        CompactStreamPayload(partitionKey, current, 20,
-            namespaceId, originalAuthor, safeThroughSequence, relay: true);
+        _ = CompactStreamPayload(partitionKey, current, 20,
+            namespaceId, originalAuthor, safeThroughSequence, relay: true, maxEntries: int.MaxValue);
     
         }
     }
@@ -4297,10 +4392,12 @@ private static bool ValidateIncomingBatchForStaging(
         current.IsPersisted = true;
     }
 
-    private void CompactStreamPayload(
+    private int CompactStreamPayload(
         PartitionKey partitionKey, PartitionState current, byte storageKind,
-        int namespaceId, NodeId author, ulong safeThroughSequence, bool relay)
+        int namespaceId, NodeId author, ulong safeThroughSequence, bool relay, int maxEntries)
     {
+        if (maxEntries <= 0 || maxEntries > 4096)
+            throw new ArgumentOutOfRangeException(nameof(maxEntries), "A payload compaction page must contain 1..4096 entries.");
         if ((relay && storageKind != 20) || (!relay && storageKind != 21))
             throw new ArgumentOutOfRangeException(nameof(storageKind));
         byte[] root = PartitionRoot(partitionKey);
@@ -4310,7 +4407,7 @@ private static bool ValidateIncomingBatchForStaging(
             if (!current.Relay.TryGetValue(new RelayKey(namespaceId, author), out var entries))
                 return;
             removedSequences = entries.Where(item => item.Sequence <= safeThroughSequence)
-                .Select(item => item.Sequence).ToList();
+                .Take(maxEntries).Select(item => item.Sequence).ToList();
         }
         else
         {
@@ -4319,7 +4416,7 @@ private static bool ValidateIncomingBatchForStaging(
             removedSequences = entries.Where(item => item.Sequence <= safeThroughSequence)
                 .Select(item => item.Sequence).ToList();
         }
-        if (removedSequences.Count == 0) return;
+        if (removedSequences.Count == 0) return 0;
 
         var keys = new List<byte[]>(removedSequences.Count);
         foreach (ulong sequence in removedSequences)
@@ -4355,6 +4452,7 @@ private static bool ValidateIncomingBatchForStaging(
             current.PersistedEntries.Remove(Convert.ToHexString(key));
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
+        return removedSequences.Count;
     }
 
     private void PersistFrozenOutboundDelta(
