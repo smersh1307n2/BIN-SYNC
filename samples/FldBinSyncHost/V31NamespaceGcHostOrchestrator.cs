@@ -247,6 +247,9 @@ public sealed class V31NamespaceGcHostOrchestrator
     /// </summary>
     public PreparedFullReplaceSnapshot PrepareFullReplaceSnapshot(
         IDataProvider authorityProvider,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        ulong baselineReportSequence,
         IMetadataNamespaceGcStore gcStore,
         TrustStore trustStore,
         byte[] authoritySeed,
@@ -258,6 +261,10 @@ public sealed class V31NamespaceGcHostOrchestrator
         try
         {
             ArgumentNullException.ThrowIfNull(authorityProvider);
+            ArgumentNullException.ThrowIfNull(metadataStore);
+            ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+            if (baselineReportSequence == 0)
+                throw new ArgumentOutOfRangeException(nameof(baselineReportSequence));
             ArgumentNullException.ThrowIfNull(gcStore);
             ArgumentNullException.ThrowIfNull(trustStore);
             ArgumentNullException.ThrowIfNull(authoritySeed);
@@ -282,13 +289,19 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new InvalidOperationException(
                     "Only the Active local namespace authority may prepare FULL_REPLACE.");
 
-            return StorageFullReplaceSender.PrepareSnapshot(
+            return StorageFullReplaceSender.PrepareSnapshotAndPersistUnderCommitGuard(
                 authorityProvider,
                 trustStore,
                 roster,
                 _coordinator.LocalReplicaId,
                 generation,
-                authoritySeed);
+                authoritySeed,
+                metadataStore,
+                scopeId,
+                _coordinator.LocalReplicaId,
+                _coordinator,
+                _acquireHostCommitLease,
+                baselineReportSequence);
         }
         finally
         {
@@ -385,6 +398,9 @@ public sealed class V31NamespaceGcHostOrchestrator
     public async Task<IReadOnlyList<FullReplaceInstalledAck>> TransferFullReplaceToMembersAsync(
         IDataProvider authorityProvider,
         IReadOnlyList<SyncSession> memberSessions,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        ulong baselineReportSequence,
         IMetadataNamespaceGcStore gcStore,
         TrustStore trustStore,
         byte[] authoritySeed,
@@ -396,6 +412,10 @@ public sealed class V31NamespaceGcHostOrchestrator
         {
             ArgumentNullException.ThrowIfNull(authorityProvider);
             ArgumentNullException.ThrowIfNull(memberSessions);
+            ArgumentNullException.ThrowIfNull(metadataStore);
+            ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+            if (baselineReportSequence == 0)
+                throw new ArgumentOutOfRangeException(nameof(baselineReportSequence));
             ArgumentNullException.ThrowIfNull(gcStore);
             ArgumentNullException.ThrowIfNull(trustStore);
             ArgumentNullException.ThrowIfNull(authoritySeed);
@@ -426,13 +446,19 @@ public sealed class V31NamespaceGcHostOrchestrator
 
             // Capture and verify the source generation before changing any remote session.
             using PreparedFullReplaceSnapshot prepared =
-                StorageFullReplaceSender.PrepareSnapshot(
+                StorageFullReplaceSender.PrepareSnapshotAndPersistUnderCommitGuard(
                     authorityProvider,
                     trustStore,
                     roster,
                     _coordinator.LocalReplicaId,
                     generation,
-                    authoritySeed);
+                    authoritySeed,
+                    metadataStore,
+                    scopeId,
+                    _coordinator.LocalReplicaId,
+                    _coordinator,
+                    _acquireHostCommitLease,
+                    baselineReportSequence);
             StorageFullReplaceSender.ValidatePreparedSnapshot(
                 prepared, trustStore, roster, _coordinator.LocalReplicaId, authoritySeed);
 
@@ -489,6 +515,9 @@ public sealed class V31NamespaceGcHostOrchestrator
     public async Task<FullReplaceInstalledAck> TransferFullReplaceToMemberAsync(
         IDataProvider authorityProvider,
         SyncSession memberSession,
+        StorageMetadataStore metadataStore,
+        string scopeId,
+        ulong baselineReportSequence,
         IMetadataNamespaceGcStore gcStore,
         TrustStore trustStore,
         byte[] authoritySeed,
@@ -500,6 +529,10 @@ public sealed class V31NamespaceGcHostOrchestrator
         {
             ArgumentNullException.ThrowIfNull(authorityProvider);
             ArgumentNullException.ThrowIfNull(memberSession);
+            ArgumentNullException.ThrowIfNull(metadataStore);
+            ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+            if (baselineReportSequence == 0)
+                throw new ArgumentOutOfRangeException(nameof(baselineReportSequence));
             if (authorityProvider is not IProviderFullReplace)
                 throw new NotSupportedException(
                     "The authority provider must expose the durable IProviderFullReplace capability.");
@@ -530,13 +563,19 @@ public sealed class V31NamespaceGcHostOrchestrator
                     "FULL_REPLACE target is retired or does not match the accepted roster transport epoch.");
 
             using PreparedFullReplaceSnapshot prepared =
-                StorageFullReplaceSender.PrepareSnapshot(
+                StorageFullReplaceSender.PrepareSnapshotAndPersistUnderCommitGuard(
                     authorityProvider,
                     trustStore,
                     roster,
                     _coordinator.LocalReplicaId,
                     generation,
-                    authoritySeed);
+                    authoritySeed,
+                    metadataStore,
+                    scopeId,
+                    _coordinator.LocalReplicaId,
+                    _coordinator,
+                    _acquireHostCommitLease,
+                    baselineReportSequence);
             StorageFullReplaceSender.ValidatePreparedSnapshot(
                 prepared, trustStore, roster, _coordinator.LocalReplicaId, authoritySeed);
 
