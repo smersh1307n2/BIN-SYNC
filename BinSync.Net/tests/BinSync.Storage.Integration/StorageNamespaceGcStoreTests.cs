@@ -229,7 +229,7 @@ public sealed class StorageNamespaceGcStoreTests
                 // completes its baseline before the old epoch is durably fenced.
                 metadata.RegisterInterestedPeer(scope, local, sender, 2, namespaceId);
                 metadata.CompletePeerInitialSync(scope, local, sender, 2, namespaceId,
-                    new[] { new MetadataPeerStreamBaseline(sender, 0, 3) });
+                    new[] { new MetadataPeerStreamBaseline(local, 0, 3) });
                 metadata.RetireInterestedPeer(scope, local, sender, 1, 2, namespaceId);
 
                 // A transport retirement fence alone is insufficient: the origin
