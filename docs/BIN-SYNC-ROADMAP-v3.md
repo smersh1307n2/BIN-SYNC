@@ -3633,3 +3633,14 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x C/A] Removed the three remaining Host-only lease acquisitions from these public orchestrator paths. The lock order is delegated to the coordinator's established application barrier (coordinator/Node/Host/provider), while Metadata storage retains its shared Storage transaction gate.
 - [!] This closes three identified host-orchestration admission gaps only. It does not prove every receiver retry/recovery or external application mutation path is fenced, and does not authorize physical tombstone/ChangeId/receipt GC.
 - [ ] T Exact-head BinSync.Net and FLD Storage Integration push/PR workflows must pass. Continue auditing receiver retry/recovery entry points, restart/crash cuts, and end-to-end tombstone GC under concurrent writers before considering any production GC enablement.
+
+## 1.143. Async direct receive-staging admission fence — 2026-11-14
+
+- [x C] Audited the async coordinator's public receive/recovery entry points against the namespace tombstone-GC admission gate.
+- [x C] Found that the public synchronous `BeginRemoteBatchBeforeNodeApply` staging API wrote a durable PendingApply under only the Metadata monitor and could therefore race the GC reference-snapshot phase when called directly, outside the normal `ReceiveBatchWithAsyncProviderBeforeAckAsync` callback.
+- [x C] The public staging API now acquires the shared per-replica/namespace async admission semaphore before writing PendingApply. After the short lease is released, the durable PendingApply remains a fail-closed GC reference until APPLY/finalization or startup recovery completes.
+- [x C] The normal receive callback uses a dedicated internal core because it already owns the admission lease for the complete receive → Node checkpoint → provider APPLY → Metadata finalization transaction; this avoids recursive acquisition of the non-reentrant semaphore.
+- [x T] Updated the process-crash probe to call the already-admitted core path, preserving the intentional crash cut after durable PendingApply and before Node mutation.
+- [!] This closes the direct public staging bypass only. Exact-head CI is required; continue auditing all Metadata mutation capabilities and process-isolated GC/reference-snapshot crash cuts. Physical GC remains disabled by default.
+- [ ] T Add a deterministic concurrency regression test proving a direct staging call waits while a GC pass owns namespace admission, then leaves a PendingApply that makes the next GC pass fail closed.
+- [ ] Next: complete the async/host receiver admission audit, add cross-process restart cuts around GC reference snapshots and provider delete, then proceed to end-to-end tombstone GC proof and enablement gates.
