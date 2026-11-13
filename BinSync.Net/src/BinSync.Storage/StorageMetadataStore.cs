@@ -874,6 +874,17 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
+    internal static bool IsReceiptTransportEpochFenced(
+        NamespaceRosterMember senderMember, uint receiptTransportPeerEpoch, uint retiredThroughEpoch)
+    {
+        ArgumentNullException.ThrowIfNull(senderMember);
+        if (receiptTransportPeerEpoch == 0 || receiptTransportPeerEpoch > retiredThroughEpoch)
+            return false;
+        return senderMember.Status == NamespaceMemberStatus.Retired
+            ? receiptTransportPeerEpoch <= senderMember.RetiredThroughEpoch
+            : receiptTransportPeerEpoch < senderMember.TransportPeerEpoch;
+    }
+
     /// <summary>
     /// Reclaim transport receipts only when the durable retired-epoch fence and
     /// signed retention frontier cover the receipt, and neither PendingApply nor the
@@ -931,15 +942,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     key.Epoch == 0 || receipt.OriginSequence == 0)
                     continue;
                 if (!rosterMembers.TryGetValue(key.Sender, out NamespaceRosterMember? senderMember) ||
-                    receipt.TransportPeerEpoch == 0 ||
                     !current.RetiredPeerEpochs.TryGetValue(
                         (namespaceId, key.Sender), out uint retiredThrough) ||
-                    receipt.TransportPeerEpoch > retiredThrough)
-                    continue;
-                bool rosterFencesReceiptEpoch = senderMember.Status == NamespaceMemberStatus.Retired
-                    ? receipt.TransportPeerEpoch <= senderMember.RetiredThroughEpoch
-                    : receipt.TransportPeerEpoch < senderMember.TransportPeerEpoch;
-                if (!rosterFencesReceiptEpoch)
+                    !IsReceiptTransportEpochFenced(senderMember, receipt.TransportPeerEpoch, retiredThrough))
                     continue;
                 var receiveKey = new ReceiveKey(
                     key.Sender, key.Epoch, key.NamespaceId, receipt.DurableAuthor);
