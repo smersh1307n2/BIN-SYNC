@@ -1488,6 +1488,7 @@ public sealed class StorageNamespaceGcStoreTests
         {
             using var storage = StorageDatabase.Open(directory, 912);
             using var metadata = new StorageMetadataStore(storage);
+            using var provider = new StorageDataProvider(storage);
             var gc = new StorageNamespaceGcStore(
                 storage, scope, local,
                 new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
@@ -1543,7 +1544,7 @@ public sealed class StorageNamespaceGcStoreTests
             // A host-owned immutable snapshot reference must block reclamation even
             // after the signed causal horizon has advanced.
             Assert.Equal(0, metadata.CompactChangeLedger(
-                scope, local, namespaceId, EmptyProvider(),
+                scope, local, namespaceId, provider,
                 16, () => new MemoryStream(), Scanner(hasChangeIdReference: true)));
             Assert.True(metadata.TryGetChangeIdentity(
                 scope, local, namespaceId, changeId, out _, out _, out _));
@@ -1551,12 +1552,12 @@ public sealed class StorageNamespaceGcStoreTests
             // Once the host confirms no reference remains, the ledger row can be
             // removed. The signed checkpoint remains the durable stale-replay fence.
             Assert.Equal(1, metadata.CompactChangeLedger(
-                scope, local, namespaceId, EmptyProvider(),
+                scope, local, namespaceId, provider,
                 16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
             Assert.False(metadata.TryGetChangeIdentity(
                 scope, local, namespaceId, changeId, out _, out _, out _));
             Assert.Equal(0, metadata.CompactChangeLedger(
-                scope, local, namespaceId, EmptyProvider(),
+                scope, local, namespaceId, provider,
                 16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
 
             var staleReplay = new MetadataIncomingBatch
@@ -1583,7 +1584,6 @@ public sealed class StorageNamespaceGcStoreTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
 
-        static IDataProvider EmptyProvider() => new EmptyGcDataProvider();
     }
 
 
