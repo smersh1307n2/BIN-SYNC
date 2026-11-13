@@ -39,6 +39,227 @@ public sealed class StorageMetadataBaselineCommitTests
         byte[] OutboundDigest,
         byte[] RelayDigest);
 
+    private sealed record MultiPeerFixture(
+        StorageMetadataStore Metadata,
+        StorageNamespaceGcStore Gc,
+        TrustStore Trust,
+        NamespaceRosterCertificate Roster,
+        (byte[] Seed, byte[] PublicKey)[] Keys,
+        Guid Generation,
+        byte[] SnapshotDigest,
+        NodeId Local,
+        NodeId Peer1,
+        NodeId Peer2,
+        byte[] OutboundDigest);
+
+    private static MultiPeerFixture CreateMultiPeerFixture(StorageDatabase storage)
+    {
+        NodeId local = Node(1), peer1 = Node(2), peer2 = Node(4);
+        var keys = new[]
+        {
+            BatchSignature.GenerateKeyPair(),
+            BatchSignature.GenerateKeyPair(),
+            BatchSignature.GenerateKeyPair()
+        };
+        var trust = new TrustStore();
+        trust.Allow(local, keys[0].PublicKey, TrustMode.PreShared);
+        var proposedRoster = new NamespaceRosterCertificate
+        {
+            NamespaceId = NamespaceId,
+            RosterGeneration = 1,
+            PreviousRosterDigest = new byte[NamespaceRosterProtocol.DigestSize],
+            AuthorityNodeId = local,
+            Members = new[]
+            {
+                new NamespaceRosterMember
+                {
+                    NodeId = local, PublicKey = keys[0].PublicKey,
+                    TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active
+                },
+                new NamespaceRosterMember
+                {
+                    NodeId = peer1, PublicKey = keys[1].PublicKey,
+                    TransportPeerEpoch = 11, Status = NamespaceMemberStatus.Active
+                },
+                new NamespaceRosterMember
+                {
+                    NodeId = peer2, PublicKey = keys[2].PublicKey,
+                    TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active
+                }
+            }
+        };
+        var gc = new StorageNamespaceGcStore(storage, Scope, local);
+        NamespaceRosterCertificate roster = gc.AcceptNamespaceRoster(
+            NamespaceRosterProtocol.Sign(proposedRoster, keys[0].Seed), trust);
+        var metadata = new StorageMetadataStore(storage);
+        metadata.AttachNamespaceGcGuard(gc, trust, Scope, local);
+
+        Guid generation = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+        byte[] snapshotDigest = SHA256.HashData(Encoding.UTF8.GetBytes("mbr1 multi-peer snapshot"));
+        for (int i = 0; i < keys.Length; i++)
+        {
+            gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                new FullReplaceInstalledAck
+                {
+                    NamespaceId = NamespaceId,
+                    RosterGeneration = roster.RosterGeneration,
+                    RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                    Generation = generation,
+                    Digest = snapshotDigest,
+                    MemberNodeId = roster.Members[i].NodeId,
+                    MemberTransportEpoch = roster.Members[i].TransportPeerEpoch,
+                    HlcWallFloor = 100,
+                    HlcLogicalFloor = 2,
+                    Installed = true
+                }, keys[i].Seed), roster);
+        }
+
+        var frontierReports = new List<AppliedOriginFrontierReport>();
+        for (int i = 0; i < keys.Length; i++)
+        {
+            byte[] encodedFrontier = OriginFrontierProtocol.Sign(new AppliedOriginFrontierReport
+            {
+                NamespaceId = NamespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                MemberNodeId = roster.Members[i].NodeId,
+                MemberTransportEpoch = roster.Members[i].TransportPeerEpoch,
+                ReportSequence = 1,
+                FinalForAuthor = false,
+                UnpublishedDraftCount = 0,
+                MaxUnpublishedDraftHlcWall = 0,
+                MaxUnpublishedDraftHlcLogical = 0,
+                Entries = Array.Empty<AppliedOriginFrontierEntry>(),
+                IssuedOrigins = Array.Empty<IssuedOriginFrontierEntry>()
+            }, keys[i].Seed);
+            frontierReports.Add(gc.AcceptOriginFrontier(encodedFrontier, roster));
+        }
+        NamespaceRetentionCheckpoint checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+            roster, 1, new byte[NamespaceRosterProtocol.DigestSize], frontierReports,
+            generation, snapshotDigest, 100, 2);
+        gc.AcceptRetentionCheckpoint(NamespaceRetentionCheckpointProtocol.Sign(
+            checkpoint, keys[0].Seed), roster, trust);
+
+        metadata.RegisterInterestedPeer(Scope, local, peer1, 11, NamespaceId);
+        metadata.RegisterInterestedPeer(Scope, local, peer2, 12, NamespaceId);
+        metadata.FreezeOutbound(Scope, local, NamespaceId, local, new[]
+        {
+            new MetadataFrozenOperation
+            {
+                ChangeId = Batch(20), Fingerprint = Digest(20), Payload = new byte[] { 0x20 },
+                OriginAuthorEpoch = 7
+            },
+            new MetadataFrozenOperation
+            {
+                ChangeId = Batch(21), Fingerprint = Digest(21), Payload = new byte[] { 0x21 },
+                OriginAuthorEpoch = 7
+            },
+            new MetadataFrozenOperation
+            {
+                ChangeId = Batch(22), Fingerprint = Digest(22), Payload = new byte[] { 0x22 },
+                OriginAuthorEpoch = 7
+            }
+        });
+
+        byte[] outboundDigest = Digest(31);
+        metadata.RegisterInterestedPeerStream(Scope, local, peer1, 11, NamespaceId,
+            local, baselineAckedCursor: 1, streamOffset: 1, issuerEpoch: 7, outboundDigest);
+        metadata.RegisterInterestedPeerStream(Scope, local, peer2, 12, NamespaceId,
+            local, baselineAckedCursor: 0, streamOffset: 1, issuerEpoch: 7, new byte[16]);
+
+        var localReport = new MetadataBaselineReport
+        {
+            NamespaceId = NamespaceId,
+            RosterGeneration = roster.RosterGeneration,
+            RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+            FullReplaceGeneration = generation,
+            SnapshotDigest = snapshotDigest,
+            SnapshotEntryCount = 4,
+            ProviderChangeFeedWatermark = 40,
+            HlcWallFloor = 100,
+            HlcLogicalFloor = 2,
+            MemberNodeId = local,
+            MemberTransportEpoch = 10,
+            ReportSequence = 1,
+            FeedEntries = new[]
+            {
+                new MetadataBaselineFeedEntry
+                {
+                    TargetPeer = peer1, TargetTransportEpoch = 11,
+                    AuthorStream = local, FeedKind = MetadataBaselineFeedKind.Outbound,
+                    IssuerEpoch = 7, AbsoluteFeedOffset = 1, DigestAnchor = outboundDigest
+                },
+                new MetadataBaselineFeedEntry
+                {
+                    TargetPeer = peer2, TargetTransportEpoch = 12,
+                    AuthorStream = local, FeedKind = MetadataBaselineFeedKind.Outbound,
+                    IssuerEpoch = 7, AbsoluteFeedOffset = 1, DigestAnchor = new byte[16]
+                }
+            },
+            ReceiveEntries = Array.Empty<MetadataBaselineReceiveEntry>()
+        };
+        var peer1Report = new MetadataBaselineReport
+        {
+            NamespaceId = NamespaceId,
+            RosterGeneration = roster.RosterGeneration,
+            RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+            FullReplaceGeneration = generation,
+            SnapshotDigest = snapshotDigest,
+            SnapshotEntryCount = 4,
+            ProviderChangeFeedWatermark = 40,
+            HlcWallFloor = 100,
+            HlcLogicalFloor = 2,
+            MemberNodeId = peer1,
+            MemberTransportEpoch = 11,
+            ReportSequence = 1,
+            FeedEntries = Array.Empty<MetadataBaselineFeedEntry>(),
+            ReceiveEntries = new[]
+            {
+                new MetadataBaselineReceiveEntry
+                {
+                    SenderPeer = local, SenderTransportEpoch = 10,
+                    AuthorStream = local, IssuerEpoch = 7,
+                    ReceiveCursor = 1, LastBatchDigest = outboundDigest
+                }
+            }
+        };
+        var peer2Report = new MetadataBaselineReport
+        {
+            NamespaceId = NamespaceId,
+            RosterGeneration = roster.RosterGeneration,
+            RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+            FullReplaceGeneration = generation,
+            SnapshotDigest = snapshotDigest,
+            SnapshotEntryCount = 4,
+            ProviderChangeFeedWatermark = 40,
+            HlcWallFloor = 100,
+            HlcLogicalFloor = 2,
+            MemberNodeId = peer2,
+            MemberTransportEpoch = 12,
+            ReportSequence = 1,
+            FeedEntries = Array.Empty<MetadataBaselineFeedEntry>(),
+            ReceiveEntries = new[]
+            {
+                new MetadataBaselineReceiveEntry
+                {
+                    SenderPeer = local, SenderTransportEpoch = 10,
+                    AuthorStream = local, IssuerEpoch = 7,
+                    ReceiveCursor = 0, LastBatchDigest = new byte[16]
+                }
+            }
+        };
+
+        gc.AcceptMetadataBaselineReport(
+            MetadataBaselineReportProtocol.Sign(localReport, keys[0].Seed), roster, generation, snapshotDigest);
+        gc.AcceptMetadataBaselineReport(
+            MetadataBaselineReportProtocol.Sign(peer1Report, keys[1].Seed), roster, generation, snapshotDigest);
+        gc.AcceptMetadataBaselineReport(
+            MetadataBaselineReportProtocol.Sign(peer2Report, keys[2].Seed), roster, generation, snapshotDigest);
+
+        return new MultiPeerFixture(metadata, gc, trust, roster, keys, generation, snapshotDigest,
+            local, peer1, peer2, outboundDigest);
+    }
+
     private static Fixture CreateFixture(StorageDatabase storage)
     {
         NodeId local = Node(1), peer = Node(2), relayAuthor = Node(3);
@@ -902,6 +1123,47 @@ public sealed class StorageMetadataBaselineCommitTests
                 Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
             Assert.Equal(reservation.BatchId, metadata.GetPendingOutboundBatch(
                 Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local)?.BatchId);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Full_replace_baseline_payload_compaction_uses_the_slowest_active_peer_cursor()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-multi-peer-compact-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 920);
+            MultiPeerFixture fixture = CreateMultiPeerFixture(storage);
+            using StorageMetadataStore metadata = fixture.Metadata;
+
+            Assert.True(metadata.ApplyFullReplaceBaseline(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+            metadata.FreezeOutbound(Scope, fixture.Local, NamespaceId, fixture.Local, new[]
+            {
+                new MetadataFrozenOperation
+                {
+                    ChangeId = Batch(23), Fingerprint = Digest(23), Payload = new byte[] { 0x23 },
+                    OriginAuthorEpoch = 7
+                }
+            });
+
+            // Peer1 has received two absolute feed positions; peer2 has received only
+            // one. The common safe prefix is therefore one, not peer1's faster cursor.
+            Assert.Equal(1, metadata.CompactFullReplaceBaselinePayloadsBounded(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation,
+                fixture.SnapshotDigest, maxEntriesPerStream: 10));
+
+            ulong lease = metadata.AcquireOutboundLease(
+                Scope, fixture.Local, NamespaceId, fixture.Local, Guid.NewGuid());
+            MetadataOutboundPage outbound = metadata.ReadOutbound(
+                Scope, fixture.Local, NamespaceId, fixture.Local, lease, afterSequence: 0, limit: 10);
+            Assert.Equal(new ulong[] { 2, 3, 4 }, outbound.Items.Select(item => item.Sequence));
+            Assert.Equal(new[] { Batch(21), Batch(22), Batch(23) },
+                outbound.Items.Select(item => item.ChangeId));
         }
         finally
         {

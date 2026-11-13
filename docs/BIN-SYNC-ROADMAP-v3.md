@@ -3588,5 +3588,6 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added a crash/reopen integration test: the first one-row page is committed, the store is reopened, the next page is removed, retries converge to zero, a post-cut outbound row remains, and a relay row with zero signed receive progress is retained.
 - [x T] Added a post-marker reservation matrix (reserved and pushed-but-unacknowledged): bounded payload compaction fails closed and leaves the Storage commit sequence and immutable reservation unchanged.
 - [!] This is payload compaction only. It does not reclaim ChangeIds, receipts, tombstones or ghosts and does not enable physical GC.
-- [ ] T Add direct host-orchestrator negative-path coverage for a Metadata store missing the baseline-compaction capability; extend multi-peer tests with divergent receive cursors and concurrent post-cut writes.
+- [x T] Added a three-member divergent-cursor test: the faster peer reports absolute cursor 2, the slower peer cursor 1, and only the common prefix through 1 is compacted; later rows remain readable.
+- [ ] T Add direct host-orchestrator negative-path coverage for a Metadata store missing the baseline-compaction capability and extend rejoin/retirement epoch matrices.
 - [ ] Next: audit post-marker compaction across roster rejoin/retirement and epoch rollover; then implement crash-cut/retry coverage for the bounded receipt/ChangeId stages without enabling production GC.
