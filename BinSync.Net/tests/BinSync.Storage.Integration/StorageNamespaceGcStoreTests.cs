@@ -172,7 +172,7 @@ public sealed class StorageNamespaceGcStoreTests
         NodeId sender = NodeId.From(Id(2));
         Guid generation = Guid.Parse("22345678-1234-5678-9abc-def012345678");
         byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("receipt GC baseline"));
-        MetadataIncomingBatch? compactedBatch = null;
+        var compactedBatches = new List<MetadataIncomingBatch>();
 
         IApplicationGcReferenceScanner Scanner(bool hasReceiptReference)
             => new DelegateApplicationGcReferenceScanner((_, _, _) =>
@@ -225,7 +225,46 @@ public sealed class StorageNamespaceGcStoreTests
                     }
                 };
                 Assert.False(metadata.AcceptIncomingBatch(batch).IsDuplicate);
-                compactedBatch = batch;
+                compactedBatches.Add(batch);
+
+                // Populate a short contiguous receive chain so the receipt collector
+                // must honor its page limit and resume across repeated calls.
+                byte[] previousDigest = batch.BatchDigest.ToArray();
+                for (byte index = 0; index < 2; index++)
+                {
+                    byte cursor = (byte)(index + 2);
+                    var nextBatch = new MetadataIncomingBatch
+                    {
+                        ScopeId = scope,
+                        LocalReplica = local,
+                        SenderPeer = sender,
+                        SenderEpoch = 3,
+                        TransportPeerEpoch = 1,
+                        AuthorStreamNodeId = sender,
+                        NamespaceId = namespaceId,
+                        BatchId = BatchId.From(Id((byte)(0x70 + index))),
+                        CursorStart = cursor,
+                        CursorEnd = cursor,
+                        PreviousBatchDigest = previousDigest,
+                        BatchDigest = Enumerable.Repeat((byte)(0x71 + index), 16).ToArray(),
+                        HeaderFingerprint = Enumerable.Repeat((byte)(0x73 + index), 16).ToArray(),
+                        Operations = new[]
+                        {
+                            new MetadataOperation
+                            {
+                                AuthorNodeId = sender,
+                                ChangeId = BatchId.From(Id((byte)(0x75 + index))),
+                                OriginAuthorEpoch = 3,
+                                OriginSequence = (ulong)(50 + cursor - 1),
+                                Fingerprint = Enumerable.Repeat((byte)(0x77 + index), 16).ToArray(),
+                                Payload = new[] { (byte)(0x79 + index) }
+                            }
+                        }
+                    };
+                    Assert.False(metadata.AcceptIncomingBatch(nextBatch).IsDuplicate);
+                    compactedBatches.Add(nextBatch);
+                    previousDigest = nextBatch.BatchDigest.ToArray();
+                }
 
                 // A newer authenticated transport incarnation is registered and
                 // completes its baseline before the old epoch is durably fenced.
@@ -255,9 +294,13 @@ public sealed class StorageNamespaceGcStoreTests
                     scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(true)));
 
                 Assert.Equal(1, metadata.CompactReceipts(
-                    scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
+                    scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
+                Assert.Equal(1, metadata.CompactReceipts(
+                    scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
+                Assert.Equal(1, metadata.CompactReceipts(
+                    scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
                 Assert.Equal(0, metadata.CompactReceipts(
-                    scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
+                    scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
             }
 
             // The receipt deletion is durable. Reopening the same Storage database
@@ -272,9 +315,10 @@ public sealed class StorageNamespaceGcStoreTests
                 scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
             // The receipt row is gone, but the durable receive cursor/digest chain
             // must still reject the old batch after restart instead of treating it as new.
-            Assert.NotNull(compactedBatch);
-            Assert.Throws<InvalidDataException>(() =>
-                reopenedMetadata.AcceptIncomingBatch(compactedBatch!));
+            Assert.Equal(3, compactedBatches.Count);
+            foreach (MetadataIncomingBatch compactedBatch in compactedBatches)
+                Assert.Throws<InvalidDataException>(() =>
+                    reopenedMetadata.AcceptIncomingBatch(compactedBatch));
         }
         finally
         {
