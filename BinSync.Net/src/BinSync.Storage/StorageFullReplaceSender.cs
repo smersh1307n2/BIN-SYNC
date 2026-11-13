@@ -125,9 +125,10 @@ public static class StorageFullReplaceSender
     /// The host lease must cover every application-owned writer that is not represented
     /// by the coordinator itself.
     ///
-    /// This establishes source-side snapshot admission only. It does not yet certify a
-    /// per-author outbound/relay/receive baseline vector; callers must not use this
-    /// overload alone as authorization for physical GC.
+    /// While the same typed Host/Metadata commit lease remains held, this also persists
+    /// the source member's FRA2 installation evidence and signed MBR1 vector. It does
+    /// not collect remote member reports, apply the two-sided baseline, compact payloads
+    /// or authorize physical GC.
     /// </summary>
     public static PreparedFullReplaceSnapshot PrepareSnapshotAndPersistUnderCommitGuard(
         IDataProvider provider,
