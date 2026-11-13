@@ -1521,7 +1521,8 @@ public sealed class StorageNamespaceGcStoreTests
                         OriginAuthorEpoch = 3,
                         OriginSequence = 50,
                         Fingerprint = Enumerable.Repeat((byte)0x6A, 16).ToArray(),
-                        Payload = new byte[] { 0x6B }
+                        Payload = new byte[] { 0x6B },
+                        RelayEligible = false
                     }
                 }
             };
