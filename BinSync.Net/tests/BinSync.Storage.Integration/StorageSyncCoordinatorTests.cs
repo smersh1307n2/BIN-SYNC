@@ -3109,6 +3109,20 @@ public sealed class StorageSyncCoordinatorTests
     }
 
     [Theory]
+    [InlineData(false, 0UL, 0UL, false)]
+    [InlineData(true, 0UL, 0UL, true)]
+    [InlineData(false, 1UL, 0UL, true)]
+    [InlineData(false, 1UL, 1UL, false)]
+    [InlineData(false, 2UL, 1UL, true)]
+    public void Change_id_gc_treats_pending_or_unacknowledged_peer_reservations_as_live(
+        bool hasPendingBatch, ulong pushedCursor, ulong ackedCursor, bool expectedOutstanding)
+    {
+        Assert.Equal(expectedOutstanding,
+            StorageMetadataStore.IsPeerStreamGcReservationOutstanding(
+                hasPendingBatch, pushedCursor, ackedCursor));
+    }
+
+    [Theory]
     [InlineData("duplicate")]
     [InlineData("regressing")]
     [InlineData("out-of-range")]
