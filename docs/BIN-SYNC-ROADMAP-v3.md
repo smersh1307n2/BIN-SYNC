@@ -1,3 +1,15 @@
+## 1.95. Baseline-gated bounded payload compaction and promoted-member MBR1 path — 2026-11-13
+
+- [x C] Added bounded outbound and relay payload compaction pages (1..4096 rows, default 512) while preserving the existing full-range APIs. A page removes only rows at or below the caller's safe peer-stream cursor; the existing ChangeId ledger, receipt rows, tombstones and Ghost metadata are not deleted by this operation.
+- [x C] Added CompactBaselineAcknowledgedMetadataPayloads: it requires Metadata Store-owned publication, the exact durable FULL_REPLACE baseline marker, the current accepted roster, and the Host/application commit guard. It checks every author stream against its safe peer cursor and high watermark, then performs one bounded page per stream per invocation so retries continue after process loss.
+- [x C] Hardened baseline marker authorization: stale or unaccepted roster generations cannot authorize payload compaction, and the durable marker's report count must equal the current Active roster size.
+- [x T] Added outbound and relay tests that compact one row per call, close/reopen Storage between pages, resume until empty, retain the high-watermark and ChangeId/receipt replay fences, and reject malformed page limits. Added stale-roster marker rejection and durable marker reopen coverage.
+- [x C] Added MetadataBaselineExchangeIdentity so non-authority Active members can participate in full-mesh MBR1 exchange without possessing the authority's process-local PreparedFullReplaceSnapshot handle. The final ApplyFullReplaceBaseline now reacquires the Host commit guard after network exchange.
+- [x C/T] Added a promoted-member capture entry point: after the new roster is accepted and the member is Active, the Host reads the installed snapshot identity under its commit guard, reissues the local FRA2 ACK for the new roster and durably captures the first MBR1 report.
+- [~ CI] Exact-head CI for 90a17695b0ec3ec29633eb9918df863625b69683 is running. The previous bounded-compaction/reopen and stale-roster integration run passed on the preceding code head, but the portable exchange/promotion changes and newest tests are not green until both current BIN-SYNC and FLD Storage Integration workflows finish.
+- [!] The promotion capture API and portable exchange identity are implemented, but two-independent-Host full-mesh promotion/restart/lost-report tests are still open. This phase does not authorize ChangeId, receipt, tombstone or Ghost GC; all physical-GC feature switches remain disabled by default.
+- [ ] Next: add process-isolated Joining→Active promotion and full-mesh MBR1 exchange tests with restart/lost-report cuts; then run a complete ChangeId/receipt GC proof matrix after bounded payload compaction. Keep production GC disabled until all crash, rejoin, concurrency and reference-retention proofs pass.
+
 ## 1.94. MBR1 local vector capture and Active-member exchange — 2026-11-13
 
 - [x C] Added `StorageMetadataStore.CreateMetadataBaselineReport`: captures this member's durable outbound/relay peer-stream vectors and per-sender/per-author receive cursors plus digest anchors under the shared Storage transaction gate. It binds the report to the exact accepted roster, local Active transport epoch, installed FRA2 generation/digest and HLC floor, then signs and verifies the canonical MBR1 envelope.
@@ -7,7 +19,9 @@
 - [x T] Added storage integration coverage for capture of outbound, relay and receive vectors, including their independent offsets, issuer epochs and digest anchors, plus source-side report persistence with snapshot preparation.
 - [~ CI] Exact-head validation is running for the source/receiver cut integration and MBR1 capture tests. Do not mark the current head green until both BIN-SYNC and FLD Storage Integration workflows finish on the exact branch SHA.
 - [!] This does not yet complete Joining-member promotion capture, wire the optional MetadataStore into every production Active receiver composition, prove the multi-process full-mesh exchange under restart/lost-report conditions, or implement bounded post-commit payload compaction. The new method does not compact payloads. Production GC remains disabled.
-- [ ] Next: finish Active receiver/Joining promotion composition and process-level exchange/restart/lost-report tests; then implement bounded, idempotent outbound/relay payload compaction gated by the durable baseline marker and revalidated under the shared commit gate. Keep receipt, ChangeId, tombstone and Ghost GC disabled until the complete crash/rejoin/race matrix and exact-head platform CI pass.
+- [x C] Added the promoted-member MBR1 capture entry point and a portable exchange identity, so non-authority Active members no longer need the authority's process-local prepared snapshot handle.
+- [x C] Added Host commit-guard reacquisition around final baseline application and baseline-gated bounded outbound/relay payload compaction; see §1.95.
+- [ ] Next: add process-isolated Joining→Active promotion and full-mesh MBR1 exchange tests with restart/lost-report cuts, then complete the ChangeId/receipt GC proof matrix. Keep physical GC disabled until the full crash/rejoin/race matrix and exact-head platform CI pass.
 
 ## 1.93. Signed three-member frontier and two-Host tombstone-GC proof — 2026-11-12
 
