@@ -965,6 +965,11 @@ public sealed class V31NamespaceGcHostOrchestrator
                     roster, identity.Generation, identity.SnapshotDigest);
             }
 
+            // Network exchange deliberately runs without the Host commit gate.
+            // Reacquire it only for the final atomic Metadata baseline application so
+            // concurrent provider/Metadata writers cannot cross the apply boundary.
+            using IDisposable commitGuard = _acquireHostCommitLease()
+                ?? throw new InvalidOperationException("The Host commit guard is unavailable for MBR1 baseline application.");
             return metadataStore.ApplyFullReplaceBaseline(
                 scopeId, _coordinator.LocalReplicaId, roster,
                 identity.Generation, identity.SnapshotDigest);
