@@ -2640,6 +2640,7 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new InvalidDataException("Local MBR1 report transport epoch does not match the accepted roster.");
 
             var safePrefixes = new Dictionary<(MetadataBaselineFeedKind Kind, NodeId Author), ulong>();
+            var issuerEpochs = new Dictionary<(MetadataBaselineFeedKind Kind, NodeId Author), uint>();
             foreach (MetadataBaselineFeedEntry feed in localReport.FeedEntries)
             {
                 NamespaceRosterMember targetMember = activeMembers.FirstOrDefault(member =>
@@ -2657,8 +2658,14 @@ private static bool ValidateIncomingBatchForStaging(
                 if (!receiveDigest.AsSpan().SequenceEqual(feed.DigestAnchor))
                     throw new InvalidDataException("Baseline source feed digest does not match its target's signed receive chain.");
 
-                ulong absoluteSafe = checked(feed.AbsoluteFeedOffset + (receive?.ReceiveCursor ?? 0));
                 var stream = (feed.FeedKind, feed.AuthorStream);
+                if (issuerEpochs.TryGetValue(stream, out uint priorIssuerEpoch) &&
+                    priorIssuerEpoch != feed.IssuerEpoch)
+                    throw new InvalidDataException(
+                        "Active peers disagree on the source issuer epoch for one baseline feed stream.");
+                issuerEpochs[stream] = feed.IssuerEpoch;
+
+                ulong absoluteSafe = checked(feed.AbsoluteFeedOffset + (receive?.ReceiveCursor ?? 0));
                 if (safePrefixes.TryGetValue(stream, out ulong prior))
                     safePrefixes[stream] = Math.Min(prior, absoluteSafe);
                 else
