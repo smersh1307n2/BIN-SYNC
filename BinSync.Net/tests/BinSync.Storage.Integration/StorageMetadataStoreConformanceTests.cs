@@ -98,6 +98,51 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Bounded_relay_payload_compaction_resumes_after_reopen_and_preserves_receipt()
+    {
+        string directory = Path.Combine(_root, "bounded-relay-compaction-reopen");
+        Directory.CreateDirectory(directory);
+        const string scope = "bounded-relay-compaction-reopen";
+        const int namespaceId = 7;
+        NodeId local = Node(1), upstream = Node(2), author = Node(20);
+        var incoming = CreateBatch(scope, 1, 2, 1, namespaceId, 10, 1, 3, 0, 10,
+            Operation(20, 30, 40, 50),
+            Operation(20, 31, 41, 51),
+            Operation(20, 32, 42, 52));
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 461))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                Assert.False(store.AcceptIncomingBatch(incoming).IsDuplicate);
+                Assert.Equal(3UL, store.GetRelayHighWatermark(scope, local, namespaceId, author));
+                store.AcknowledgeRelay(scope, local, namespaceId, author, 3);
+                Assert.Equal(1, store.CompactRelayThroughBounded(
+                    scope, local, namespaceId, author, 3, maxEntries: 1));
+            }
+
+            using (var storage = StorageDatabase.Open(directory, 461))
+            using (var reopened = new StorageMetadataStore(storage))
+            {
+                Assert.Equal(1, reopened.CompactRelayThroughBounded(
+                    scope, local, namespaceId, author, 3, maxEntries: 1));
+                Assert.Equal(1, reopened.CompactRelayThroughBounded(
+                    scope, local, namespaceId, author, 3, maxEntries: 1));
+                Assert.Equal(0, reopened.CompactRelayThroughBounded(
+                    scope, local, namespaceId, author, 3, maxEntries: 1));
+                Assert.Equal(3UL, reopened.GetRelayHighWatermark(scope, local, namespaceId, author));
+                Assert.Empty(reopened.ReadRelay(scope, local, namespaceId, author, 0, 10).Items);
+                Assert.True(reopened.AcceptIncomingBatch(incoming).IsDuplicate);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Compact_stream_payload_row_recovers_origin_from_global_change_id_ledger()
     {
         string directory = Path.Combine(_root, "compact-stream-payload");
