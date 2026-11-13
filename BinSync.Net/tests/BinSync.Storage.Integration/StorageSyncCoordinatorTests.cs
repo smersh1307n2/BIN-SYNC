@@ -36,7 +36,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.False(coordinator.UsesMetadataPeerStateStore(otherMetadata));
         Assert.True(coordinator.UsesMetadataScope(scope));
         Assert.False(coordinator.UsesMetadataScope(scope + "-other"));
-        Assert.False(coordinator.UsesMetadataScope(string.Empty));
+        Assert.Throws<ArgumentException>(() => coordinator.UsesMetadataScope(string.Empty));
     }
 
 
