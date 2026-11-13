@@ -3614,3 +3614,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] Exact-head `0fc28b8` passed both `BinSync.Net` and `FLD Storage Integration` push/PR workflows; all four runs completed successfully, including Linux/macOS/Windows provider integration and Windows/Linux host-adapter builds.
 - [!] These checks bind the host composition and prepared FULL_REPLACE retry to one provider/Metadata identity. They do not yet prove that every application write path is forced through the coordinator admission barrier, nor do they authorize production physical GC.
 - [ ] Next: audit public host/provider/Metadata mutation entry points for admission-barrier bypass; keep direct Metadata writers fenced by the same transaction gate and prove all FLD writers share the database commit lease. Add negative concurrency tests for mismatched scope, bypassed writer capability and cross-instance mutation attempts.
+
+
+## 1.141. Cross-instance host writer exclusion audit — 2026-11-13
+
+- [x C/A] Audited the FLD provider mutation paths: local append/ACK/published-origin operations explicitly acquire `FldDatabase.AcquireCommitGuard`; FULL_REPLACE begin/stage/commit/abort/prune and contextual remote APPLY enter FLD database methods that serialize on the same `_commitLock`.
+- [x C/A] Confirmed `StorageMetadataStore` and `StorageRelayProvenanceMap` obtain their transaction gate through `StorageDatabaseTransactionGate.For(storage)`, so separate wrapper instances over the same StorageDatabase share the same writer exclusion rather than maintaining independent locks.
+- [x T] Strengthened the tombstone-GC concurrency test to perform the competing Metadata write through a second `StorageMetadataStore` instance while the coordinator holds the composed tombstone-GC lease.
+- [x T] Added a direct FLD provider FULL_REPLACE staging test: `BeginFullReplace` and `StageFullReplacePage` remain blocked while another thread owns the database commit lease, then complete after release.
+- [!] This proves serialization for the audited provider/Metadata mutation paths and wrapper-instance sharing. It does not yet prove every higher-level host workflow uses the intended admission API, nor does it authorize physical GC by default.
+- [ ] Next: audit all public host orchestration entry points and receiver retry/recovery paths for lease ordering and exact-instance binding; add cross-process restart tests around concurrent FULL_REPLACE stage/commit and GC reference snapshots. Keep physical GC feature switches disabled by default.

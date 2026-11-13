@@ -4125,6 +4125,7 @@ public sealed class StorageSyncCoordinatorTests
         using var storage = StorageDatabase.Open(Path.Combine(_root, "tombstone-gc-metadata-writer"), 484);
         using var provider = new StorageDataProvider(storage);
         using var metadata = new StorageMetadataStore(storage);
+        using var writerMetadata = new StorageMetadataStore(storage);
         using var local = NewNode(92);
         var gcStore = new StorageNamespaceGcStore(storage, scope, local.NodeId);
         var trust = new TrustStore();
@@ -4144,7 +4145,7 @@ public sealed class StorageSyncCoordinatorTests
         Task writer = Task.Run(() =>
         {
             writerStarted.Set();
-            metadata.BindProviderReceiptStream(scope, local.NodeId, 1, Guid.NewGuid());
+            writerMetadata.BindProviderReceiptStream(scope, local.NodeId, 1, Guid.NewGuid());
             writerCompleted.Set();
         });
 

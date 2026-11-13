@@ -49,6 +49,51 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task Provider_full_replace_staging_writes_wait_for_database_commit_gate()
+    {
+        const uint namespaceId = 72;
+        byte[] localAuthor = Id(0xD2);
+        using var database = FldDatabase.Open(
+            Path.Combine(_directory, "fld-full-replace-commit-gate"), namespaceId, localAuthor);
+        using var provider = new FldDatabaseDataProvider(database, () => 1);
+        Guid generation = Guid.Parse("72000000-0000-0000-0000-000000000001");
+        byte[] digest = new byte[32];
+        digest[0] = 0x72;
+
+        using var writerStarted = new ManualResetEventSlim();
+        using var commitGuard = database.AcquireCommitGuard();
+        Task writer = Task.Run(() =>
+        {
+            writerStarted.Set();
+            provider.BeginFullReplace(generation, 0, 1, digest);
+            provider.StageFullReplacePage(generation, 0, new[]
+            {
+                new ProviderMutation
+                {
+                    RecordId = RecordId.From(Id(0xD3)),
+                    FieldId = 0x0123,
+                    AuthorNodeId = NodeId.From(localAuthor),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 1,
+                    HlcWall = 7200,
+                    ChangeId = BatchId.From(Id(0xD4)),
+                    Value = "staged-under-commit-gate"u8.ToArray()
+                }
+            });
+        });
+
+        Assert.True(writerStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.False(writer.Wait(TimeSpan.FromMilliseconds(150)));
+        commitGuard.Dispose();
+        await writer.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(provider.TryGetFullReplaceProgress(generation, out ProviderFullReplaceProgress? progress));
+        Assert.NotNull(progress);
+        Assert.Equal(1, progress.NextIndex);
+        Assert.False(progress.IsCommitted);
+    }
+
+    [Fact]
     public void Contextual_remote_apply_maps_to_fld_wal_and_duplicate_survives_reopen()
     {
         const uint namespaceId = 7;
