@@ -811,8 +811,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             // Build the live identity set once. The previous per-candidate LINQ scans
             // multiplied retained relay/outbound/pending rows by the GC batch size.
             if (current.PeerStreams.Any(pair =>
-                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
-                return 0;
+                pair.Key.NamespaceId == namespaceId &&
+                (pair.Value.PendingBatch is not null ||
+                 pair.Value.PushedCursor != pair.Value.AckedCursor)))
+                return 0; // A pushed-but-unacknowledged cursor is still an immutable reservation.
             ulong providerHighWatermark = provider.LocalChangeHighWatermark;
             if (!TryCollectProviderChangeIdsForGc(provider, providerHighWatermark, out HashSet<BatchId> liveChangeIds))
                 return 0; // Legacy/unknown feed identity blocks ChangeId reclamation.
