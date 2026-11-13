@@ -789,7 +789,7 @@ public sealed class V31NamespaceGcHostOrchestrator
     /// </summary>
     public Task<bool> ExchangeAndApplyMetadataBaselineAsync(
         PreparedFullReplaceSnapshot prepared,
-        StorageMetadataStore metadataStore,
+        IMetadataStore metadataStore,
         IMetadataNamespaceGcStore gcStore,
         TrustStore trustStore,
         string scopeId,
@@ -890,7 +890,7 @@ public sealed class V31NamespaceGcHostOrchestrator
     /// </summary>
     public async Task<bool> ExchangeAndApplyMetadataBaselineAsync(
         MetadataBaselineExchangeIdentity identity,
-        StorageMetadataStore metadataStore,
+        IMetadataStore metadataStore,
         IMetadataNamespaceGcStore gcStore,
         TrustStore trustStore,
         string scopeId,
@@ -911,7 +911,9 @@ public sealed class V31NamespaceGcHostOrchestrator
             if (memberSeed.Length != 32 || reportSequence == 0)
                 throw new ArgumentException("A 32-byte member seed and non-zero MBR1 report sequence are required.");
             EnsureNamespaceGcBinding(gcStore, trustStore);
-            if (!_coordinator.UsesMetadataPeerStateStore(metadataStore) ||
+            if (metadataStore is not IMetadataPeerStateStore peerStateStore ||
+                metadataStore is not IMetadataBaselineCommitStore baselineCommitStore ||
+                !_coordinator.UsesMetadataPeerStateStore(peerStateStore) ||
                 identity.NamespaceId != _coordinator.NamespaceId ||
                 identity.RosterGeneration == 0 ||
                 identity.Generation == Guid.Empty ||
@@ -989,7 +991,7 @@ public sealed class V31NamespaceGcHostOrchestrator
             // concurrent provider/Metadata writers cannot cross the apply boundary.
             using IDisposable commitGuard = _acquireHostCommitLease()
                 ?? throw new InvalidOperationException("The Host commit guard is unavailable for MBR1 baseline application.");
-            return metadataStore.ApplyFullReplaceBaseline(
+            return baselineCommitStore.ApplyFullReplaceBaseline(
                 scopeId, _coordinator.LocalReplicaId, roster,
                 identity.Generation, identity.SnapshotDigest);
         }
