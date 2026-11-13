@@ -4405,16 +4405,16 @@ private static bool ValidateIncomingBatchForStaging(
         if (relay)
         {
             if (!current.Relay.TryGetValue(new RelayKey(namespaceId, author), out var entries))
-                return;
+                return 0;
             removedSequences = entries.Where(item => item.Sequence <= safeThroughSequence)
                 .Take(maxEntries).Select(item => item.Sequence).ToList();
         }
         else
         {
             if (!current.Outbound.TryGetValue(new OutboundKey(namespaceId, author), out var entries))
-                return;
+                return 0;
             removedSequences = entries.Where(item => item.Sequence <= safeThroughSequence)
-                .Select(item => item.Sequence).ToList();
+                .Take(maxEntries).Select(item => item.Sequence).ToList();
         }
         if (removedSequences.Count == 0) return 0;
 
@@ -4437,15 +4437,16 @@ private static bool ValidateIncomingBatchForStaging(
             batch.Commit();
         }
 
+        var removedSet = removedSequences.ToHashSet();
         if (relay)
         {
-            current.Relay[new RelayKey(namespaceId, author)].RemoveAll(item => item.Sequence <= safeThroughSequence);
+            current.Relay[new RelayKey(namespaceId, author)].RemoveAll(item => removedSet.Contains(item.Sequence));
             // A compaction changes the identity→sequence lookup set. Rebuild lazily
             // on the next page rather than retaining stale ChangeId resolutions.
             current.RelaySequenceIndexes?.Remove(new RelayKey(namespaceId, author));
         }
         else
-            current.Outbound[new OutboundKey(namespaceId, author)].RemoveAll(item => item.Sequence <= safeThroughSequence);
+            current.Outbound[new OutboundKey(namespaceId, author)].RemoveAll(item => removedSet.Contains(item.Sequence));
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         foreach (var key in keys)
