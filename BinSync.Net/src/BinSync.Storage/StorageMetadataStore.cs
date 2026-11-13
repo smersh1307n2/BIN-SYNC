@@ -2495,6 +2495,66 @@ private static bool ValidateIncomingBatchForStaging(
     }
 
     /// <summary>
+    /// Durably records this member's installed FULL_REPLACE ACK and its MBR1 report
+    /// from the same caller-held Host commit interval. Repeated calls reuse the exact
+    /// persisted report when its sequence matches, so crash recovery cannot recapture a
+    /// different Metadata cut under the same report sequence.
+    /// </summary>
+    public MetadataBaselineReport AcceptLocalFullReplaceAndCreateBaselineReport(
+        string scopeId,
+        NodeId localReplica,
+        NamespaceRosterCertificate acceptedRoster,
+        FullReplaceInstalledAck installedAck,
+        int snapshotEntryCount,
+        ulong providerChangeFeedWatermark,
+        ulong reportSequence,
+        ReadOnlySpan<byte> memberSeed)
+    {
+        ArgumentNullException.ThrowIfNull(installedAck);
+        ArgumentNullException.ThrowIfNull(acceptedRoster);
+        if (installedAck.MemberNodeId != localReplica ||
+            installedAck.NamespaceId != acceptedRoster.NamespaceId ||
+            installedAck.RosterGeneration != acceptedRoster.RosterGeneration ||
+            !installedAck.Installed || installedAck.Generation == Guid.Empty ||
+            installedAck.Digest.Length != MetadataBaselineReportProtocol.DigestSize)
+            throw new InvalidDataException("Local FULL_REPLACE installation ACK identity is invalid for MBR1 capture.");
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            StorageNamespaceGcStore gcStore = _namespaceGcStore
+                ?? throw new InvalidOperationException("Attach the durable namespace-GC store before recording local MBR1 evidence.");
+            TrustStore trustStore = _namespaceGcTrustStore
+                ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+            if (!gcStore.IsBoundTo(_storage, scopeId, localReplica))
+                throw new InvalidOperationException("Namespace-GC store is not bound to this Metadata scope and local replica.");
+
+            byte[] signedAck = FullReplaceInstalledAckProtocol.Sign(installedAck, memberSeed);
+            _ = gcStore.AcceptFullReplaceInstalledAck(signedAck, acceptedRoster);
+
+            MetadataBaselineReport? prior = gcStore.ReadMetadataBaselineReports(
+                    acceptedRoster, installedAck.Generation, installedAck.Digest)
+                .FirstOrDefault(report => report.MemberNodeId == localReplica);
+            if (prior is not null)
+            {
+                if (prior.ReportSequence > reportSequence)
+                    throw new InvalidDataException("Requested local MBR1 report sequence regressed behind the durable report.");
+                if (prior.ReportSequence == reportSequence)
+                    return prior;
+            }
+
+            MetadataBaselineReport report = CreateMetadataBaselineReport(
+                scopeId, localReplica, acceptedRoster, installedAck.Generation,
+                installedAck.Digest, snapshotEntryCount, providerChangeFeedWatermark,
+                reportSequence, memberSeed);
+            _ = gcStore.AcceptMetadataBaselineReport(
+                MetadataBaselineReportProtocol.EncodeEnvelope(report),
+                acceptedRoster, installedAck.Generation, installedAck.Digest);
+            return report;
+        }
+    }
+
+    /// <summary>
     /// Captures and signs this replica's own MBR1 vector from one durable Metadata
     /// partition cut. The caller must hold the Host/provider commit lease while invoking
     /// this method so the provider snapshot identity and Metadata vectors share one
