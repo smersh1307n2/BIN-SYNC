@@ -1725,7 +1725,7 @@ public sealed class StorageNamespaceGcStoreTests
                         OriginSequence = 51,
                         Fingerprint = Enumerable.Repeat((byte)0x6F, 16).ToArray(),
                         Payload = new byte[] { 0x70 },
-                        RelayEligible = false
+                        RelayEligible = true
                     },
                     new MetadataOperation
                     {
@@ -1735,7 +1735,7 @@ public sealed class StorageNamespaceGcStoreTests
                         OriginSequence = 52,
                         Fingerprint = Enumerable.Repeat((byte)0x71, 16).ToArray(),
                         Payload = new byte[] { 0x72 },
-                        RelayEligible = false
+                        RelayEligible = true
                     }
                 }
             };
