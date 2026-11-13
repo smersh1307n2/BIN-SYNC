@@ -230,6 +230,9 @@ public sealed class StorageSyncCoordinator
             throw new ArgumentException("FULL_REPLACE baseline identity is invalid.");
         if (acceptedRoster.NamespaceId != _namespaceId)
             throw new ArgumentException("Accepted roster namespace does not match this coordinator.", nameof(acceptedRoster));
+        if (!IsMetadataStoreOwnedPublication)
+            throw new InvalidOperationException(
+                "Baseline-gated payload compaction requires Metadata Store-owned publication.");
         if (maxEntriesPerStream <= 0 || maxEntriesPerStream > 4096)
             throw new ArgumentOutOfRangeException(nameof(maxEntriesPerStream));
         if (_metadataStore is not StorageMetadataStore durableMetadata ||
