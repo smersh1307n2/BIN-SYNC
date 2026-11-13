@@ -915,8 +915,8 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new InvalidOperationException("Every Active member must durably install the exact FULL_REPLACE generation before MBR1 exchange.");
             if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore,
                     out NamespaceRetentionCheckpoint? checkpoint) || checkpoint is null ||
-                checkpoint.FullReplaceGeneration != prepared.Generation ||
-                !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(prepared.Digest))
+                checkpoint.FullReplaceGeneration != identity.Generation ||
+                !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(identity.SnapshotDigest))
                 throw new InvalidOperationException("The exact FULL_REPLACE generation must already be bound by the accepted RCP2 checkpoint.");
 
             SyncSession[] sessions = ValidateSessions(activeMemberSessions);
@@ -931,7 +931,7 @@ public sealed class V31NamespaceGcHostOrchestrator
                 throw new ArgumentException("MBR1 exchange requires exactly one authenticated session for every other Active roster member.", nameof(activeMemberSessions));
 
             MetadataBaselineReport localReport = gcStore.ReadMetadataBaselineReports(
-                    roster, prepared.Generation, prepared.Digest)
+                    roster, identity.Generation, identity.SnapshotDigest)
                 .FirstOrDefault(report => report.MemberNodeId == _coordinator.LocalReplicaId)
                 ?? throw new InvalidOperationException(
                     "Local MBR1 report was not captured and durably accepted for this installed FULL_REPLACE identity.");
@@ -941,33 +941,33 @@ public sealed class V31NamespaceGcHostOrchestrator
 
             byte[] localEncoded = MetadataBaselineReportProtocol.EncodeEnvelope(localReport);
             _ = gcStore.AcceptMetadataBaselineReport(
-                localEncoded, roster, prepared.Generation, prepared.Digest);
+                localEncoded, roster, identity.Generation, identity.SnapshotDigest);
 
             // Send to every peer before receiving so symmetric full-mesh rounds cannot
             // deadlock waiting for a peer that is itself still in its send phase.
             foreach (SyncSession session in sessions)
             {
                 await session.SendMetadataBaselineReportAsync(
-                    localReport, memberSeed, roster, prepared.Generation, prepared.Digest,
+                    localReport, memberSeed, roster, identity.Generation, identity.SnapshotDigest,
                     NextSequence(session), cancellationToken).ConfigureAwait(false);
             }
 
             foreach (SyncSession session in sessions)
             {
                 MetadataBaselineReport remote = await session.ReceiveMetadataBaselineReportAsync(
-                    roster, prepared.Generation, prepared.Digest, cancellationToken).ConfigureAwait(false);
+                    roster, identity.Generation, identity.SnapshotDigest, cancellationToken).ConfigureAwait(false);
                 NamespaceRosterMember expected = FindRosterMember(roster, session.PeerNodeId);
                 if (remote.MemberNodeId != expected.NodeId ||
                     remote.MemberTransportEpoch != expected.TransportPeerEpoch)
                     throw new InvalidDataException("Received MBR1 report does not match the exact Active peer session.");
                 _ = gcStore.AcceptMetadataBaselineReport(
                     MetadataBaselineReportProtocol.EncodeEnvelope(remote),
-                    roster, prepared.Generation, prepared.Digest);
+                    roster, identity.Generation, identity.SnapshotDigest);
             }
 
             return metadataStore.ApplyFullReplaceBaseline(
                 scopeId, _coordinator.LocalReplicaId, roster,
-                prepared.Generation, prepared.Digest);
+                identity.Generation, identity.SnapshotDigest);
         }
         finally
         {
