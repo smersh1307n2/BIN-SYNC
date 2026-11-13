@@ -308,6 +308,43 @@ public sealed class StorageMetadataBaselineCommitTests
     }
 
     [Fact]
+    public void Mbr1_capture_is_blocked_by_unresolved_pending_apply()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-capture-pending-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 916);
+            Fixture fixture = CreateFixture(storage);
+            using StorageMetadataStore metadata = fixture.Metadata;
+            metadata.BeginPendingApply(new MetadataIncomingBatch
+            {
+                ScopeId = Scope,
+                LocalReplica = fixture.Local,
+                SenderPeer = fixture.Peer,
+                SenderEpoch = 5,
+                TransportPeerEpoch = 11,
+                AuthorStreamNodeId = fixture.RelayAuthor,
+                NamespaceId = NamespaceId,
+                BatchId = Batch(46),
+                CursorStart = 2,
+                CursorEnd = 2,
+                PreviousBatchDigest = fixture.RelayDigest,
+                BatchDigest = Digest(47),
+                Operations = Array.Empty<MetadataOperation>()
+            }, Guid.Parse("cccccccc-dddd-eeee-ffff-000000000001"));
+
+            Assert.Throws<InvalidOperationException>(() => metadata.CreateMetadataBaselineReport(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest,
+                snapshotEntryCount: 4, providerChangeFeedWatermark: 40, reportSequence: 2,
+                fixture.Keys[0].Seed));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Full_replace_baseline_commits_both_directions_atomically_and_survives_reopen()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-apply-" + Guid.NewGuid().ToString("N"));
