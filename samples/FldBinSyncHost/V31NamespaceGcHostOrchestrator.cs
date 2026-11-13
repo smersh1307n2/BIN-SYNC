@@ -318,6 +318,8 @@ public sealed class V31NamespaceGcHostOrchestrator
     public async Task<FullReplaceInstalledAck> TransferPreparedFullReplaceToMemberAsync(
         PreparedFullReplaceSnapshot prepared,
         SyncSession memberSession,
+        StorageMetadataStore metadataStore,
+        string scopeId,
         IMetadataNamespaceGcStore gcStore,
         TrustStore trustStore,
         byte[] authoritySeed,
@@ -328,6 +330,12 @@ public sealed class V31NamespaceGcHostOrchestrator
         {
             ArgumentNullException.ThrowIfNull(prepared);
             ArgumentNullException.ThrowIfNull(memberSession);
+            ArgumentNullException.ThrowIfNull(metadataStore);
+            ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+            if (!_coordinator.UsesMetadataPeerStateStore(metadataStore))
+                throw new ArgumentException(
+                    "FULL_REPLACE retry Metadata Store must be the exact instance owned by the coordinator.",
+                    nameof(metadataStore));
             ArgumentNullException.ThrowIfNull(gcStore);
             ArgumentNullException.ThrowIfNull(trustStore);
             ArgumentNullException.ThrowIfNull(authoritySeed);
@@ -347,6 +355,8 @@ public sealed class V31NamespaceGcHostOrchestrator
                     "Only the local namespace authority may send a prepared FULL_REPLACE snapshot.");
             StorageFullReplaceSender.ValidatePreparedSnapshot(
                 prepared, trustStore, roster, _coordinator.LocalReplicaId, authoritySeed);
+            StorageFullReplaceSender.ValidatePreparedSnapshotPersistence(
+                prepared, metadataStore, scopeId, _coordinator.LocalReplicaId, gcStore, roster);
             NamespaceRosterMember authority = FindRosterMember(
                 roster, roster.AuthorityNodeId);
             if (authority.Status != NamespaceMemberStatus.Active)
