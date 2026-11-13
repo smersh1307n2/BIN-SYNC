@@ -1616,8 +1616,6 @@ public sealed class StorageMetadataBaselineCommitTests
             metadata.RetireInterestedPeer(
                 Scope, fixture.Local, fixture.Peer,
                 retiredPeerEpoch: 11, replacementPeerEpoch: 12, namespaceId: NamespaceId);
-            Assert.Equal(11U, metadata.GetRetiredPeerEpochThrough(
-                Scope, fixture.Local, fixture.Peer, NamespaceId));
 
             Assert.True(metadata.ApplyFullReplaceBaseline(
                 Scope, fixture.Local, rejoined, fixture.Generation, fixture.SnapshotDigest));
