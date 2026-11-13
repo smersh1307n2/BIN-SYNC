@@ -43,6 +43,61 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Bounded_outbound_payload_compaction_resumes_after_reopen_and_preserves_change_id_ledger()
+    {
+        string directory = Path.Combine(_root, "bounded-outbound-compaction-reopen");
+        Directory.CreateDirectory(directory);
+        const string scope = "bounded-outbound-compaction-reopen";
+        const int namespaceId = 7;
+        NodeId local = Node(1);
+        Guid consumer = Guid.Parse("92000000-0000-0000-0000-000000000001");
+        var operations = new[]
+        {
+            FrozenOperation(240, 241),
+            FrozenOperation(242, 243),
+            FrozenOperation(244, 245)
+        };
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 460))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                store.FreezeOutbound(scope, local, namespaceId, local, operations);
+                ulong lease = store.AcquireOutboundLease(scope, local, namespaceId, local, consumer);
+                Assert.Equal(3, store.ReadOutbound(scope, local, namespaceId, local, lease, 0, 10).Items.Count);
+                store.AcknowledgeOutbound(scope, local, namespaceId, local, lease, 3);
+
+                Assert.Equal(1, store.CompactOutboundThroughBounded(
+                    scope, local, namespaceId, local, 3, maxEntries: 1));
+                Assert.Equal(3UL, store.GetOutboundHighWatermark(scope, local, namespaceId, local));
+            }
+
+            // Simulate process loss after the first durable page. The next process
+            // must resume from persisted payload rows without a separate cursor/journal.
+            using (var storage = StorageDatabase.Open(directory, 460))
+            using (var reopened = new StorageMetadataStore(storage))
+            {
+                Assert.Equal(1, reopened.CompactOutboundThroughBounded(
+                    scope, local, namespaceId, local, 3, maxEntries: 1));
+                Assert.Equal(1, reopened.CompactOutboundThroughBounded(
+                    scope, local, namespaceId, local, 3, maxEntries: 1));
+                Assert.Equal(0, reopened.CompactOutboundThroughBounded(
+                    scope, local, namespaceId, local, 3, maxEntries: 1));
+                Assert.Equal(3UL, reopened.GetOutboundHighWatermark(scope, local, namespaceId, local));
+                Assert.Empty(reopened.ReadOutbound(
+                    scope, local, namespaceId, local, lease: 1, afterSequence: 0, limit: 10).Items);
+                Assert.Throws<InvalidDataException>(() =>
+                    reopened.FreezeOutbound(scope, local, namespaceId, local, operations));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Compact_stream_payload_row_recovers_origin_from_global_change_id_ledger()
     {
         string directory = Path.Combine(_root, "compact-stream-payload");
