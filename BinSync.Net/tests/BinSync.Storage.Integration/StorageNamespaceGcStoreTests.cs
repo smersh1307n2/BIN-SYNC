@@ -2071,6 +2071,20 @@ public sealed class StorageNamespaceGcStoreTests
                     reopenedStorage, scope, local,
                     new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
                 reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
+
+                // Reopening must restore the exact accepted rejoin roster and its
+                // independently signed causal evidence, not merely enough state for
+                // a later compaction call to happen to succeed.
+                Assert.True(reopenedGc.TryReadNamespaceRoster(namespaceId, trust,
+                    out NamespaceRosterCertificate? persistedRoster));
+                Assert.NotNull(persistedRoster);
+                Assert.Equal(7UL, persistedRoster!.RosterGeneration);
+                Assert.Equal(2, reopenedGc.ReadOriginFrontiers(persistedRoster).Count);
+                Assert.True(reopenedGc.TryReadRetentionCheckpoint(
+                    persistedRoster, trust, out _));
+                Assert.True(reopenedGc.IsOriginCoveredByRetentionCheckpoint(
+                    persistedRoster, trust, sender, 3, 50));
+
                 Assert.Equal(2, new[] { changeId, secondChangeId, thirdChangeId }.Count(id =>
                     reopenedMetadata.TryGetChangeIdentity(
                         scope, local, namespaceId, id, out _, out _, out _)));
