@@ -1224,41 +1224,6 @@ public sealed class StorageMetadataBaselineCommitTests
                 Scope, fixture.Local, NamespaceId, fixture.RelayAuthor, afterSequence: 0, limit: 10);
             Assert.Single(relay.Items);
 
-            // Reopen the shared provider and reconstruct both metadata and GC
-            // adapters. The rejoined roster, fresh MBR1 evidence, RCP2 checkpoint,
-            // applied marker, and replacement-epoch stream state must all be durable.
-            metadata.Dispose();
-            storage.Dispose();
-
-            using var reopenedStorage = StorageDatabase.Open(directory, 923);
-            var reopenedGc = new StorageNamespaceGcStore(
-                reopenedStorage, Scope, fixture.Local);
-            Assert.True(reopenedGc.TryReadNamespaceRoster(
-                NamespaceId, fixture.Trust, out NamespaceRosterCertificate? persistedRoster));
-            Assert.Equal(4UL, persistedRoster!.RosterGeneration);
-            Assert.Equal(2, reopenedGc.ReadMetadataBaselineReports(
-                persistedRoster, fixture.Generation, fixture.SnapshotDigest).Count);
-            Assert.True(reopenedGc.TryReadRetentionCheckpoint(
-                persistedRoster, fixture.Trust, out NamespaceRetentionCheckpoint? reopenedCheckpoint));
-            Assert.Equal(fixture.Generation, reopenedCheckpoint!.FullReplaceGeneration);
-            Assert.Equal(fixture.SnapshotDigest, reopenedCheckpoint.FullReplaceDigest);
-
-            using var reopenedMetadata = new StorageMetadataStore(reopenedStorage);
-            reopenedMetadata.AttachNamespaceGcGuard(
-                reopenedGc, fixture.Trust, Scope, fixture.Local);
-            Assert.True(reopenedMetadata.IsFullReplaceBaselineApplied(
-                Scope, fixture.Local, persistedRoster, fixture.Generation, fixture.SnapshotDigest));
-
-            ulong reopenedLease = reopenedMetadata.AcquireOutboundLease(
-                Scope, fixture.Local, NamespaceId, fixture.Local, Guid.NewGuid());
-            MetadataOutboundPage reopenedOutbound = reopenedMetadata.ReadOutbound(
-                Scope, fixture.Local, NamespaceId, fixture.Local,
-                reopenedLease, afterSequence: 0, limit: 10);
-            Assert.Equal(new ulong[] { 1, 2 },
-                reopenedOutbound.Items.Select(item => item.Sequence));
-            MetadataRelayPage reopenedRelay = reopenedMetadata.ReadRelay(
-                Scope, fixture.Local, NamespaceId, fixture.RelayAuthor, afterSequence: 0, limit: 10);
-            Assert.Single(reopenedRelay.Items);
         }
         finally
         {
@@ -1666,6 +1631,42 @@ public sealed class StorageMetadataBaselineCommitTests
             MetadataRelayPage relay = metadata.ReadRelay(
                 Scope, fixture.Local, NamespaceId, fixture.RelayAuthor, afterSequence: 0, limit: 10);
             Assert.Single(relay.Items);
+
+            // Reopen the shared provider and reconstruct both metadata and GC
+            // adapters. The rejoined roster, fresh MBR1 evidence, RCP2 checkpoint,
+            // applied marker, and replacement-epoch stream state must all be durable.
+            metadata.Dispose();
+            storage.Dispose();
+
+            using var reopenedStorage = StorageDatabase.Open(directory, 923);
+            var reopenedGc = new StorageNamespaceGcStore(
+                reopenedStorage, Scope, fixture.Local);
+            Assert.True(reopenedGc.TryReadNamespaceRoster(
+                NamespaceId, fixture.Trust, out NamespaceRosterCertificate? persistedRoster));
+            Assert.Equal(4UL, persistedRoster!.RosterGeneration);
+            Assert.Equal(2, reopenedGc.ReadMetadataBaselineReports(
+                persistedRoster, fixture.Generation, fixture.SnapshotDigest).Count);
+            Assert.True(reopenedGc.TryReadRetentionCheckpoint(
+                persistedRoster, fixture.Trust, out NamespaceRetentionCheckpoint? reopenedCheckpoint));
+            Assert.Equal(fixture.Generation, reopenedCheckpoint!.FullReplaceGeneration);
+            Assert.Equal(fixture.SnapshotDigest, reopenedCheckpoint.FullReplaceDigest);
+
+            using var reopenedMetadata = new StorageMetadataStore(reopenedStorage);
+            reopenedMetadata.AttachNamespaceGcGuard(
+                reopenedGc, fixture.Trust, Scope, fixture.Local);
+            Assert.True(reopenedMetadata.IsFullReplaceBaselineApplied(
+                Scope, fixture.Local, persistedRoster, fixture.Generation, fixture.SnapshotDigest));
+
+            ulong reopenedLease = reopenedMetadata.AcquireOutboundLease(
+                Scope, fixture.Local, NamespaceId, fixture.Local, Guid.NewGuid());
+            MetadataOutboundPage reopenedOutbound = reopenedMetadata.ReadOutbound(
+                Scope, fixture.Local, NamespaceId, fixture.Local,
+                reopenedLease, afterSequence: 0, limit: 10);
+            Assert.Equal(new ulong[] { 1, 2 },
+                reopenedOutbound.Items.Select(item => item.Sequence));
+            MetadataRelayPage reopenedRelay = reopenedMetadata.ReadRelay(
+                Scope, fixture.Local, NamespaceId, fixture.RelayAuthor, afterSequence: 0, limit: 10);
+            Assert.Single(reopenedRelay.Items);
         }
         finally
         {
