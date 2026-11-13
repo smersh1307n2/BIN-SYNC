@@ -1,4 +1,5 @@
 using System.Text;
+using System.Reflection;
 using BinSync;
 using BinSync.Storage;
 using Fld1.Storage.Engine;
@@ -232,6 +233,75 @@ public sealed class AsyncCoordinatorProcessCrashTests
                 try { await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
                 child.Dispose();
             }
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Direct_receive_staging_waits_for_namespace_admission_and_leaves_gc_visible_pending_apply()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-async-gc-admission-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, PartitionId);
+            using var metadata = new StorageMetadataStore(storage);
+            using var sender = NewNode(SenderSeed);
+            using var receiver = NewNode(ReceiverSeed);
+            var coordinator = new AsyncStorageSyncCoordinator(
+                receiver, metadata, "async-gc-admission", NamespaceId);
+
+            var (toSender, toReceiver) = PipeTransport.CreatePair();
+            Task<SyncSession> acceptTask = SyncSession.AcceptAsync(receiver, toReceiver);
+            Task<SyncSession> connectTask = SyncSession.ConnectAsync(sender, toSender);
+            await using var acceptor = await acceptTask;
+            await using var initiator = await connectTask;
+
+            Assert.True(sender.WriteField(NamespaceId, Record, 0x088B,
+                Encoding.UTF8.GetBytes("gc-admission"), new Hlc(8801, 0)));
+
+            var admission = (SemaphoreSlim?)typeof(AsyncStorageSyncCoordinator)
+                .GetField("_asyncAdmissionGate", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(coordinator);
+            Assert.NotNull(admission);
+            await admission!.WaitAsync();
+
+            using var callbackStarted = new ManualResetEventSlim();
+            using var callbackCompleted = new ManualResetEventSlim();
+            Task<BatchResult> receive = acceptor.ReceiveBatchAsync(
+                receiver,
+                beforeApply: null,
+                beforeApplyWithOperationDecisions: (batch, payload, peer) =>
+                {
+                    callbackStarted.Set();
+                    StorageRemoteApplyPlan plan = coordinator.BeginRemoteBatchBeforeNodeApply(
+                        batch, payload.ToArray(), peer, checked((uint)acceptor.PeerEpoch));
+                    callbackCompleted.Set();
+                    return plan.ApplyOperations;
+                },
+                beforeAck: null,
+                receiveStateOwnedByMetadataStore: true);
+            Task<bool> send = initiator.PushBatchAsync(sender, NamespaceId);
+
+            try
+            {
+                Assert.True(callbackStarted.Wait(TimeSpan.FromSeconds(10)));
+                Assert.False(callbackCompleted.Wait(TimeSpan.FromMilliseconds(150)),
+                    "Direct receive staging bypassed the namespace admission semaphore.");
+            }
+            finally
+            {
+                admission.Release();
+            }
+
+            await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
+            IReadOnlyList<MetadataPendingApplyIntent> pending =
+                metadata.ReadPendingApplyIntents("async-gc-admission", receiver.NodeId);
+            Assert.Single(pending);
+        }
+        finally
+        {
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
