@@ -264,6 +264,7 @@ public sealed class StorageFullReplaceSenderTests
             using var metadata = new StorageMetadataStore(storage);
             using var node = new Node(localId);
             var gcStore = new StorageNamespaceGcStore(storage, scope, localId);
+            _ = gcStore.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, seed), trust);
             var coordinator = new StorageSyncCoordinator(node, provider, 23, metadata, scope);
             coordinator.AttachNamespaceGcGuard(gcStore, trust);
 
@@ -284,6 +285,10 @@ public sealed class StorageFullReplaceSenderTests
             Assert.Equal(0UL, prepared.SourceChangeFeedWatermark);
             Assert.Equal(1, acquired);
             Assert.Equal(1, released);
+            MetadataBaselineReport localBaseline = Assert.Single(
+                gcStore.ReadMetadataBaselineReports(roster, prepared.Generation, prepared.Digest));
+            Assert.Equal(localId, localBaseline.MemberNodeId);
+            Assert.Equal(1UL, localBaseline.ReportSequence);
             Assert.True(metadata.TryGetPreparedFullReplaceSnapshot(
                 scope, localId, 23, prepared.Generation, out PreparedFullReplaceSnapshotState? state));
             Assert.NotNull(state);
