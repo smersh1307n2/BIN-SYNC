@@ -3569,3 +3569,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added integration coverage for outbound + relay + receive vector application, signed active-member frontier/RCP2 checkpoint binding, one-commit atomicity, duplicate replay, post-baseline receive-chain continuation, durable reopen, PendingApply blocking and same-generation evidence fork rejection.
 - [!] This stage installs baseline metadata only. It does not compact outbound/relay payloads, receipts, ChangeIds, tombstones or ghosts and does not enable production GC.
 - [ ] Next: harden cross-report progress/rejoin cases, add immutable-reservation and epoch-rollover matrices, verify host-side FULL_REPLACE orchestration calls the new capability on every durable Metadata host, then implement bounded post-marker payload compaction with crash/reopen retry tests.
+
+## 1.138. Host FULL_REPLACE baseline capability boundary — 2026-11-13
+
+- [x C] Changed both host FULL_REPLACE MBR1 exchange overloads to accept the Metadata contract (IMetadataStore) instead of hard-coding StorageMetadataStore; the prepared-snapshot convenience overload forwards through the same contract.
+- [x C] Before network exchange or baseline application, the host now requires the supplied instance to expose both the coordinator-bound IMetadataPeerStateStore identity and the IMetadataBaselineCommitStore atomic-commit capability. A durable Metadata implementation without the baseline capability fails closed; the host never silently skips the two-sided baseline.
+- [x C] The final commit still runs only after all authenticated Active-member reports are exchanged and while the host commit lease is held; the actual transaction is invoked through IMetadataBaselineCommitStore.
+- [x C] Kept promoted-member report capture on StorageMetadataStore, because that path currently uses the concrete durable local report-creation API and is not the baseline-application abstraction being generalized here.
+- [!] This is a host API/capability-boundary hardening only. It does not change MBR1 wire bytes, baseline transaction semantics, payload retention, or GC eligibility.
+- [ ] T Exact-head host adapter + BIN-SYNC/FLD Storage Integration CI must pass. Add direct negative-path orchestration coverage for a Metadata implementation that has peer-state support but omits IMetadataBaselineCommitStore.
+- [ ] Next: bounded post-marker outbound/relay payload compaction with explicit crash cuts, reopen/retry idempotency and strict contiguous-prefix assertions. Keep physical tombstone/ChangeId/receipt GC disabled.
