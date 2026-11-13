@@ -1399,4 +1399,66 @@ public sealed class StorageNamespaceGcStoreTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public void Change_id_gc_provider_scan_retains_unpublished_feed_identities_across_reopen_and_releases_only_acknowledged_entries()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-changeid-provider-gc-" + Guid.NewGuid().ToString("N"));
+        NodeId local = NodeId.From(Id(0x71));
+        BatchId first = BatchId.From(Id(0x72));
+        BatchId second = BatchId.From(Id(0x73));
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 911))
+            using (var provider = new StorageDataProvider(storage))
+            {
+                provider.AppendLocalChange(new ProviderMutation
+                {
+                    RecordId = RecordId.From(Id(0x74)),
+                    FieldId = 1,
+                    HlcWall = 10,
+                    AuthorNodeId = local,
+                    OriginAuthorEpoch = 3,
+                    Value = new byte[] { 0xA1 },
+                    ChangeId = first
+                });
+                provider.AppendLocalChange(new ProviderMutation
+                {
+                    RecordId = RecordId.From(Id(0x74)),
+                    FieldId = 2,
+                    HlcWall = 11,
+                    AuthorNodeId = local,
+                    OriginAuthorEpoch = 3,
+                    Value = new byte[] { 0xA2 },
+                    ChangeId = second
+                });
+
+                Assert.True(StorageMetadataStore.TryCollectProviderChangeIdsForGc(
+                    provider, provider.LocalChangeHighWatermark, out HashSet<BatchId> live));
+                Assert.Equal(new HashSet<BatchId> { first, second }, live);
+            }
+
+            using (var storage = StorageDatabase.Open(directory, 911))
+            using (var provider = new StorageDataProvider(storage))
+            {
+                // Acknowledgement is legal only after the complete source prefix was
+                // scanned. Once publication has consumed the feed entries, those rows
+                // are no longer unpublished host references to the ChangeId ledger.
+                ProviderChangePage page = provider.ReadLocalChanges(0, 16);
+                Assert.Equal(2UL, page.ScannedThroughSequence);
+                Assert.Equal(new[] { first, second }, page.Changes.Select(change => change.ChangeId));
+                provider.AcknowledgeLocalChanges(2);
+
+                Assert.True(StorageMetadataStore.TryCollectProviderChangeIdsForGc(
+                    provider, provider.LocalChangeHighWatermark, out HashSet<BatchId> live));
+                Assert.Empty(live);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
