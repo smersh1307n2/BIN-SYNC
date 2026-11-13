@@ -161,6 +161,10 @@ public sealed class StorageMetadataBaselineCommitTests
         });
 
         byte[] outboundDigest = Digest(31);
+        metadata.RegisterInterestedPeerStream(Scope, local, peer, 11, NamespaceId,
+            local, baselineAckedCursor: 0, streamOffset: 1, issuerEpoch: 7, outboundDigest);
+        metadata.RegisterInterestedPeerStream(Scope, local, peer, 11, NamespaceId,
+            relayAuthor, baselineAckedCursor: 0, streamOffset: 0, issuerEpoch: 5, new byte[16]);
         var localReport = new MetadataBaselineReport
         {
             NamespaceId = NamespaceId,
@@ -246,6 +250,60 @@ public sealed class StorageMetadataBaselineCommitTests
 
         return new Fixture(metadata, gc, trust, roster, keys, generation, snapshotDigest,
             signedLocal, signedPeer, local, peer, relayAuthor, outboundDigest, relayDigest);
+    }
+
+    [Fact]
+    public void Create_metadata_baseline_report_captures_the_local_durable_feed_and_receive_vectors()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-capture-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 915);
+            Fixture fixture = CreateFixture(storage);
+            using StorageMetadataStore metadata = fixture.Metadata;
+
+            MetadataBaselineReport report = metadata.CreateMetadataBaselineReport(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest,
+                snapshotEntryCount: 4, providerChangeFeedWatermark: 40, reportSequence: 1,
+                fixture.Keys[0].Seed);
+
+            Assert.Equal(fixture.Local, report.MemberNodeId);
+            Assert.Equal(10U, report.MemberTransportEpoch);
+            Assert.Equal(100UL, report.HlcWallFloor);
+            Assert.Equal(2U, report.HlcLogicalFloor);
+            Assert.Equal(2, report.FeedEntries.Count);
+            MetadataBaselineFeedEntry outbound = Assert.Single(report.FeedEntries,
+                entry => entry.AuthorStream == fixture.Local);
+            Assert.Equal(fixture.Peer, outbound.TargetPeer);
+            Assert.Equal(11U, outbound.TargetTransportEpoch);
+            Assert.Equal(MetadataBaselineFeedKind.Outbound, outbound.FeedKind);
+            Assert.Equal(7U, outbound.IssuerEpoch);
+            Assert.Equal(1UL, outbound.AbsoluteFeedOffset);
+            Assert.Equal(fixture.OutboundDigest, outbound.DigestAnchor);
+
+            MetadataBaselineFeedEntry relay = Assert.Single(report.FeedEntries,
+                entry => entry.AuthorStream == fixture.RelayAuthor);
+            Assert.Equal(MetadataBaselineFeedKind.Relay, relay.FeedKind);
+            Assert.Equal(0UL, relay.AbsoluteFeedOffset);
+            Assert.Equal(new byte[16], relay.DigestAnchor);
+
+            MetadataBaselineReceiveEntry receive = Assert.Single(report.ReceiveEntries);
+            Assert.Equal(fixture.Peer, receive.SenderPeer);
+            Assert.Equal(11U, receive.SenderTransportEpoch);
+            Assert.Equal(fixture.RelayAuthor, receive.AuthorStream);
+            Assert.Equal(5U, receive.IssuerEpoch);
+            Assert.Equal(1UL, receive.ReceiveCursor);
+            Assert.Equal(fixture.RelayDigest, receive.LastBatchDigest);
+
+            byte[] encoded = MetadataBaselineReportProtocol.EncodeEnvelope(report);
+            MetadataBaselineReport verified = MetadataBaselineReportProtocol.DecodeAndVerify(
+                encoded, fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
+            Assert.Equal(report.ReportSequence, verified.ReportSequence);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
     }
 
     [Fact]
