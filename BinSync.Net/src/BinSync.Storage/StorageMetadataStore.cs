@@ -734,6 +734,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// frontier and while the caller holds an exclusive cross-store live-reference
     /// lease. The retained checkpoint becomes the durable replay fence.
     /// </summary>
+    internal static bool IsPeerStreamGcReservationOutstanding(
+        bool hasPendingBatch, ulong pushedCursor, ulong ackedCursor)
+        => hasPendingBatch || pushedCursor != ackedCursor;
+
     internal static bool TryCollectProviderChangeIdsForGc(
         IDataProvider provider, ulong providerHighWatermark, out HashSet<BatchId> liveChangeIds)
     {
@@ -812,8 +816,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             // multiplied retained relay/outbound/pending rows by the GC batch size.
             if (current.PeerStreams.Any(pair =>
                 pair.Key.NamespaceId == namespaceId &&
-                (pair.Value.PendingBatch is not null ||
-                 pair.Value.PushedCursor != pair.Value.AckedCursor)))
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
                 return 0; // A pushed-but-unacknowledged cursor is still an immutable reservation.
             ulong providerHighWatermark = provider.LocalChangeHighWatermark;
             if (!TryCollectProviderChangeIdsForGc(provider, providerHighWatermark, out HashSet<BatchId> liveChangeIds))
