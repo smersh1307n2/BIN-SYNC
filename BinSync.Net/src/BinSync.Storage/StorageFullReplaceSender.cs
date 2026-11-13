@@ -140,7 +140,8 @@ public static class StorageFullReplaceSender
         string scopeId,
         NodeId localReplica,
         StorageSyncCoordinator coordinator,
-        Func<IDisposable?> acquireHostCommitLease)
+        Func<IDisposable?> acquireHostCommitLease,
+        ulong baselineReportSequence = 1)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(acquireHostCommitLease);
@@ -151,6 +152,8 @@ public static class StorageFullReplaceSender
         if (coordinator.NamespaceId != roster.NamespaceId ||
             coordinator.LocalReplicaId != localReplica)
             throw new ArgumentException("FULL_REPLACE coordinator identity does not match the source namespace and replica.");
+        if (authorityNodeId != localReplica || baselineReportSequence == 0)
+            throw new ArgumentException("Source-side MBR1 capture requires the local Active member to be the namespace authority and a non-zero report sequence.");
 
         using IFullReplaceCommitLease commitLease =
             coordinator.AcquireFullReplaceCommitGuard(acquireHostCommitLease);
@@ -159,9 +162,32 @@ public static class StorageFullReplaceSender
             commitLease.LocalReplica != localReplica)
             throw new InvalidOperationException("Acquired FULL_REPLACE lease is bound to a different namespace or local replica.");
 
-        return PrepareSnapshotAndPersist(
+        PreparedFullReplaceSnapshot prepared = PrepareSnapshotAndPersist(
             provider, trustStore, roster, authorityNodeId, generation, authoritySeed,
             metadataStore, scopeId, localReplica);
+        NamespaceRosterMember localMember = roster.Members.FirstOrDefault(
+            member => member.NodeId == localReplica)
+            ?? throw new InvalidDataException("Source replica is absent from the accepted FULL_REPLACE roster.");
+        if (localMember.Status != NamespaceMemberStatus.Active)
+            throw new InvalidOperationException("Only an Active source member can capture the local MBR1 baseline.");
+        metadataStore.AcceptLocalFullReplaceAndCreateBaselineReport(
+            scopeId, localReplica, roster,
+            new FullReplaceInstalledAck
+            {
+                NamespaceId = roster.NamespaceId,
+                RosterGeneration = roster.RosterGeneration,
+                RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                Generation = prepared.Generation,
+                Digest = prepared.Digest,
+                MemberNodeId = localReplica,
+                MemberTransportEpoch = localMember.TransportPeerEpoch,
+                HlcWallFloor = prepared.HlcWallFloor,
+                HlcLogicalFloor = prepared.HlcLogicalFloor,
+                Installed = true
+            },
+            prepared.ExpectedEntryCount, prepared.SourceChangeFeedWatermark,
+            baselineReportSequence, authoritySeed);
+        return prepared;
     }
 
     /// <summary>
