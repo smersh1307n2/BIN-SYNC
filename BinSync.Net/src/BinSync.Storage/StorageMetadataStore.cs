@@ -2586,8 +2586,7 @@ private static bool ValidateIncomingBatchForStaging(
         {
             ThrowIfDisposed();
             var partitionKey = new PartitionKey(scopeId, localReplica);
-            if (!TryGetPartition(partitionKey, out PartitionState? current))
-                throw new InvalidOperationException("Cannot publish an MBR1 report before the Metadata partition is initialized.");
+            PartitionState current = GetOrCreatePartition(partitionKey);
             int pendingApplies = current.PendingApplies.Values.Count(
                 pending => pending.Batch.NamespaceId == acceptedRoster.NamespaceId);
             if (pendingApplies != 0)
