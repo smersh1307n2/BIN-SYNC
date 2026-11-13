@@ -575,6 +575,155 @@ public sealed class StorageMetadataBaselineCommitTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Full_replace_baseline_is_blocked_by_immutable_peer_reservation(bool markPushed)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-reservation-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 916);
+            Fixture fixture = CreateFixture(storage);
+            using StorageMetadataStore metadata = fixture.Metadata;
+            var reservation = new MetadataOutboundBatchReservation
+            {
+                BatchId = Batch(0x61),
+                IssuerEpoch = 7,
+                StreamOffset = 1,
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = fixture.OutboundDigest.ToArray(),
+                BatchDigest = Digest(0x62),
+                Payload = new byte[] { 0x63 }
+            };
+            metadata.ReserveOutboundBatch(
+                Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local, reservation);
+            if (markPushed)
+                metadata.MarkOutboundBatchPushed(
+                    Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local, reservation.BatchId);
+
+            MetadataPeerStreamState beforeState = metadata.GetPeerStreamState(
+                Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local);
+            ulong beforeCommit = storage.LastCommitSeq;
+            Assert.Throws<InvalidOperationException>(() => metadata.ApplyFullReplaceBaseline(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+            Assert.Equal(beforeCommit, storage.LastCommitSeq);
+            Assert.False(metadata.IsFullReplaceBaselineApplied(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+            MetadataPeerStreamState afterState = metadata.GetPeerStreamState(
+                Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local);
+            Assert.Equal(beforeState.AckedCursor, afterState.AckedCursor);
+            Assert.Equal(beforeState.PushedCursor, afterState.PushedCursor);
+            Assert.Equal(beforeState.PendingBatch?.BatchId, afterState.PendingBatch?.BatchId);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Full_replace_baseline_rejects_epoch_rollover_over_existing_peer_progress()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-epoch-rollover-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 917);
+            Fixture fixture = CreateFixture(storage);
+            using StorageMetadataStore metadata = fixture.Metadata;
+
+            MetadataBaselineReport local = MetadataBaselineReportProtocol.DecodeAndVerify(
+                fixture.LocalReport, fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
+            MetadataBaselineReport peer = MetadataBaselineReportProtocol.DecodeAndVerify(
+                fixture.PeerReport, fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
+            MetadataBaselineFeedEntry oldFeed = Assert.Single(local.FeedEntries,
+                entry => entry.AuthorStream == fixture.Local);
+            MetadataBaselineReceiveEntry oldReceive = Assert.Single(peer.ReceiveEntries,
+                entry => entry.SenderPeer == fixture.Local && entry.AuthorStream == fixture.Local);
+
+            var revisedLocal = new MetadataBaselineReport
+            {
+                NamespaceId = local.NamespaceId,
+                RosterGeneration = local.RosterGeneration,
+                RosterDigest = local.RosterDigest,
+                FullReplaceGeneration = local.FullReplaceGeneration,
+                SnapshotDigest = local.SnapshotDigest,
+                SnapshotEntryCount = local.SnapshotEntryCount,
+                ProviderChangeFeedWatermark = local.ProviderChangeFeedWatermark,
+                HlcWallFloor = local.HlcWallFloor,
+                HlcLogicalFloor = local.HlcLogicalFloor,
+                MemberNodeId = local.MemberNodeId,
+                MemberTransportEpoch = local.MemberTransportEpoch,
+                ReportSequence = 2,
+                FeedEntries = local.FeedEntries.Select(entry => entry.AuthorStream != fixture.Local
+                    ? entry
+                    : new MetadataBaselineFeedEntry
+                    {
+                        TargetPeer = entry.TargetPeer,
+                        TargetTransportEpoch = entry.TargetTransportEpoch,
+                        AuthorStream = entry.AuthorStream,
+                        FeedKind = entry.FeedKind,
+                        IssuerEpoch = 8,
+                        AbsoluteFeedOffset = entry.AbsoluteFeedOffset,
+                        DigestAnchor = new byte[16]
+                    }).ToArray(),
+                ReceiveEntries = local.ReceiveEntries
+            };
+            var revisedPeer = new MetadataBaselineReport
+            {
+                NamespaceId = peer.NamespaceId,
+                RosterGeneration = peer.RosterGeneration,
+                RosterDigest = peer.RosterDigest,
+                FullReplaceGeneration = peer.FullReplaceGeneration,
+                SnapshotDigest = peer.SnapshotDigest,
+                SnapshotEntryCount = peer.SnapshotEntryCount,
+                ProviderChangeFeedWatermark = peer.ProviderChangeFeedWatermark,
+                HlcWallFloor = peer.HlcWallFloor,
+                HlcLogicalFloor = peer.HlcLogicalFloor,
+                MemberNodeId = peer.MemberNodeId,
+                MemberTransportEpoch = peer.MemberTransportEpoch,
+                ReportSequence = 2,
+                FeedEntries = peer.FeedEntries,
+                ReceiveEntries = peer.ReceiveEntries.Select(entry =>
+                    entry.SenderPeer != fixture.Local || entry.AuthorStream != fixture.Local
+                        ? entry
+                        : new MetadataBaselineReceiveEntry
+                        {
+                            SenderPeer = entry.SenderPeer,
+                            SenderTransportEpoch = entry.SenderTransportEpoch,
+                            AuthorStream = entry.AuthorStream,
+                            IssuerEpoch = 8,
+                            ReceiveCursor = entry.ReceiveCursor,
+                            LastBatchDigest = new byte[16]
+                        }).ToArray()
+            };
+            Assert.Equal(7U, oldFeed.IssuerEpoch);
+            Assert.Equal(7U, oldReceive.IssuerEpoch);
+            fixture.Gc.AcceptMetadataBaselineReport(
+                MetadataBaselineReportProtocol.Sign(revisedLocal, fixture.Keys[0].Seed),
+                fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
+            fixture.Gc.AcceptMetadataBaselineReport(
+                MetadataBaselineReportProtocol.Sign(revisedPeer, fixture.Keys[1].Seed),
+                fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
+
+            ulong beforeCommit = storage.LastCommitSeq;
+            Assert.Throws<InvalidDataException>(() => metadata.ApplyFullReplaceBaseline(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+            Assert.Equal(beforeCommit, storage.LastCommitSeq);
+            Assert.False(metadata.IsFullReplaceBaselineApplied(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+            MetadataPeerStreamState retained = metadata.GetPeerStreamState(
+                Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local);
+            Assert.Equal(7U, retained.IssuerEpoch);
+            Assert.Equal(fixture.OutboundDigest, retained.LastBatchDigest);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public void Same_full_replace_generation_rejects_a_different_accepted_evidence_set()
     {
