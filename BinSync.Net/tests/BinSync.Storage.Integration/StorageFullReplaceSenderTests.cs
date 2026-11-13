@@ -279,7 +279,8 @@ public sealed class StorageFullReplaceSenderTests
                     {
                         Interlocked.Increment(ref acquired);
                         return new CallbackLease(() => Interlocked.Increment(ref released));
-                    });
+                    },
+                    baselineReportSequence: 1);
 
             Assert.Equal(23, prepared.NamespaceId);
             Assert.Equal(0UL, prepared.SourceChangeFeedWatermark);
