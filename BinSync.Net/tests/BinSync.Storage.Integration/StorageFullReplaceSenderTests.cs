@@ -289,6 +289,18 @@ public sealed class StorageFullReplaceSenderTests
                 gcStore.ReadMetadataBaselineReports(roster, prepared.Generation, prepared.Digest));
             Assert.Equal(localId, localBaseline.MemberNodeId);
             Assert.Equal(1UL, localBaseline.ReportSequence);
+            Assert.Equal(prepared.SourceChangeFeedWatermark, localBaseline.ProviderChangeFeedWatermark);
+            Assert.Equal(prepared.ExpectedEntryCount, localBaseline.SnapshotEntryCount);
+            ulong baselineCommit = storage.LastCommitSeq;
+            FullReplaceInstalledAck localAck = Assert.Single(
+                gcStore.ReadFullReplaceInstalledAcks(roster, prepared.Generation));
+            MetadataBaselineReport replayedBaseline = metadata.AcceptLocalFullReplaceAndCreateBaselineReport(
+                scope, localId, roster, localAck, prepared.ExpectedEntryCount,
+                prepared.SourceChangeFeedWatermark, localBaseline.ReportSequence, seed);
+            Assert.Equal(
+                MetadataBaselineReportProtocol.EncodeEnvelope(localBaseline),
+                MetadataBaselineReportProtocol.EncodeEnvelope(replayedBaseline));
+            Assert.Equal(baselineCommit, storage.LastCommitSeq);
             Assert.True(metadata.TryGetPreparedFullReplaceSnapshot(
                 scope, localId, 23, prepared.Generation, out PreparedFullReplaceSnapshotState? state));
             Assert.NotNull(state);
