@@ -46,7 +46,8 @@ public sealed class StorageNamespaceGcStoreTests
 
     private static AppliedOriginFrontierReport Report(
         NamespaceRosterCertificate roster, int memberIndex,
-        (byte[] Seed, byte[] PublicKey)[] keys, ulong reportSequence, ulong appliedSequence)
+        (byte[] Seed, byte[] PublicKey)[] keys, ulong reportSequence, ulong appliedSequence,
+        bool finalForAuthor = false)
         => new()
         {
             NamespaceId = roster.NamespaceId,
@@ -55,6 +56,7 @@ public sealed class StorageNamespaceGcStoreTests
             MemberNodeId = roster.Members[memberIndex].NodeId,
             MemberTransportEpoch = roster.Members[memberIndex].TransportPeerEpoch,
             ReportSequence = reportSequence,
+            FinalForAuthor = finalForAuthor,
             Entries = new[]
             {
                 new AppliedOriginFrontierEntry
@@ -80,8 +82,9 @@ public sealed class StorageNamespaceGcStoreTests
 
     private static byte[] SignedReport(
         NamespaceRosterCertificate roster, int memberIndex,
-        (byte[] Seed, byte[] PublicKey)[] keys, ulong reportSequence, ulong appliedSequence)
-        => OriginFrontierProtocol.Sign(Report(roster, memberIndex, keys, reportSequence, appliedSequence),
+        (byte[] Seed, byte[] PublicKey)[] keys, ulong reportSequence, ulong appliedSequence,
+        bool finalForAuthor = false)
+        => OriginFrontierProtocol.Sign(Report(roster, memberIndex, keys, reportSequence, appliedSequence, finalForAuthor),
             keys[memberIndex].Seed);
 
     private static byte[] SignedAck(
@@ -1900,6 +1903,11 @@ public sealed class StorageNamespaceGcStoreTests
             Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(
                 nextRoster, trust, sender, 3, 50));
 
+            // An Active author must explicitly close its issued-origin stream
+            // with a signed, draft-free final report before the roster can retire it.
+            gc.AcceptOriginFrontier(
+                SignedReport(nextRoster, 1, keys, 2, 90, finalForAuthor: true), nextRoster);
+
             // Exercise the complete retirement/rejoin lifecycle against the same
             // ChangeId ledger. Retirement closes the old author epoch, while rejoin
             // advances the transport incarnation. Neither transition may inherit
@@ -1934,7 +1942,7 @@ public sealed class StorageNamespaceGcStoreTests
                     {
                         OriginAuthorNodeId = sender,
                         OriginAuthorEpoch = 3,
-                        FinalIssuedOriginSequence = 52,
+                        FinalIssuedOriginSequence = 90,
                         MaxIssuedHlcWall = 100,
                         MaxIssuedHlcLogical = 2
                     }
