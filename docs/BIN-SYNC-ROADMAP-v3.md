@@ -1,3 +1,11 @@
+## 1.96. Bounded receipt/ChangeId compaction restart proof — 2026-11-13
+
+- [x T] Receipt GC now commits exactly one bounded page, closes the complete Storage/Metadata process scope, reopens the same database, resumes the remaining pages, and verifies the receive cursor/digest chain still rejects every compacted stale batch.
+- [x T] ChangeId GC now commits one bounded page, closes Storage, reopens both Storage and its provider, resumes the remaining pages, and verifies the retained replay fence rejects stale operations after restart.
+- [x CI] Exact-head validation for `4f85f28df0c58f5e26f3c8453a70c2cfa339f7aa`: BinSync.Net and FLD Storage Integration both completed successfully; both workflows had successful repeat runs as well.
+- [!] This closes bounded page continuation and replay-fence persistence across restart. It does not by itself prove the combined Metadata receipt/ChangeId lifecycle across member retirement, rejoin with a fresh transport epoch, epoch rollover, and replay of old-epoch traffic after the rejoined member is active. Physical GC remains disabled by default.
+- [ ] Next: add a single durable integration scenario that spans transport-epoch registration/retirement, process restart, roster rejoin with a strictly newer epoch, fresh receive-chain establishment, and rejection of stale old-epoch batches/receipts. Verify that old-epoch metadata is reclaimed only when both current signed roster fences and host reference scans permit it; verify new-epoch state is never fenced by the old retirement marker. Then extend the same matrix to ChangeId reservations and lost-ACK/replay cuts.
+
 ## 1.95. Baseline-gated bounded payload compaction and promoted-member MBR1 path — 2026-11-13
 
 - [x C] Added bounded outbound and relay payload compaction pages (1..4096 rows, default 512) while preserving the existing full-range APIs. A page removes only rows at or below the caller's safe peer-stream cursor; the existing ChangeId ledger, receipt rows, tombstones and Ghost metadata are not deleted by this operation.
