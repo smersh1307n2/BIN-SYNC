@@ -1787,6 +1787,21 @@ public sealed class StorageNamespaceGcStoreTests
                 scope, local, namespaceId, thirdChangeId, out _, out OperationOrigin thirdOrigin, out _));
             Assert.Equal(52UL, thirdOrigin.Sequence);
 
+            // Transport retirement is not a causal-retention proof. A replacement
+            // incarnation may complete its baseline and fence the old transport
+            // epoch, but ChangeId identities must remain until the signed all-member
+            // origin horizon independently covers their provenance.
+            metadata.RegisterInterestedPeer(scope, local, sender, 2, namespaceId);
+            metadata.CompletePeerInitialSync(scope, local, sender, 2, namespaceId,
+                new[] { new MetadataPeerStreamBaseline(sender, 0, 3) });
+            metadata.RetireInterestedPeer(scope, local, sender, 1, 2, namespaceId);
+            Assert.Equal(1U, metadata.GetRetiredPeerEpoch(scope, local, sender, namespaceId));
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, changeId, out _, out _, out _));
+
             // The signed all-active-member horizon is the first independent gate.
             var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
             var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
