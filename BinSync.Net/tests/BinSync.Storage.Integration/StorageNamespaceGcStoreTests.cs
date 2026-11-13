@@ -1900,6 +1900,127 @@ public sealed class StorageNamespaceGcStoreTests
             Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(
                 nextRoster, trust, sender, 3, 50));
 
+            // Exercise the complete retirement/rejoin lifecycle against the same
+            // ChangeId ledger. Retirement closes the old author epoch, while rejoin
+            // advances the transport incarnation. Neither transition may inherit
+            // the previous roster's frontier or retention checkpoint.
+            var retiredRoster = new NamespaceRosterCertificate
+            {
+                NamespaceId = namespaceId,
+                RosterGeneration = 3,
+                PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(nextRoster),
+                AuthorityNodeId = NodeId.From(Id(1)),
+                Members = new[]
+                {
+                    new NamespaceRosterMember
+                    {
+                        NodeId = NodeId.From(Id(1)),
+                        PublicKey = keys[0].PublicKey,
+                        TransportPeerEpoch = 10,
+                        Status = NamespaceMemberStatus.Active
+                    },
+                    new NamespaceRosterMember
+                    {
+                        NodeId = sender,
+                        PublicKey = keys[1].PublicKey,
+                        TransportPeerEpoch = 11,
+                        Status = NamespaceMemberStatus.Retired,
+                        RetiredThroughEpoch = 11
+                    }
+                },
+                RetiredOriginEpochs = new[]
+                {
+                    new NamespaceRetiredOriginEpoch
+                    {
+                        OriginAuthorNodeId = sender,
+                        OriginAuthorEpoch = 3,
+                        FinalIssuedOriginSequence = 52,
+                        MaxIssuedHlcWall = 100,
+                        MaxIssuedHlcLogical = 2
+                    }
+                }
+            };
+            retiredRoster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(retiredRoster, keys[0].Seed), trust);
+            Assert.False(gc.TryReadRetentionCheckpoint(retiredRoster, trust, out _));
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+
+            var joiningRoster = new NamespaceRosterCertificate
+            {
+                NamespaceId = namespaceId,
+                RosterGeneration = 5,
+                PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(retiredRoster),
+                AuthorityNodeId = NodeId.From(Id(1)),
+                Members = new[]
+                {
+                    new NamespaceRosterMember
+                    {
+                        NodeId = NodeId.From(Id(1)),
+                        PublicKey = keys[0].PublicKey,
+                        TransportPeerEpoch = 10,
+                        Status = NamespaceMemberStatus.Active
+                    },
+                    new NamespaceRosterMember
+                    {
+                        NodeId = sender,
+                        PublicKey = keys[1].PublicKey,
+                        TransportPeerEpoch = 12,
+                        Status = NamespaceMemberStatus.Joining
+                    }
+                },
+                RetiredOriginEpochs = retiredRoster.RetiredOriginEpochs
+            };
+            joiningRoster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(joiningRoster, keys[0].Seed), trust);
+            var rejoinedRoster = new NamespaceRosterCertificate
+            {
+                NamespaceId = namespaceId,
+                RosterGeneration = 7,
+                PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(joiningRoster),
+                AuthorityNodeId = NodeId.From(Id(1)),
+                Members = new[]
+                {
+                    new NamespaceRosterMember
+                    {
+                        NodeId = NodeId.From(Id(1)),
+                        PublicKey = keys[0].PublicKey,
+                        TransportPeerEpoch = 10,
+                        Status = NamespaceMemberStatus.Active
+                    },
+                    new NamespaceRosterMember
+                    {
+                        NodeId = sender,
+                        PublicKey = keys[1].PublicKey,
+                        TransportPeerEpoch = 12,
+                        Status = NamespaceMemberStatus.Active
+                    }
+                },
+                RetiredOriginEpochs = retiredRoster.RetiredOriginEpochs
+            };
+            rejoinedRoster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(rejoinedRoster, keys[0].Seed), trust);
+            Assert.Empty(gc.ReadOriginFrontiers(rejoinedRoster));
+            Assert.False(gc.TryReadRetentionCheckpoint(rejoinedRoster, trust, out _));
+            Assert.False(gc.IsOriginCoveredByRetentionCheckpoint(
+                rejoinedRoster, trust, sender, 3, 50));
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider,
+                16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
+
+            var rejoinedReport0 = gc.AcceptOriginFrontier(
+                SignedReport(rejoinedRoster, 0, keys, 1, 100), rejoinedRoster);
+            var rejoinedReport1 = gc.AcceptOriginFrontier(
+                SignedReport(rejoinedRoster, 1, keys, 1, 90), rejoinedRoster);
+            var rejoinedCheckpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                rejoinedRoster, 1, new byte[32], new[] { rejoinedReport0, rejoinedReport1 });
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(rejoinedCheckpoint, keys[0].Seed),
+                rejoinedRoster, trust);
+            Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(
+                rejoinedRoster, trust, sender, 3, 50));
+
             // Once the host confirms no reference remains and the current roster
             // has a fresh signed horizon, the ledger row can be removed. The
             // checkpoint remains the durable stale-replay fence. Reclaim a single
