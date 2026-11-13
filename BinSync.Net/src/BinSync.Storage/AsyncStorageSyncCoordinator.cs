@@ -237,8 +237,31 @@ public sealed class AsyncStorageSyncCoordinator
         }
     }
 
-    /// <summary>Persist an incoming batch intent before Node mutation.</summary>
+    /// <summary>
+    /// Persist an incoming batch intent before Node mutation. This public staging entry
+    /// participates in namespace admission so it cannot race a tombstone-GC reference
+    /// snapshot. The durable PendingApply then keeps GC fail-closed after this short lease
+    /// is released and until Apply/finalization or startup recovery completes.
+    /// </summary>
     public StorageRemoteApplyPlan BeginRemoteBatchBeforeNodeApply(
+        Batch batch, byte[] wirePayload, NodeId senderPeer, uint transportPeerEpoch = 0)
+    {
+        _asyncAdmissionGate.Wait();
+        try
+        {
+            return BeginRemoteBatchBeforeNodeApplyCore(
+                batch, wirePayload, senderPeer, transportPeerEpoch);
+        }
+        finally
+        {
+            _asyncAdmissionGate.Release();
+        }
+    }
+
+    // ReceiveBatchWithAsyncProviderBeforeAckAsync already owns namespace admission
+    // for the complete receive/Node/provider/Metadata transaction. Keep its callback
+    // on this core path to avoid recursively acquiring the non-reentrant semaphore.
+    internal StorageRemoteApplyPlan BeginRemoteBatchBeforeNodeApplyCore(
         Batch batch, byte[] wirePayload, NodeId senderPeer, uint transportPeerEpoch = 0)
     {
         ArgumentNullException.ThrowIfNull(batch);
@@ -605,7 +628,7 @@ public sealed class AsyncStorageSyncCoordinator
                 receiveStateOwnedByMetadataStore: true,
                 beforeApplyWithOperationDecisions: (batch, payload, senderPeer) =>
                 {
-                    plan = BeginRemoteBatchBeforeNodeApply(
+                    plan = BeginRemoteBatchBeforeNodeApplyCore(
                         batch, payload.ToArray(), senderPeer, checked((uint)session.PeerEpoch));
                     return plan.ApplyOperations;
                 },
