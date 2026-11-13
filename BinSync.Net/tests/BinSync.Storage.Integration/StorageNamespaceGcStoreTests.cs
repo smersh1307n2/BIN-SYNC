@@ -159,6 +159,122 @@ public sealed class StorageNamespaceGcStoreTests
             gc.AcceptFullReplaceInstalledAck(SignedAck(roster, i, keys, generation, digest), roster);
     }
 
+    [Fact]
+    public void Receipt_gc_requires_retired_transport_fence_signed_origin_horizon_and_empty_host_references()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-receipt-gc-proof-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        const string scope = "receipt-gc-proof";
+        const int namespaceId = 19;
+        NodeId local = NodeId.From(Id(0x7F));
+        NodeId sender = NodeId.From(Id(2));
+        Guid generation = Guid.Parse("22345678-1234-5678-9abc-def012345678");
+        byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("receipt GC baseline"));
+
+        IApplicationGcReferenceScanner Scanner(bool hasReceiptReference)
+            => new DelegateApplicationGcReferenceScanner((_, _, _) =>
+                new DelegateApplicationGcReferenceScan(
+                    new MemoryStream(),
+                    new ApplicationDraftHorizon(0, 0, 0),
+                    (_, _, _, _) => hasReceiptReference,
+                    _ => false,
+                    (_, _) => false));
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 910))
+            using (var metadata = new StorageMetadataStore(storage))
+            {
+                var gc = new StorageNamespaceGcStore(
+                    storage, scope, local,
+                    new StorageNamespaceGcFeatureOptions(EnableReceiptGc: true));
+                NamespaceRosterCertificate roster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(Roster(1, new byte[32], keys), keys[0].Seed), trust);
+                metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
+
+                metadata.RegisterInterestedPeer(scope, local, sender, 1, namespaceId);
+                var batch = new MetadataIncomingBatch
+                {
+                    ScopeId = scope,
+                    LocalReplica = local,
+                    SenderPeer = sender,
+                    SenderEpoch = 3,
+                    TransportPeerEpoch = 1,
+                    AuthorStreamNodeId = sender,
+                    NamespaceId = namespaceId,
+                    BatchId = BatchId.From(Id(0x60)),
+                    CursorStart = 1,
+                    CursorEnd = 1,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)0x61, 16).ToArray(),
+                    HeaderFingerprint = Enumerable.Repeat((byte)0x62, 16).ToArray(),
+                    Operations = new[]
+                    {
+                        new MetadataOperation
+                        {
+                            AuthorNodeId = sender,
+                            ChangeId = BatchId.From(Id(0x63)),
+                            OriginAuthorEpoch = 3,
+                            OriginSequence = 50,
+                            Fingerprint = Enumerable.Repeat((byte)0x64, 16).ToArray(),
+                            Payload = new byte[] { 0x65 }
+                        }
+                    }
+                };
+                Assert.False(metadata.AcceptIncomingBatch(batch).IsDuplicate);
+
+                // A newer authenticated transport incarnation is registered and
+                // completes its baseline before the old epoch is durably fenced.
+                metadata.RegisterInterestedPeer(scope, local, sender, 2, namespaceId);
+                metadata.CompletePeerInitialSync(scope, local, sender, 2, namespaceId,
+                    new[] { new MetadataPeerStreamBaseline(sender, 0, 3) });
+                metadata.RetireInterestedPeer(scope, local, sender, 1, 2, namespaceId);
+
+                // A transport retirement fence alone is insufficient: the origin
+                // must also be covered by the signed all-active-member checkpoint.
+                Assert.Equal(0, metadata.CompactReceipts(
+                    scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
+
+                var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+                var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+                gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 0, keys, generation, replaceDigest), roster);
+                gc.AcceptFullReplaceInstalledAck(SignedAck(roster, 1, keys, generation, replaceDigest), roster);
+                var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                    roster, 1, new byte[32], new[] { report0, report1 }, generation, replaceDigest,
+                    fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
+                gc.AcceptRetentionCheckpoint(
+                    NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+                // Even with both signed proof domains satisfied, a host-side
+                // reference snapshot must veto receipt deletion.
+                Assert.Equal(0, metadata.CompactReceipts(
+                    scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(true)));
+
+                Assert.Equal(1, metadata.CompactReceipts(
+                    scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
+                Assert.Equal(0, metadata.CompactReceipts(
+                    scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
+            }
+
+            // The receipt deletion is durable. Reopening the same Storage database
+            // must not resurrect it or make the same retired receipt collectible again.
+            using var reopenedStorage = StorageDatabase.Open(directory, 910);
+            using var reopenedMetadata = new StorageMetadataStore(reopenedStorage);
+            var reopenedGc = new StorageNamespaceGcStore(
+                reopenedStorage, scope, local,
+                new StorageNamespaceGcFeatureOptions(EnableReceiptGc: true));
+            reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
+            Assert.Equal(0, reopenedMetadata.CompactReceipts(
+                scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     [Theory]
     [InlineData(NamespaceMemberStatus.Active, 12u, 0u, 11u, 11u, true)]
     [InlineData(NamespaceMemberStatus.Active, 12u, 0u, 12u, 12u, false)]
