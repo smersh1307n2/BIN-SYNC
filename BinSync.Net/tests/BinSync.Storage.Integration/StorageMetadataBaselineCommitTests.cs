@@ -860,4 +860,52 @@ public sealed class StorageMetadataBaselineCommitTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Full_replace_baseline_payload_compaction_is_blocked_by_new_immutable_reservation(bool markPushed)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-payload-reservation-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 919);
+            Fixture fixture = CreateFixture(storage);
+            using StorageMetadataStore metadata = fixture.Metadata;
+            Assert.True(metadata.ApplyFullReplaceBaseline(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+
+            var reservation = new MetadataOutboundBatchReservation
+            {
+                BatchId = Batch(0x73),
+                IssuerEpoch = 7,
+                StreamOffset = 1,
+                CursorStart = 2,
+                CursorEnd = 2,
+                PreviousBatchDigest = fixture.OutboundDigest.ToArray(),
+                BatchDigest = Digest(0x74),
+                Payload = new byte[] { 0x74 }
+            };
+            metadata.ReserveOutboundBatch(
+                Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local, reservation);
+            if (markPushed)
+                metadata.MarkOutboundBatchPushed(
+                    Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local, reservation.BatchId);
+
+            ulong beforeCommit = storage.LastCommitSeq;
+            Assert.Throws<InvalidOperationException>(() =>
+                metadata.CompactFullReplaceBaselinePayloadsBounded(
+                    Scope, fixture.Local, fixture.Roster, fixture.Generation,
+                    fixture.SnapshotDigest, maxEntriesPerStream: 1));
+            Assert.Equal(beforeCommit, storage.LastCommitSeq);
+            Assert.True(metadata.IsFullReplaceBaselineApplied(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+            Assert.Equal(reservation.BatchId, metadata.GetPendingOutboundBatch(
+                Scope, fixture.Local, fixture.Peer, 11, NamespaceId, fixture.Local)?.BatchId);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
 }
