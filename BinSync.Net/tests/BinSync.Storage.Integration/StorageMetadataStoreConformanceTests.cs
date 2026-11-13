@@ -86,7 +86,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     scope, local, namespaceId, local, 3, maxEntries: 1));
                 Assert.Equal(3UL, reopened.GetOutboundHighWatermark(scope, local, namespaceId, local));
                 Assert.Empty(reopened.ReadOutbound(
-                    scope, local, namespaceId, local, lease: 1, afterSequence: 0, limit: 10).Items);
+                    scope, local, namespaceId, local, 1, 0, 10).Items);
                 Assert.Throws<InvalidDataException>(() =>
                     reopened.FreezeOutbound(scope, local, namespaceId, local, operations));
             }
