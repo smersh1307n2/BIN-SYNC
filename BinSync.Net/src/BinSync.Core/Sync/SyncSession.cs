@@ -668,7 +668,7 @@ public partial class SyncSession : IAsyncDisposable
     private async Task<byte[]> ReceivePacketAsync(byte expectedType, CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        if (expectedType != SessionWire.TypeAliasMap && (expectedType < 0x04 || expectedType > NamespaceGcFrames.FullReplaceReady))
+        if (expectedType != SessionWire.TypeAliasMap && (expectedType < 0x04 || expectedType > NamespaceGcFrames.MetadataBaselineReport))
             throw new InvalidOperationException("Only established-session frame types can be dispatched");
         if (expectedType != SessionWire.TypeAliasMap) EnsureAliasUpdatePumpStarted();
         Channel<byte[]> channel;
