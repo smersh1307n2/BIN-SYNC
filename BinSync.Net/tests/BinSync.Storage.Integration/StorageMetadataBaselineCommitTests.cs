@@ -586,6 +586,13 @@ public sealed class StorageMetadataBaselineCommitTests
             using var storage = StorageDatabase.Open(directory, 916);
             Fixture fixture = CreateFixture(storage);
             using StorageMetadataStore metadata = fixture.Metadata;
+            metadata.CompletePeerInitialSync(
+                Scope, fixture.Local, fixture.Peer, 11, NamespaceId,
+                new[]
+                {
+                    new MetadataPeerStreamBaseline(fixture.Local, 7, 1),
+                    new MetadataPeerStreamBaseline(fixture.RelayAuthor, 5, 0)
+                });
             var reservation = new MetadataOutboundBatchReservation
             {
                 BatchId = Batch(0x61),
@@ -593,7 +600,7 @@ public sealed class StorageMetadataBaselineCommitTests
                 StreamOffset = 1,
                 CursorStart = 1,
                 CursorEnd = 1,
-                PreviousBatchDigest = fixture.OutboundDigest.ToArray(),
+                PreviousBatchDigest = new byte[16],
                 BatchDigest = Digest(0x62),
                 Payload = new byte[] { 0x63 }
             };
@@ -685,18 +692,18 @@ public sealed class StorageMetadataBaselineCommitTests
                 MemberTransportEpoch = peer.MemberTransportEpoch,
                 ReportSequence = 2,
                 FeedEntries = peer.FeedEntries,
-                ReceiveEntries = peer.ReceiveEntries.Select(entry =>
-                    entry.SenderPeer != fixture.Local || entry.AuthorStream != fixture.Local
-                        ? entry
-                        : new MetadataBaselineReceiveEntry
-                        {
-                            SenderPeer = entry.SenderPeer,
-                            SenderTransportEpoch = entry.SenderTransportEpoch,
-                            AuthorStream = entry.AuthorStream,
-                            IssuerEpoch = 8,
-                            ReceiveCursor = entry.ReceiveCursor,
-                            LastBatchDigest = new byte[16]
-                        }).ToArray()
+                ReceiveEntries = peer.ReceiveEntries.Concat(new[]
+                {
+                    new MetadataBaselineReceiveEntry
+                    {
+                        SenderPeer = fixture.Local,
+                        SenderTransportEpoch = 10,
+                        AuthorStream = fixture.Local,
+                        IssuerEpoch = 8,
+                        ReceiveCursor = 0,
+                        LastBatchDigest = new byte[16]
+                    }
+                }).ToArray()
             };
             Assert.Equal(7U, oldFeed.IssuerEpoch);
             Assert.Equal(7U, oldReceive.IssuerEpoch);
