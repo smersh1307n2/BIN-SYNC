@@ -59,6 +59,10 @@ public sealed class FldBinSyncHostAdapter
             throw new ArgumentException("The FLD provider publication-mode marker must use this exact Metadata Store, scope, local replica and namespace.", nameof(metadataStore));
         if (!coordinator.UsesMetadataPeerStateStore(metadataStore))
             throw new ArgumentException("The StorageSyncCoordinator must use this exact Metadata Store instance.", nameof(coordinator));
+        if (!coordinator.UsesMetadataScope(scopeId))
+            throw new ArgumentException(
+                "The StorageSyncCoordinator must use this exact Metadata scope configured for the FLD provider and relay map.",
+                nameof(scopeId));
         if (!remoteBatchApplyStore.IsBoundTo(database))
             throw new ArgumentException(
                 "The contextual remote-apply store must target this exact FLD database instance.",

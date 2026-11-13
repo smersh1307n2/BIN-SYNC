@@ -3603,3 +3603,14 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added a retirement-roster cutover test: an Active peer first publishes its final, draft-free signed issued-origin report; once retired in the next signed roster, the previous generation's MBR1 marker cannot authorize payload compaction; outbound and relay rows remain intact. Initial CI exposed and corrected the test fixture's missing final report.
 - [ ] T Add direct host-orchestrator negative-path coverage for a Metadata store missing the baseline-compaction capability; continue rejoin/retirement epoch rollover and post-rejoin compaction matrices.
 - [ ] Next: audit post-marker compaction across roster rejoin/retirement and epoch rollover; then implement crash-cut/retry coverage for the bounded receipt/ChangeId stages without enabling production GC.
+
+
+## 1.140. FULL_REPLACE retry identity and FLD host scope binding — 2026-11-13
+
+- [x C] Prepared FULL_REPLACE retry now requires the exact original provider instance that owns the snapshot token, and proves that the same provider instance is owned by the supplied coordinator.
+- [x C] Retry validation also requires the coordinator exact durable Metadata Store, configured scope, namespace and local replica before comparing the persisted sender snapshot record and accepted local MBR1 evidence against the current roster.
+- [x C] Added a coordinator scope identity query and made FLD host composition reject a Metadata scope that differs from the provider publication marker and relay provenance map. This prevents a host adapter from silently publishing or compacting through a different Metadata namespace partition.
+- [x T] Added coordinator identity tests for same/different provider instances, Metadata Store instances and scope values, plus a host-composition negative test for a mismatched Metadata scope.
+- [x CI] Exact-head `0fc28b8` passed both `BinSync.Net` and `FLD Storage Integration` push/PR workflows; all four runs completed successfully, including Linux/macOS/Windows provider integration and Windows/Linux host-adapter builds.
+- [!] These checks bind the host composition and prepared FULL_REPLACE retry to one provider/Metadata identity. They do not yet prove that every application write path is forced through the coordinator admission barrier, nor do they authorize production physical GC.
+- [ ] Next: audit public host/provider/Metadata mutation entry points for admission-barrier bypass; keep direct Metadata writers fenced by the same transaction gate and prove all FLD writers share the database commit lease. Add negative concurrency tests for mismatched scope, bypassed writer capability and cross-instance mutation attempts.

@@ -19,6 +19,36 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
     }
 
     [Fact]
+    public void Host_adapter_rejects_coordinator_metadata_scope_mismatch()
+    {
+        const uint namespaceId = 71;
+        byte[] localAuthor = Id(0xD1);
+        const string scope = "fld-host-scope-binding";
+
+        using var database = FldDatabase.Open(
+            Path.Combine(_directory, "fld-scope-binding"), namespaceId, localAuthor);
+        using var storage = StorageDatabase.Open(
+            Path.Combine(_directory, "binsync-scope-binding"), 703);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = new NodeBuilder()
+            .WithNodeId(NodeId.From(localAuthor))
+            .WithEpoch(1)
+            .Build();
+        var publicationMode = new StorageMetadataPublicationMode(
+            metadata, scope, NodeId.From(localAuthor), checked((int)namespaceId));
+        using var provider = new FldDatabaseDataProvider(
+            database, () => 1, publicationMode: publicationMode);
+        var remoteApply = new FldRemoteBatchApplyStore(database);
+        var coordinator = new StorageSyncCoordinator(
+            node, provider, checked((int)namespaceId), metadata, scope + "-wrong",
+            remoteBatchCommitStore: remoteApply);
+        var map = new StorageRelayProvenanceMap(storage, scope, node.NodeId);
+
+        Assert.Throws<ArgumentException>(() => new FldBinSyncHostAdapter(
+            database, provider, metadata, coordinator, map, scope, remoteApply));
+    }
+
+    [Fact]
     public void Contextual_remote_apply_maps_to_fld_wal_and_duplicate_survives_reopen()
     {
         const uint namespaceId = 7;
