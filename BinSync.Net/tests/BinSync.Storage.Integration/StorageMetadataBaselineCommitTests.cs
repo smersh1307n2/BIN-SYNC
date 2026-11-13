@@ -357,6 +357,7 @@ public sealed class StorageMetadataBaselineCommitTests
             byte[] outboundDigest;
             byte[] relayDigest;
             NodeId local, peer, relayAuthor;
+            NamespaceRosterCertificate roster;
 
             using (var storage = StorageDatabase.Open(directory, 912))
             {
@@ -370,6 +371,7 @@ public sealed class StorageMetadataBaselineCommitTests
                 relayDigest = fixture.RelayDigest;
                 local = fixture.Local;
                 peer = fixture.Peer;
+                roster = fixture.Roster;
                 relayAuthor = fixture.RelayAuthor;
 
                 Assert.False(metadata.IsFullReplaceBaselineApplied(
@@ -444,7 +446,7 @@ public sealed class StorageMetadataBaselineCommitTests
                 // The persisted marker and stream rows are validated during Metadata partition reopen.
                 using var metadata = new StorageMetadataStore(storage);
                 Assert.True(metadata.IsFullReplaceBaselineApplied(
-                    Scope, local, CreateFixture(storage).Roster, generation, snapshotDigest));
+                    Scope, local, roster, generation, snapshotDigest));
                 Assert.True(metadata.IsPeerInitialSyncComplete(Scope, local, peer, 11, NamespaceId));
                 Assert.Equal(1UL, metadata.GetPeerStreamState(
                     Scope, local, peer, 11, NamespaceId, local).StreamOffset);
