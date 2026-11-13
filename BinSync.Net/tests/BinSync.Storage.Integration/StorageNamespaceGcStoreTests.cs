@@ -1701,7 +1701,7 @@ public sealed class StorageNamespaceGcStoreTests
                 NamespaceId = namespaceId,
                 BatchId = BatchId.From(Id(0x66)),
                 CursorStart = 1,
-                CursorEnd = 1,
+                CursorEnd = 3,
                 PreviousBatchDigest = new byte[16],
                 BatchDigest = Enumerable.Repeat((byte)0x68, 16).ToArray(),
                 HeaderFingerprint = Enumerable.Repeat((byte)0x69, 16).ToArray(),
@@ -1785,15 +1785,15 @@ public sealed class StorageNamespaceGcStoreTests
             var reservedState = metadata.GetPeerStreamState(
                 scope, local, downstream, 1, namespaceId, sender);
             Assert.Equal(0UL, reservedState.AckedCursor);
-            Assert.Equal(1UL, reservedState.PushedCursor);
+            Assert.Equal(3UL, reservedState.PushedCursor);
             Assert.NotNull(reservedState.PendingBatch);
             Assert.Equal(0, metadata.CompactChangeLedger(
                 scope, local, namespaceId, provider,
                 16, () => new MemoryStream(), Scanner(hasChangeIdReference: false)));
 
             metadata.AcknowledgePeerBatch(scope, local, downstream, 1,
-                namespaceId, sender, reservation.BatchId, 1, reservation.BatchDigest.ToArray());
-            Assert.Equal(1UL, metadata.GetPeerStreamState(
+                namespaceId, sender, reservation.BatchId, 3, reservation.BatchDigest.ToArray());
+            Assert.Equal(3UL, metadata.GetPeerStreamState(
                 scope, local, downstream, 1, namespaceId, sender).AckedCursor);
 
             // Relay payload remains an independent live reference after peer ACK.
