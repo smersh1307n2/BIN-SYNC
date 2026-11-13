@@ -42,7 +42,7 @@ public sealed class MetadataBaselineExchangeIdentityTests
             RosterGeneration = accepted.RosterGeneration,
             RosterDigest = NamespaceRosterProtocol.ComputeDigest(accepted),
             Generation = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
-            Digest = snapshotDigest,
+            Digest = snapshotDigest.ToArray(),
             MemberNodeId = local,
             MemberTransportEpoch = 9,
             HlcWallFloor = 123,
@@ -58,6 +58,8 @@ public sealed class MetadataBaselineExchangeIdentityTests
         Assert.Equal(NamespaceRosterProtocol.ComputeDigest(accepted), identity.RosterDigest);
         Assert.Equal(installedAck.Generation, identity.Generation);
         Assert.Equal(snapshotDigest, identity.SnapshotDigest);
+        installedAck.Digest[0] ^= 0xFF;
+        Assert.Equal(snapshotDigest, identity.SnapshotDigest);
 
         var mismatchedAck = new FullReplaceInstalledAck
         {
@@ -65,7 +67,7 @@ public sealed class MetadataBaselineExchangeIdentityTests
             RosterGeneration = installedAck.RosterGeneration + 1,
             RosterDigest = installedAck.RosterDigest,
             Generation = installedAck.Generation,
-            Digest = installedAck.Digest,
+            Digest = snapshotDigest.ToArray(),
             MemberNodeId = installedAck.MemberNodeId,
             MemberTransportEpoch = installedAck.MemberTransportEpoch,
             HlcWallFloor = installedAck.HlcWallFloor,
