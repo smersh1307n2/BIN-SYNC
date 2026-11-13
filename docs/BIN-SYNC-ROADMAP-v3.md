@@ -3589,5 +3589,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added a post-marker reservation matrix (reserved and pushed-but-unacknowledged): bounded payload compaction fails closed and leaves the Storage commit sequence and immutable reservation unchanged.
 - [!] This is payload compaction only. It does not reclaim ChangeIds, receipts, tombstones or ghosts and does not enable physical GC.
 - [x T] Added a three-member divergent-cursor test: the faster peer reports absolute cursor 2, the slower peer cursor 1, and only the common prefix through 1 is compacted; later rows remain readable.
-- [ ] T Add direct host-orchestrator negative-path coverage for a Metadata store missing the baseline-compaction capability and extend rejoin/retirement epoch matrices.
+- [x T] Added a post-marker evidence-drift test: a newer signed MBR1 report sequence for the same generation invalidates compaction; no Storage commit or outbound/relay deletion occurs.
+- [x CI] Exact-head push and PR workflows for BIN-SYNC and FLD Storage Integration passed on `184dae6` (18/18 check-runs).
+- [ ] T Add direct host-orchestrator negative-path coverage for a Metadata store missing the baseline-compaction capability; continue rejoin/retirement and epoch-rollover compaction matrices.
 - [ ] Next: audit post-marker compaction across roster rejoin/retirement and epoch rollover; then implement crash-cut/retry coverage for the bounded receipt/ChangeId stages without enabling production GC.

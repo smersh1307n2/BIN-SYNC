@@ -1170,4 +1170,63 @@ public sealed class StorageMetadataBaselineCommitTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+ 
+    [Fact]
+    public void Full_replace_baseline_payload_compaction_rejects_report_evidence_changed_after_marker()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-mbr1-payload-evidence-drift-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 921);
+            Fixture fixture = CreateFixture(storage);
+            using StorageMetadataStore metadata = fixture.Metadata;
+            Assert.True(metadata.ApplyFullReplaceBaseline(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+
+            MetadataBaselineReport peer = MetadataBaselineReportProtocol.DecodeAndVerify(
+                fixture.PeerReport, fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
+            var changedPeerReport = new MetadataBaselineReport
+            {
+                NamespaceId = peer.NamespaceId,
+                RosterGeneration = peer.RosterGeneration,
+                RosterDigest = peer.RosterDigest.ToArray(),
+                FullReplaceGeneration = peer.FullReplaceGeneration,
+                SnapshotDigest = peer.SnapshotDigest.ToArray(),
+                SnapshotEntryCount = peer.SnapshotEntryCount,
+                ProviderChangeFeedWatermark = peer.ProviderChangeFeedWatermark,
+                HlcWallFloor = peer.HlcWallFloor,
+                HlcLogicalFloor = peer.HlcLogicalFloor,
+                MemberNodeId = peer.MemberNodeId,
+                MemberTransportEpoch = peer.MemberTransportEpoch,
+                ReportSequence = checked(peer.ReportSequence + 1),
+                FeedEntries = peer.FeedEntries,
+                ReceiveEntries = peer.ReceiveEntries
+            };
+            fixture.Gc.AcceptMetadataBaselineReport(
+                MetadataBaselineReportProtocol.Sign(changedPeerReport, fixture.Keys[1].Seed),
+                fixture.Roster, fixture.Generation, fixture.SnapshotDigest);
+
+            ulong beforeCompaction = storage.LastCommitSeq;
+            Assert.Throws<InvalidDataException>(() =>
+                metadata.CompactFullReplaceBaselinePayloadsBounded(
+                    Scope, fixture.Local, fixture.Roster, fixture.Generation,
+                    fixture.SnapshotDigest, maxEntriesPerStream: 1));
+            Assert.Equal(beforeCompaction, storage.LastCommitSeq);
+            Assert.True(metadata.IsFullReplaceBaselineApplied(
+                Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
+
+            ulong lease = metadata.AcquireOutboundLease(
+                Scope, fixture.Local, NamespaceId, fixture.Local, Guid.NewGuid());
+            MetadataOutboundPage outbound = metadata.ReadOutbound(
+                Scope, fixture.Local, NamespaceId, fixture.Local, lease, afterSequence: 0, limit: 10);
+            Assert.Equal(new ulong[] { 1, 2 }, outbound.Items.Select(item => item.Sequence));
+            MetadataRelayPage relay = metadata.ReadRelay(
+                Scope, fixture.Local, NamespaceId, fixture.RelayAuthor, afterSequence: 0, limit: 10);
+            Assert.Single(relay.Items);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
 }
