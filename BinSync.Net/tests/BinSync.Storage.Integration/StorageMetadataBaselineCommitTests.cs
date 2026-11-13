@@ -1242,6 +1242,25 @@ public sealed class StorageMetadataBaselineCommitTests
             Assert.True(metadata.ApplyFullReplaceBaseline(
                 Scope, fixture.Local, fixture.Roster, fixture.Generation, fixture.SnapshotDigest));
 
+            // Retirement is legal only after the author publishes its final signed,
+            // draft-free issued-origin report for the current roster generation.
+            fixture.Gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                new AppliedOriginFrontierReport
+                {
+                    NamespaceId = NamespaceId,
+                    RosterGeneration = fixture.Roster.RosterGeneration,
+                    RosterDigest = NamespaceRosterProtocol.ComputeDigest(fixture.Roster),
+                    MemberNodeId = fixture.Peer,
+                    MemberTransportEpoch = 11,
+                    ReportSequence = 2,
+                    FinalForAuthor = true,
+                    UnpublishedDraftCount = 0,
+                    MaxUnpublishedDraftHlcWall = 0,
+                    MaxUnpublishedDraftHlcLogical = 0,
+                    Entries = Array.Empty<AppliedOriginFrontierEntry>(),
+                    IssuedOrigins = Array.Empty<IssuedOriginFrontierEntry>()
+                }, fixture.Keys[1].Seed), fixture.Roster);
+
             NamespaceRosterCertificate retiredRoster = new()
             {
                 NamespaceId = fixture.Roster.NamespaceId,

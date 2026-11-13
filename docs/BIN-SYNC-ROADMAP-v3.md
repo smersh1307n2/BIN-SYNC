@@ -3592,6 +3592,6 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Added a post-marker evidence-drift test: a newer signed MBR1 report sequence for the same generation invalidates compaction; no Storage commit or outbound/relay deletion occurs.
 - [x CI] Exact-head push and PR workflows for BIN-SYNC and FLD Storage Integration passed on `184dae6` (18/18 check-runs).
 - [x CI] Exact-head push and PR workflows for BIN-SYNC and FLD Storage Integration passed on `652938b` (18/18 check-runs).
-- [x T] Added a retirement-roster cutover test: once an Active peer is retired in the next signed roster, the previous generation's MBR1 marker cannot authorize payload compaction; outbound and relay rows remain intact.
+- [x T] Added a retirement-roster cutover test: an Active peer first publishes its final, draft-free signed issued-origin report; once retired in the next signed roster, the previous generation's MBR1 marker cannot authorize payload compaction; outbound and relay rows remain intact. Initial CI exposed and corrected the test fixture's missing final report.
 - [ ] T Add direct host-orchestrator negative-path coverage for a Metadata store missing the baseline-compaction capability; continue rejoin/retirement epoch rollover and post-rejoin compaction matrices.
 - [ ] Next: audit post-marker compaction across roster rejoin/retirement and epoch rollover; then implement crash-cut/retry coverage for the bounded receipt/ChangeId stages without enabling production GC.
