@@ -172,6 +172,7 @@ public sealed class StorageNamespaceGcStoreTests
         NodeId sender = NodeId.From(Id(2));
         Guid generation = Guid.Parse("22345678-1234-5678-9abc-def012345678");
         byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("receipt GC baseline"));
+        MetadataIncomingBatch? compactedBatch = null;
 
         IApplicationGcReferenceScanner Scanner(bool hasReceiptReference)
             => new DelegateApplicationGcReferenceScanner((_, _, _) =>
@@ -224,6 +225,7 @@ public sealed class StorageNamespaceGcStoreTests
                     }
                 };
                 Assert.False(metadata.AcceptIncomingBatch(batch).IsDuplicate);
+                compactedBatch = batch;
 
                 // A newer authenticated transport incarnation is registered and
                 // completes its baseline before the old epoch is durably fenced.
@@ -268,6 +270,11 @@ public sealed class StorageNamespaceGcStoreTests
             reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
             Assert.Equal(0, reopenedMetadata.CompactReceipts(
                 scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(false)));
+            // The receipt row is gone, but the durable receive cursor/digest chain
+            // must still reject the old batch after restart instead of treating it as new.
+            Assert.NotNull(compactedBatch);
+            Assert.Throws<InvalidDataException>(() =>
+                reopenedMetadata.AcceptIncomingBatch(compactedBatch!));
         }
         finally
         {
