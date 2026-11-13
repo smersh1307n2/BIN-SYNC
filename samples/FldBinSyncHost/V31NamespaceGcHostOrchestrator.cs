@@ -683,6 +683,115 @@ public sealed class V31NamespaceGcHostOrchestrator
     }
 
     /// <summary>
+    /// Exchanges each Active member's own signed MBR1 report with every other Active
+    /// member and atomically applies the complete local baseline. This is a full-mesh
+    /// exchange: a report is accepted only on a session authenticated as its signer.
+    /// </summary>
+    public async Task<bool> ExchangeAndApplyMetadataBaselineAsync(
+        PreparedFullReplaceSnapshot prepared,
+        StorageMetadataStore metadataStore,
+        IMetadataNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        string scopeId,
+        byte[] memberSeed,
+        ulong reportSequence,
+        IReadOnlyList<SyncSession> activeMemberSessions,
+        CancellationToken cancellationToken = default)
+    {
+        await _roundGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ArgumentNullException.ThrowIfNull(prepared);
+            ArgumentNullException.ThrowIfNull(metadataStore);
+            ArgumentNullException.ThrowIfNull(gcStore);
+            ArgumentNullException.ThrowIfNull(trustStore);
+            ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+            ArgumentNullException.ThrowIfNull(memberSeed);
+            if (memberSeed.Length != 32 || reportSequence == 0)
+                throw new ArgumentException("A 32-byte member seed and non-zero MBR1 report sequence are required.");
+            EnsureNamespaceGcBinding(gcStore, trustStore);
+            if (!_coordinator.UsesMetadataPeerStateStore(metadataStore) ||
+                prepared.NamespaceId != _coordinator.NamespaceId ||
+                prepared.RosterGeneration == 0 ||
+                prepared.Generation == Guid.Empty ||
+                prepared.Digest.Length != MetadataBaselineReportProtocol.DigestSize)
+                throw new InvalidOperationException("MBR1 orchestration is not bound to the coordinator and prepared FULL_REPLACE generation.");
+
+            if (!gcStore.TryReadNamespaceRoster(_coordinator.NamespaceId, trustStore,
+                    out NamespaceRosterCertificate? roster) || roster is null ||
+                roster.RosterGeneration != prepared.RosterGeneration ||
+                !NamespaceRosterProtocol.ComputeDigest(roster).AsSpan().SequenceEqual(prepared.RosterDigest))
+                throw new InvalidOperationException("Prepared FULL_REPLACE snapshot is not bound to the currently accepted roster.");
+
+            NamespaceRosterMember local = FindRosterMember(roster, _coordinator.LocalReplicaId);
+            if (local.Status != NamespaceMemberStatus.Active)
+                throw new InvalidOperationException("Only an Active member may participate in the MBR1 baseline exchange.");
+            if (!gcStore.AreAllActiveMembersInstalled(roster, prepared.Generation, prepared.Digest))
+                throw new InvalidOperationException("Every Active member must durably install the exact FULL_REPLACE generation before MBR1 exchange.");
+            if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore,
+                    out NamespaceRetentionCheckpoint? checkpoint) || checkpoint is null ||
+                checkpoint.FullReplaceGeneration != prepared.Generation ||
+                !checkpoint.FullReplaceDigest.AsSpan().SequenceEqual(prepared.Digest))
+                throw new InvalidOperationException("The exact FULL_REPLACE generation must already be bound by the accepted RCP2 checkpoint.");
+
+            SyncSession[] sessions = ValidateSessions(activeMemberSessions);
+            NamespaceRosterMember[] expectedPeers = roster.Members
+                .Where(member => member.Status == NamespaceMemberStatus.Active &&
+                    member.NodeId != _coordinator.LocalReplicaId)
+                .ToArray();
+            if (sessions.Length != expectedPeers.Length ||
+                expectedPeers.Any(member => !sessions.Any(session =>
+                    session.PeerNodeId == member.NodeId &&
+                    session.PeerEpoch == member.TransportPeerEpoch)))
+                throw new ArgumentException("MBR1 exchange requires exactly one authenticated session for every other Active roster member.", nameof(activeMemberSessions));
+
+            MetadataBaselineReport localReport;
+            using (IDisposable hostLease = _acquireHostCommitLease()
+                ?? throw new InvalidOperationException("The composed Host commit lease is unavailable; MBR1 cut was not captured."))
+            {
+                localReport = metadataStore.CreateMetadataBaselineReport(
+                    scopeId, _coordinator.LocalReplicaId, roster, prepared.Generation,
+                    prepared.Digest, prepared.ExpectedEntryCount,
+                    prepared.SourceChangeFeedWatermark, reportSequence, memberSeed);
+            }
+
+            byte[] localEncoded = MetadataBaselineReportProtocol.EncodeEnvelope(localReport);
+            _ = gcStore.AcceptMetadataBaselineReport(
+                localEncoded, roster, prepared.Generation, prepared.Digest);
+
+            // Send to every peer before receiving so symmetric full-mesh rounds cannot
+            // deadlock waiting for a peer that is itself still in its send phase.
+            foreach (SyncSession session in sessions)
+            {
+                await session.SendMetadataBaselineReportAsync(
+                    localReport, memberSeed, roster, prepared.Generation, prepared.Digest,
+                    NextSequence(session), cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (SyncSession session in sessions)
+            {
+                MetadataBaselineReport remote = await session.ReceiveMetadataBaselineReportAsync(
+                    roster, prepared.Generation, prepared.Digest, cancellationToken).ConfigureAwait(false);
+                NamespaceRosterMember expected = FindRosterMember(roster, session.PeerNodeId);
+                if (remote.MemberNodeId != expected.NodeId ||
+                    remote.MemberTransportEpoch != expected.TransportPeerEpoch)
+                    throw new InvalidDataException("Received MBR1 report does not match the exact Active peer session.");
+                _ = gcStore.AcceptMetadataBaselineReport(
+                    MetadataBaselineReportProtocol.EncodeEnvelope(remote),
+                    roster, prepared.Generation, prepared.Digest);
+            }
+
+            return metadataStore.ApplyFullReplaceBaseline(
+                scopeId, _coordinator.LocalReplicaId, roster,
+                prepared.Generation, prepared.Digest);
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Accept a later Active roster on the rejoined member and only then activate its
     /// fresh local author epoch. This is deliberately separate from FULL_REPLACE commit:
     /// installed data does not grant permission to originate new local operations.
