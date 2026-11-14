@@ -488,7 +488,7 @@ public sealed class StorageNamespaceGcStoreTests
                 IsRecordTombstone = false,
                 HlcWall = 100,
                 HlcLogical = 2,
-                AuthorNodeId = author,
+                AuthorNodeId = NodeId.From(Id(2)),
                 KeyEpoch = 0,
                 Value = Array.Empty<byte>(),
                 ChangeId = BatchId.From(Id(0x56)),
