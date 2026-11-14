@@ -516,6 +516,63 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Fact]
+    public async Task Async_tombstone_gc_fails_closed_before_provider_scan_on_unknown_outbound_payload()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-async-tombstone-gc-unknown-payload-" + Guid.NewGuid().ToString("N"));
+        const string scope = "async-tombstone-gc-unknown-payload";
+        const int namespaceId = 19;
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 910);
+            using var metadata = new StorageMetadataStore(storage);
+            using var node = new NodeBuilder().WithNodeId(Id(0x99)).WithEpoch(1).Build();
+            var trust = new TrustStore();
+            var gc = new StorageNamespaceGcStore(
+                storage, scope, node.NodeId,
+                new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+
+            // Unknown retained payloads cannot be decoded into a trustworthy RecordId
+            // reference. The snapshot must therefore be unavailable, not empty.
+            metadata.FreezeOutbound(scope, node.NodeId, namespaceId, node.NodeId,
+                new[]
+                {
+                    new MetadataFrozenOperation
+                    {
+                        ChangeId = BatchId.From(Id(0x91)),
+                        Fingerprint = Enumerable.Repeat((byte)0x91, 16).ToArray(),
+                        Payload = new byte[] { 0x01, 0x02, 0x03 },
+                        OriginAuthorEpoch = 1,
+                        OriginSequence = 1
+                    }
+                });
+
+            var candidate = new ProviderMutation
+            {
+                RecordId = RecordId.From(Id(0x92)),
+                FieldId = 7,
+                IsTombstone = true,
+                AuthorNodeId = node.NodeId,
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(Id(0x93)),
+                OriginAuthorEpoch = 1,
+                OriginSequence = 1
+            };
+            var provider = new RecordingTombstoneGc(new[] { candidate });
+            var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, namespaceId);
+            coordinator.AttachNamespaceGcGuard(gc, trust);
+
+            Assert.Equal(0, await coordinator.CompactTombstonesAsync(provider, 16));
+            Assert.Equal(0, provider.ReadCalls);
+            Assert.Equal(0, provider.CompactCalls);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Signed_roster_frontiers_acks_and_checkpoint_survive_restart_and_prove_only_the_safe_horizon()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-gc-" + Guid.NewGuid().ToString("N"));
