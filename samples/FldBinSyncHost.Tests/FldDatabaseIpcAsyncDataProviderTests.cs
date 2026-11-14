@@ -442,6 +442,18 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 ChangeId = BatchId.From(Id(0x94)),
                 IsTombstone = true
             });
+            await providerA.AppendLocalChangeWithReceiptAsync(new ProviderMutation
+            {
+                RecordId = record,
+                FieldId = 0x0952,
+                AuthorNodeId = authorA,
+                OriginAuthorEpoch = 17,
+                HlcWall = 101,
+                HlcLogical = 1,
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(Id(0x95)),
+                IsTombstone = true
+            });
 
             var (toA, toB) = PipeTransport.CreatePair();
             Task<SyncSession> acceptTask = SyncSession.AcceptAsync(nodeB, toB);
@@ -463,7 +475,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Task<BatchResult> receiveAtB = adapterB.ReceiveBatchAsync(acceptor);
             Task<int> sendFromA = adapterA.RunOutboundRoundAsync([initiator]);
             await Task.WhenAll(receiveAtB, sendFromA).WaitAsync(TimeSpan.FromSeconds(60));
-            Assert.Equal(1, (await receiveAtB).Applied);
+            Assert.Equal(2, (await receiveAtB).Applied);
             Assert.Equal(1, await sendFromA);
 
             ProviderMutation? tombstoneAtA = await providerA.ReadCurrentAsync(record, 0x0951);
@@ -478,6 +490,16 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(17U, tombstoneAtB.OriginAuthorEpoch);
             Assert.Equal(1UL, tombstoneAtA.OriginSequence);
             Assert.Equal(1UL, tombstoneAtB.OriginSequence);
+            ProviderMutation? secondTombstoneAtA = await providerA.ReadCurrentAsync(record, 0x0952);
+            ProviderMutation? secondTombstoneAtB = await providerB.ReadCurrentAsync(record, 0x0952);
+            Assert.NotNull(secondTombstoneAtA);
+            Assert.NotNull(secondTombstoneAtB);
+            Assert.True(secondTombstoneAtA!.IsTombstone);
+            Assert.True(secondTombstoneAtB!.IsTombstone);
+            Assert.Equal(BatchId.From(Id(0x95)), secondTombstoneAtA.ChangeId);
+            Assert.Equal(BatchId.From(Id(0x95)), secondTombstoneAtB.ChangeId);
+            Assert.Equal(2UL, secondTombstoneAtA.OriginSequence);
+            Assert.Equal(2UL, secondTombstoneAtB.OriginSequence);
 
             var keys = new[]
             {
@@ -523,14 +545,87 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             byte[] fullReplaceDigest = SHA256.HashData("two-host signed tombstone gc snapshot"u8);
             void InstallSignedProof(StorageNamespaceGcStore gc)
             {
-                NamespaceRosterCertificate acceptedRoster = gc.AcceptNamespaceRoster(
+                NamespaceRosterCertificate initialRoster = gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
-                byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(acceptedRoster);
-                var reportA = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                byte[] initialDigest = NamespaceRosterProtocol.ComputeDigest(initialRoster);
+
+                // B signs a final, draft-free report before its transport incarnation
+                // is retired. The authority then attests retirement, Joining and
+                // promotion across signed roster-generation gaps.
+                gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
                     new AppliedOriginFrontierReport
                     {
                         NamespaceId = namespaceId,
                         RosterGeneration = 1,
+                        RosterDigest = initialDigest,
+                        MemberNodeId = authorB,
+                        MemberTransportEpoch = 11,
+                        ReportSequence = 1,
+                        FinalForAuthor = true,
+                        Entries =
+                        [
+                            new AppliedOriginFrontierEntry
+                            {
+                                OriginAuthorNodeId = authorA,
+                                OriginAuthorEpoch = 17,
+                                ContiguousAppliedOriginSequence = 2
+                            }
+                        ]
+                    }, keys[1].Seed), initialRoster);
+
+                NamespaceRosterCertificate retiredRoster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(new NamespaceRosterCertificate
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 2,
+                        PreviousRosterDigest = initialDigest,
+                        AuthorityNodeId = authorA,
+                        Members =
+                        [
+                            new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 11, Status = NamespaceMemberStatus.Retired, RetiredThroughEpoch = 11 },
+                            new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
+                        ]
+                    }, keys[0].Seed), trust);
+                NamespaceRosterCertificate joiningRoster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(new NamespaceRosterCertificate
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 4,
+                        PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(retiredRoster),
+                        AuthorityNodeId = authorA,
+                        Members =
+                        [
+                            new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 13, Status = NamespaceMemberStatus.Joining },
+                            new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
+                        ]
+                    }, keys[0].Seed), trust);
+                NamespaceRosterCertificate rejoinedRoster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(new NamespaceRosterCertificate
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 6,
+                        PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(joiningRoster),
+                        AuthorityNodeId = authorA,
+                        Members =
+                        [
+                            new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 13, Status = NamespaceMemberStatus.Active },
+                            new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
+                        ]
+                    }, keys[0].Seed), trust);
+
+                Assert.Empty(gc.ReadOriginFrontiers(rejoinedRoster));
+                Assert.False(gc.TryReadRetentionCheckpoint(rejoinedRoster, trust, out _));
+                Assert.Empty(gc.ReadFullReplaceInstalledAcks(rejoinedRoster, fullReplaceGeneration));
+
+                byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(rejoinedRoster);
+                var reportA = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                    new AppliedOriginFrontierReport
+                    {
+                        NamespaceId = namespaceId,
+                        RosterGeneration = 6,
                         RosterDigest = rosterDigest,
                         MemberNodeId = authorA,
                         MemberTransportEpoch = 10,
@@ -541,7 +636,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             {
                                 OriginAuthorNodeId = authorA,
                                 OriginAuthorEpoch = 17,
-                                ContiguousAppliedOriginSequence = 1
+                                ContiguousAppliedOriginSequence = 2
                             }
                         ],
                         IssuedOrigins =
@@ -549,20 +644,20 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             new IssuedOriginFrontierEntry
                             {
                                 OriginAuthorEpoch = 17,
-                                IssuedOriginSequence = 1,
-                                MaxIssuedHlcWall = 100,
+                                IssuedOriginSequence = 2,
+                                MaxIssuedHlcWall = 101,
                                 MaxIssuedHlcLogical = 1
                             }
                         ]
-                    }, keys[0].Seed), acceptedRoster);
+                    }, keys[0].Seed), rejoinedRoster);
                 var reportB = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
                     new AppliedOriginFrontierReport
                     {
                         NamespaceId = namespaceId,
-                        RosterGeneration = 1,
+                        RosterGeneration = 6,
                         RosterDigest = rosterDigest,
                         MemberNodeId = authorB,
-                        MemberTransportEpoch = 11,
+                        MemberTransportEpoch = 13,
                         ReportSequence = 1,
                         Entries =
                         [
@@ -570,58 +665,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             {
                                 OriginAuthorNodeId = authorA,
                                 OriginAuthorEpoch = 17,
-                                ContiguousAppliedOriginSequence = 1
+                                ContiguousAppliedOriginSequence = 2
                             }
                         ]
-                    }, keys[1].Seed), acceptedRoster);
-
-                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
-                    new FullReplaceInstalledAck
-                    {
-                        NamespaceId = namespaceId,
-                        RosterGeneration = 1,
-                        RosterDigest = rosterDigest,
-                        Generation = fullReplaceGeneration,
-                        Digest = fullReplaceDigest,
-                        MemberNodeId = authorA,
-                        MemberTransportEpoch = 10,
-                        HlcWallFloor = 100,
-                        HlcLogicalFloor = 1,
-                        Installed = true
-                    }, keys[0].Seed), acceptedRoster);
-                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
-                    new FullReplaceInstalledAck
-                    {
-                        NamespaceId = namespaceId,
-                        RosterGeneration = 1,
-                        RosterDigest = rosterDigest,
-                        Generation = fullReplaceGeneration,
-                        Digest = fullReplaceDigest,
-                        MemberNodeId = authorB,
-                        MemberTransportEpoch = 11,
-                        HlcWallFloor = 100,
-                        HlcLogicalFloor = 1,
-                        Installed = true
-                    }, keys[1].Seed), acceptedRoster);
-                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
-                    new FullReplaceInstalledAck
-                    {
-                        NamespaceId = namespaceId,
-                        RosterGeneration = 1,
-                        RosterDigest = rosterDigest,
-                        Generation = fullReplaceGeneration,
-                        Digest = fullReplaceDigest,
-                        MemberNodeId = relayMember,
-                        MemberTransportEpoch = 12,
-                        HlcWallFloor = 100,
-                        HlcLogicalFloor = 1,
-                        Installed = true
-                    }, keys[2].Seed), acceptedRoster);
+                    }, keys[1].Seed), rejoinedRoster);
                 var reportC = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
                     new AppliedOriginFrontierReport
                     {
                         NamespaceId = namespaceId,
-                        RosterGeneration = 1,
+                        RosterGeneration = 6,
                         RosterDigest = rosterDigest,
                         MemberNodeId = relayMember,
                         MemberTransportEpoch = 12,
@@ -632,17 +684,41 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             {
                                 OriginAuthorNodeId = authorA,
                                 OriginAuthorEpoch = 17,
-                                ContiguousAppliedOriginSequence = 1
+                                ContiguousAppliedOriginSequence = 2
                             }
                         ]
-                    }, keys[2].Seed), acceptedRoster);
+                    }, keys[2].Seed), rejoinedRoster);
+
+                foreach (var item in new[]
+                {
+                    (Member: authorA, Epoch: 10U, Key: keys[0]),
+                    (Member: authorB, Epoch: 13U, Key: keys[1]),
+                    (Member: relayMember, Epoch: 12U, Key: keys[2])
+                })
+                {
+                    gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                        new FullReplaceInstalledAck
+                        {
+                            NamespaceId = namespaceId,
+                            RosterGeneration = 6,
+                            RosterDigest = rosterDigest,
+                            Generation = fullReplaceGeneration,
+                            Digest = fullReplaceDigest,
+                            MemberNodeId = item.Member,
+                            MemberTransportEpoch = item.Epoch,
+                            HlcWallFloor = 101,
+                            HlcLogicalFloor = 1,
+                            Installed = true
+                        }, item.Key.Seed), rejoinedRoster);
+                }
+
                 var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
-                    acceptedRoster, 1, new byte[32], [reportA, reportB, reportC],
+                    rejoinedRoster, 1, new byte[32], [reportA, reportB, reportC],
                     fullReplaceGeneration, fullReplaceDigest,
-                    fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 1);
+                    fullReplaceHlcWallFloor: 101, fullReplaceHlcLogicalFloor: 1);
                 gc.AcceptRetentionCheckpoint(
                     NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed),
-                    acceptedRoster, trust);
+                    rejoinedRoster, trust);
             }
 
             var gcA = new StorageNamespaceGcStore(
@@ -711,14 +787,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             MetadataPeerStreamState relayPeerState = metadataB.GetPeerStreamState(
                 scope, nodeB.NodeId, relayNode.NodeId,
                 checked((uint)relayInitiator.PeerEpoch), namespaceId, authorA);
-            Assert.Equal(1UL, relayPeerState.AckedCursor + relayPeerState.StreamOffset);
+            Assert.Equal(2UL, relayPeerState.AckedCursor + relayPeerState.StreamOffset);
             Assert.Null(relayPeerState.PendingBatch);
-            Assert.Equal(1UL, metadataB.GetSafePeerStreamCompactionCursor(
+            Assert.Equal(2UL, metadataB.GetSafePeerStreamCompactionCursor(
                 scope, nodeB.NodeId, namespaceId, authorA));
 
             // B is also the local durable consumer of the applied relay change.
             // Its local relay-consumer ACK is independent from C's transport ACK.
-            metadataB.AcknowledgeRelay(scope, nodeB.NodeId, namespaceId, authorA, 1);
+            metadataB.AcknowledgeRelay(scope, nodeB.NodeId, namespaceId, authorA, 2);
 
             // C has now received and applied the tombstone through a real SyncSession
             // before signing its OFR2 report. The accepted roster has three Active
@@ -729,12 +805,22 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.True(gcA.HasProtocolTombstoneGcProof(
                 gcA.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? acceptedA)
                     ? acceptedA! : throw new InvalidOperationException("Host A roster was not persisted."),
+                trust, authorA, 17, 2, secondTombstoneAtA!.HlcWall, secondTombstoneAtA.HlcLogical,
+                fullReplaceGeneration, fullReplaceDigest),
+                "Host A must prove the second tombstone after B's signed rejoin.");
+            Assert.True(gcA.HasProtocolTombstoneGcProof(
+                acceptedA!,
                 trust, authorA, 17, 1, tombstoneAtA.HlcWall, tombstoneAtA.HlcLogical,
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host A must independently validate all three Active members' signed applied frontiers.");
             Assert.True(gcB.HasProtocolTombstoneGcProof(
                 gcB.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? acceptedB)
                     ? acceptedB! : throw new InvalidOperationException("Host B roster was not persisted."),
+                trust, authorA, 17, 2, secondTombstoneAtB!.HlcWall, secondTombstoneAtB.HlcLogical,
+                fullReplaceGeneration, fullReplaceDigest),
+                "Host B must prove the second tombstone after B's signed rejoin.");
+            Assert.True(gcB.HasProtocolTombstoneGcProof(
+                acceptedB!,
                 trust, authorA, 17, 1, tombstoneAtB.HlcWall, tombstoneAtB.HlcLogical,
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host B must independently validate all three Active members' signed applied frontiers.");
@@ -742,8 +828,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // Compact only after both the local apply consumer and every interested
             // downstream peer have acknowledged the immutable relay prefix.
             // The signed namespace proof alone never deletes payloads.
-            metadataA.CompactOutboundThrough(scope, nodeA.NodeId, namespaceId, authorA, 1);
-            metadataB.CompactRelayThrough(scope, nodeB.NodeId, namespaceId, authorA, 1);
+            metadataA.CompactOutboundThrough(scope, nodeA.NodeId, namespaceId, authorA, 2);
+            metadataB.CompactRelayThrough(scope, nodeB.NodeId, namespaceId, authorA, 2);
             Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record));
             Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record));
 
@@ -772,10 +858,16 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host A provider tombstone identity must match the accepted signed proof.");
 
-            Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 16));
-            Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 16));
-            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
-            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
+            Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
+            Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
+            Assert.Single(await providerA.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Single(await providerB.ReadTombstoneGcCandidatesAsync(16));
+            Assert.NotEqual(
+                await providerA.ReadCurrentAsync(record, 0x0951) is null,
+                await providerA.ReadCurrentAsync(record, 0x0952) is null);
+            Assert.NotEqual(
+                await providerB.ReadCurrentAsync(record, 0x0951) is null,
+                await providerB.ReadCurrentAsync(record, 0x0952) is null);
 
             await relayInitiator.DisposeAsync(); relayInitiator = null;
             await relayAcceptor.DisposeAsync(); relayAcceptor = null;
