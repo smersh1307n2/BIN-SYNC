@@ -956,7 +956,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             IReadOnlyList<ProviderMutation> candidatesA =
                 await providerA.ReadTombstoneGcCandidatesAsync(16);
-            Assert.Single(candidatesA);
+            Assert.Equal(2, candidatesA.Count);
             ProviderMutation candidateA = candidatesA[0];
             Assert.True(gcA.HasProtocolTombstoneGcProof(
                 gcA.TryReadNamespaceRoster(namespaceId, trust, out NamespaceRosterCertificate? rosterA)
