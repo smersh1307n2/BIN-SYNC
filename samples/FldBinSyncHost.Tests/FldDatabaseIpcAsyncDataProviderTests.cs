@@ -1439,14 +1439,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
-            // ChangeId and physical tombstone retention are independent horizons.
-            // Once the signed origin checkpoint is accepted and immutable Metadata
-            // payloads are ACKed/compacted, the ChangeId ledger can be reclaimed even
-            // while FLD still retains the tombstone rows for record-level convergence.
-            Assert.Equal(2, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
-            Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
-            Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
-            Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
+            // Metadata payloads are compacted, but the Host still reports ChangeId
+            // references in its unsealed WAL/Outbox/ApplyJournal index. The first
+            // tombstone-GC admission seals that committed prefix; until then ChangeId
+            // compaction must remain fail-closed on both Hosts.
+            Assert.Equal(0, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
+            Assert.Equal(0, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
+            Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
             // Distinguish a conservative Metadata reservation block from provider
             // candidate/proof rejection before invoking physical GC. The Host seals
@@ -1541,9 +1541,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
             Assert.Single(await providerA.ReadTombstoneGcCandidatesAsync(16));
             Assert.Single(await providerB.ReadTombstoneGcCandidatesAsync(16));
-            // Tombstone page one progresses independently after ChangeId-GC has
-            // already completed. The remaining FLD tombstone is still protected by
-            // its signed origin frontier and final Host reference scan.
+            // The Host's committed prefix is now sealed and its transient
+            // ChangeId references are released. The ChangeId horizon can advance
+            // independently even though one physical tombstone remains on each Host.
+            Assert.Equal(2, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
+            Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
             Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
             Assert.NotEqual(
