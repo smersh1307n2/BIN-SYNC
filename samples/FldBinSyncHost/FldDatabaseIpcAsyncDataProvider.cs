@@ -15,7 +15,7 @@ namespace BinSync.FldHost;
 /// namespace-scoped. Reconnects must reuse that ClientId. Async commit guards,
 /// author-epoch closure, FULL_REPLACE and GC capabilities are not emulated.
 /// </summary>
-public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore, IAsyncProviderOperationReceiptStore, IAsyncProviderPublicationMode, IAsyncProviderTombstoneGc
+public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsyncProviderPublishedOriginStore, IAsyncProviderOperationReceiptStore, IAsyncProviderPublicationMode, IAsyncProviderTombstoneGc, IAsyncApplicationGcReferenceScanner
 {
     private readonly FldDatabaseIpcClient _client;
     private readonly FldDatabaseIpcOutboxLease _outboxLease;
@@ -25,6 +25,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     private readonly Func<ReadOnlyMemory<byte>, RecordId> _recordIdResolver;
     private readonly Func<ReadOnlyMemory<byte>, ushort> _fieldIdResolver;
     private readonly SemaphoreSlim _feedGate = new(1, 1);
+    private readonly SemaphoreSlim _gcScanGate = new(1, 1);
     private readonly object _gate = new();
     private readonly Dictionary<Guid, FldDatabaseIpcSnapshotHandle> _snapshots = new();
     private readonly HashSet<ulong> _snapshotBarriers = new();
@@ -640,6 +641,44 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         }
     }
 
+    public async ValueTask<IAsyncApplicationGcReferenceScan> OpenScanAsync(
+        string scopeId, NodeId localReplica, int namespaceId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        ThrowIfUnavailable(cancellationToken);
+        if (localReplica != _localAuthor || namespaceId != _namespaceId)
+            throw new InvalidOperationException(
+                "The requested GC reference scan does not match this FLD IPC provider identity and namespace.");
+
+        await _gcScanGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        bool transferred = false;
+        Guid lease = Guid.Empty;
+        try
+        {
+            ThrowIfUnavailable(cancellationToken);
+            lease = await _client.AcquireGcLeaseAsync(cancellationToken).ConfigureAwait(false);
+            FldDatabaseIpcGcReferenceScan scan =
+                await _client.OpenGcReferenceScanAsync(cancellationToken).ConfigureAwait(false);
+            var result = new FldDatabaseIpcAsyncGcReferenceScan(
+                _client, _gcScanGate, lease, scan);
+            transferred = true;
+            return result;
+        }
+        finally
+        {
+            if (!transferred)
+            {
+                if (lease != Guid.Empty)
+                {
+                    try { await _client.ReleaseGcLeaseAsync(lease, CancellationToken.None).ConfigureAwait(false); }
+                    catch { /* A broken IPC session releases its Host lease on disconnect. */ }
+                }
+                _gcScanGate.Release();
+            }
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         FldDatabaseIpcSnapshotHandle[] snapshots;
@@ -663,6 +702,100 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         finally { _feedGate.Dispose(); }
         if (failures is not null)
             throw new AggregateException("One or more FLD IPC provider resources could not be released cleanly.", failures);
+    }
+
+    private sealed class FldDatabaseIpcAsyncGcReferenceScan : IAsyncApplicationGcReferenceScan
+    {
+        private readonly FldDatabaseIpcClient _client;
+        private readonly SemaphoreSlim _ownerGate;
+        private readonly Guid _leaseToken;
+        private readonly Guid _scanToken;
+        private readonly ApplicationDraftHorizon _draftHorizon;
+        private int _disposed;
+
+        public FldDatabaseIpcAsyncGcReferenceScan(
+            FldDatabaseIpcClient client,
+            SemaphoreSlim ownerGate,
+            Guid leaseToken,
+            FldDatabaseIpcGcReferenceScan scan)
+        {
+            _client = client ?? throw new ArgumentNullException(nameof(client));
+            _ownerGate = ownerGate ?? throw new ArgumentNullException(nameof(ownerGate));
+            if (leaseToken == Guid.Empty || scan.Token == Guid.Empty)
+                throw new ArgumentException("FLD GC scan and lease tokens must be nonzero.");
+            _leaseToken = leaseToken;
+            _scanToken = scan.Token;
+            _draftHorizon = new ApplicationDraftHorizon(
+                scan.UnpublishedLocalDraftHorizon.Count,
+                scan.UnpublishedLocalDraftHorizon.MaxHlcWall,
+                scan.UnpublishedLocalDraftHorizon.MaxHlcLogical);
+        }
+
+        public ValueTask<ApplicationDraftHorizon> GetUnpublishedLocalDraftHorizonAsync(
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed(cancellationToken);
+            return ValueTask.FromResult(_draftHorizon);
+        }
+
+        public ValueTask<bool> HasExternalReceiptReferenceAsync(
+            NodeId senderPeer, uint authorEpoch, uint transportPeerEpoch, BatchId batchId,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed(cancellationToken);
+            return new ValueTask<bool>(_client.HasGcReceiptReferenceAsync(
+                _scanToken, senderPeer.ToArray(), authorEpoch, transportPeerEpoch,
+                batchId.ToArray(), cancellationToken));
+        }
+
+        public ValueTask<bool> HasExternalChangeIdReferenceAsync(
+            BatchId changeId, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed(cancellationToken);
+            return new ValueTask<bool>(_client.HasGcChangeIdReferenceAsync(
+                _scanToken, changeId.ToArray(), cancellationToken));
+        }
+
+        public ValueTask<bool> HasExternalRecordReferenceAsync(
+            RecordId recordId, BatchId tombstoneChangeId,
+            CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed(cancellationToken);
+            return new ValueTask<bool>(_client.HasGcRecordReferenceAsync(
+                _scanToken, recordId.ToArray(), tombstoneChangeId.ToArray(), cancellationToken));
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            Exception? failure = null;
+            try
+            {
+                await _client.ReleaseGcReferenceScanAsync(
+                    _scanToken, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception error) { failure = error; }
+            try
+            {
+                await _client.ReleaseGcLeaseAsync(
+                    _leaseToken, CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception error) { failure ??= error; }
+            finally
+            {
+                _ownerGate.Release();
+            }
+            if (failure is not null)
+                throw new IOException(
+                    "FLD IPC GC reference scan or Host lease could not be released cleanly.", failure);
+        }
+
+        private void ThrowIfDisposed(CancellationToken cancellationToken)
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
     }
 
     private async Task<byte[]> ReadCompleteOutboxValueAsync(
