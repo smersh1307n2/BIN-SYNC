@@ -139,3 +139,15 @@ The session enforces the same dependency masks in both directions: NRS2 requires
 ### HELLO capability preflight
 
 The session bootstrap validates the v3.1 dependency mask on both encode and decode: OFR2/RCP2 and FULL_REPLACE capabilities require NRS2/namespace-roster support. An invalid local advertisement fails before HELLO/HELLO_ACK is emitted; an invalid remote advertisement is rejected before the session is established. The host should treat this as protocol incompatibility, not retry the same feature with a v3.0 fallback.
+
+## 5. Physical-GC readiness and bounded async maintenance
+
+The process-isolated sample adapter `FldBinSyncAsyncHostAdapter` exposes:
+
+- `GetGcReadinessAsync(gcStore, trustStore)`: reports the accepted signed roster/checkpoint state, FULL_REPLACE installation state, unpublished local draft horizon, provider capabilities, and independent readiness for Receipt, ChangeId and Record/Field Tombstone GC. It opens and disposes one read-only Host reference scan; it does not delete rows or change feature flags.
+- `RunGcMaintenanceAsync(gcStore, trustStore, limit, cancellationToken)`: executes at most one bounded page per independently enabled and globally ready domain, sequentially. Cancellation is checked between domains. Durable compaction cursors make later invocations resume safely.
+- Each result carries per-domain enablement, prerequisite status and explicit global blocked reasons, plus reclaimed counts.
+
+Readiness is deliberately weaker than candidate authorization. The compactor still validates each Receipt's retired transport epoch and receive-chain fence; each ChangeId's signed origin frontier and all Metadata/Host references; and each field/record tombstone's signed origin proof, installed FULL_REPLACE generation, exact provider identity and Host reference/pin state. A readiness report must never be used to turn on a feature flag.
+
+All three `StorageNamespaceGcFeatureOptions` switches remain false by default. The embedding application owns cadence, scheduling, logging, retention policy and the operator kill switch. The sample performs one bounded round only; it does not create a background timer or silently enable GC.
