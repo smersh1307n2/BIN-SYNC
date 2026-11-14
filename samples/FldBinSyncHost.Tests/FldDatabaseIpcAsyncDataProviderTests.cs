@@ -374,7 +374,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(8U, origin.AuthorEpoch);
             Assert.Equal(9UL, origin.Sequence);
             Assert.False(isLocalOutbound);
-            Assert.Empty(metadata.ReadRelayAuthors(scope, local, checked((int)namespaceId)));
+            Assert.Contains(authority, metadata.ReadRelayAuthors(scope, local, checked((int)namespaceId)));
             Assert.Empty(metadata.ReadPeerStreamStates(
                 scope, local, authority, 2, checked((int)namespaceId)));
             var referenceScanner = Assert.IsAssignableFrom<IAsyncApplicationGcReferenceScanner>(provider);
