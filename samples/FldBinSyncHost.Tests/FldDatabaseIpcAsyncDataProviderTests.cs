@@ -666,6 +666,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(pinnedReadiness.Receipts.PrerequisitesSatisfied);
             Assert.False(pinnedReadiness.ChangeIds.PrerequisitesSatisfied);
             Assert.False(pinnedReadiness.Tombstones.PrerequisitesSatisfied);
+            Assert.Equal(0, await coordinator.CompactReceiptsAsync(referenceScanner, limit: 1));
+            Assert.Equal(0, await coordinator.CompactChangeLedgerAsync(referenceScanner, limit: 1));
             FldBinSyncAsyncGcPassResult blockedPass =
                 await adapter.RunGcMaintenanceAsync(gc, trust, limit: 1);
             Assert.Equal(0, blockedPass.ReceiptsReclaimed);
