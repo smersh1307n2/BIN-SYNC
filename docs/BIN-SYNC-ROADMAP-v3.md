@@ -3889,4 +3889,15 @@ This section is the current authoritative implementation audit for physical GC. 
 4. Run representative scale/performance measurements and publish retention bounds.
 5. Exercise operator rollback and staged canary; only then consider a separately approved opt-in for each physical-GC domain.
 
+
+ 
+## 1.155. Async Host GC readiness, snapshot-pin veto and exact-head validation — 2026-11-15
+ 
+- [x C] `FldBinSyncAsyncHostAdapter.GetGcReadinessAsync` now provides a read-only readiness report for Receipt, ChangeId and Record/Field Tombstone domains, including signed roster/checkpoint/FULL_REPLACE state, Host draft horizon, active immutable snapshot-pin state, provider scanner capability, independent feature enablement and explicit blocked reasons.
+- [x C] `RunGcMaintenanceAsync` performs one bounded sequential round across independently enabled/ready domains and observes cancellation between domains. It reports per-domain reclaimed counts; durable compaction cursors support subsequent calls.
+- [x C/T] Async Host reference scans now expose `HasSnapshotPin`. Any active immutable provider snapshot pin is a global veto for Receipt, ChangeId and Tombstone compaction. Both Metadata async compactors independently fail closed on the pin, rather than trusting only the orchestration preflight.
+- [x T] Real FLD Host integration test holds a provider snapshot open, verifies readiness reports the pin, verifies all three domains are blocked, and verifies a bounded maintenance round reclaims zero rows. The test then releases the snapshot and continues the no-pin readiness/compaction scenario.
+- [x CI] Exact PR #16 HEAD `d00501c4a19436c07e74c945ff460576c159a430`: BIN-SYNC run `43618600864` passed all 6 jobs; FLD Storage Integration run `43618600885` passed all 3 jobs (Ubuntu, Windows, macOS 15). Linux and Windows .NET suites passed 686/686; `FldBinSyncHost.Tests` passed 38/38 on both platforms; Fuzz + Lab passed 31/31; signed v3.1 vectors passed.
+- [!] This closes the async orchestration/readiness implementation item in §1.154, but not the independent Metadata writer-bypass, provider crash/replay, scale, or operational release gates below. Readiness is not candidate authorization and must never enable a flag.
+ 
 No physical-GC flag is enabled by this roadmap update. `EnableReceiptGc`, `EnableChangeIdGc` and `EnableTombstoneGc` remain false by default; Ghost GC remains disabled.
