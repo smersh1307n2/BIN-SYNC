@@ -122,11 +122,20 @@ The safe frontier is the minimum contiguous applied-origin frontier across every
 - two independent FLD Hosts reclaim bounded pages, restart between pages and preserve deletion after durable database reopen;
 - Ghost lifecycle has its own proof and remains disabled until separately validated.
 
-### Remaining crash/enablement gate
+### Completed crash/uncertain-completion matrix — 2026-11-14
 
-- Host death during reference scan, WAL seal, provider deletion and Metadata commit;
-- uncertain IPC completion and idempotent retry without inferring success from a broken channel;
-- repeated exact-HEAD CI, independent flag review, diagnostics, retention policy and operational disable/rollback path.
+- Host death while a GC reference scan/lease is active and a second IPC session is blocked; the blocked request fails, the Host restarts on the same FLD database, and a fresh non-owner session plus startup recovery succeed.
+- Durable WAL seal followed by database close/reopen before tombstone deletion; the tombstone remains, the unsealed-WAL Receipt barrier is cleared, and a later bounded page can reclaim it.
+- Existing Host-death cuts before candidate enumeration and after durable provider deletion remain covered.
+- A bounded ChangeId-GC Metadata page commits, its caller-visible result is lost, and reopen resumes from the durable cursor without repeating or resurrecting the page.
+- Cancellation after a negative Host reference answer, Host lease expiry/heartbeat, snapshot pins, writer exclusion and restart between bounded pages remain covered.
+
+### Remaining production enablement gate
+
+- read-only GC readiness diagnostics and operator-visible blocked reasons;
+- independent feature-flag configuration and a documented disable/rollback procedure;
+- retention policy and staged canary/rollout review;
+- exact-head CI must remain green before each individual domain is opted in.
 
 ## 7. Non-negotiable rules
 
@@ -181,8 +190,17 @@ The v3.1 roster/frontier/checkpoint and FULL_REPLACE implementation is now prese
 ## 9. Current implementation and composed integration evidence — 2026-11-14
 
 - Receipt, ChangeId and tombstone compaction paths are implemented behind independent default-off flags. Ghost GC remains disabled.
-- The two-Host lifecycle test now composes signed retirement/rejoin, FULL_REPLACE baseline, old/new transport Receipt handling, the unsealed-WAL receipt barrier, bounded receipt pages, ChangeId deletion, physical tombstone pages, Host restart, and pushed-reservation recovery after Metadata Storage reopen.
-- The composed test intentionally injects the retiring-epoch receipt chain and the lost-ACK reservation at the Metadata boundary to isolate those durable state machines. The two FLD Hosts and their A→B / B→relay SyncSession data/tombstone path are real. Separate real-Host tests continue to cover ApplyJournal/WAL receipt references, Host scan/lease writer exclusion, heartbeat drain, cancellation and snapshot pins.
-- Exact BIN-SYNC code HEAD `7a26828beafcb1e92198d8f997e08256070d05b5`: BinSync.Net workflow run `43609820952` passed all six jobs; Linux/Windows .NET tests each passed 686/686, Linux line coverage was 68.7%, and FLD Host integration passed 34/34 on both Linux and Windows. Signed v3.1 vectors and Fuzz + Lab passed.
-- Exact same code HEAD: FLD Storage Integration run `43609820962` passed all three durable-provider jobs on Ubuntu, Windows and macOS 15.
-- These results validate this code HEAD; they do not authorize production GC. Complete the remaining Host-death/uncertain-IPC matrix, repeat exact-head CI, and review disable/rollback, diagnostics and retention policy before considering any single GC flag for opt-in.
+- The two-Host lifecycle composes signed retirement/rejoin, FULL_REPLACE baseline, old/new transport Receipt handling, the unsealed-WAL Receipt barrier, bounded Receipt pages, ChangeId deletion, physical tombstone pages, Host restart and pushed-reservation recovery after Metadata Storage reopen.
+- The composed lifecycle injects the retiring-epoch Receipt chain and lost-ACK reservation at the durable Metadata boundary to isolate those state machines. The two FLD Hosts and their A→B / B→relay SyncSession data/tombstone path are real. Separate Host tests cover ApplyJournal/WAL receipt references, active scan/lease writer exclusion, heartbeat drain, cancellation and snapshot pins.
+- Exact BIN-SYNC HEAD `93fed52445a5328ef4340916897aa190a90accf7`: BinSync.Net runs `43612231242` and `43612238417` both passed all six jobs. Linux and Windows .NET suites each passed 686/686; `FldBinSyncHost.Tests` passed 35/35 on both Linux and Windows; signed v3.1 vectors and Fuzz + Lab passed; Linux line coverage was 68.7%.
+- Exact same HEAD: FLD Storage Integration runs `43612231211` and `43612238406` both passed all three durable-provider jobs on Ubuntu, Windows and macOS 15.
+- These results validate this exact code HEAD; they do not authorize production GC.
+
+## 10. Crash matrix closure and release gate — 2026-11-14
+
+- [x T] Active Host scan/lease crash: the Host process is killed while the GC reference scan is open and a second IPC client is blocked. After restart, startup recovery and a new non-owner request succeed; Receipt-GC pages resume.
+- [x T] WAL-seal-before-delete crash: the committed tombstone and Outbox acknowledgement are sealed, the database is closed/reopened before deletion, the tombstone remains and the Receipt uncertainty barrier is cleared. A later bounded tombstone-GC page reclaims the row.
+- [x T] Metadata uncertain completion: an IOException is injected after a bounded ChangeId-GC page commits. The persisted page cursor and row deletion survive reopen; subsequent compaction resumes safely.
+- [x T] Existing process-death cuts before candidate enumeration and after durable provider deletion, plus cancellation, heartbeat, snapshot pin and lease-expiry tests, remain green.
+- [!] The WAL test closes/reopens after a completed checkpoint; lower-level torn-WAL/checkpoint recovery is covered by the FLD WAL/Engine crash tests. No wire-format change was made.
+- [ ] One release gate remains: diagnostics/readiness report, operator-visible blocked reasons, independent flag configuration, disable/rollback procedure, retention policy and staged canary. All physical GC flags remain false by default; Ghost GC remains disabled.
