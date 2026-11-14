@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Store retention and GC contract
 
-**Status (2026-11-14):** Receipt, ChangeId and field/record-tombstone compaction paths are implemented with independent proof gates and independent feature flags. The signed v3.1 roster/frontier/checkpoint/FULL_REPLACE control plane and process-isolated FLD IPC reference-scan/GC lease are implemented. All physical GC flags remain **false by default**; this document does not authorize production reclamation. The Host crash/uncertain-completion matrix is substantially covered, but multiple release gates remain: Metadata writer-bypass closure, exact-head validation of async readiness/orchestration, remaining provider crash/replay matrices, large-namespace performance/retention measurements, operator rollback and staged canary.
+**Status (2026-11-15):** Receipt, ChangeId and field/record-tombstone compaction paths are implemented with independent proof gates and independent default-off feature flags. The signed v3.1 roster/frontier/checkpoint/FULL_REPLACE control plane, process-isolated FLD IPC reference-scan/GC lease, async per-domain readiness and bounded maintenance round are implemented and exact-head validated on BIN-SYNC PR #16 HEAD `d00501c4a19436c07e74c945ff460576c159a430`. Async Host scans expose active immutable snapshot pins and all three domains fail closed when a pin exists. All physical GC flags remain **false by default**; this document does not authorize production reclamation. Remaining release gates: Metadata writer-bypass closure, provider-specific crash/replay matrices, representative large-namespace performance/retention measurements, operator rollback and staged canary.
 
 Normative detail: [METADATA-STORE-GC-DESIGN.md](METADATA-STORE-GC-DESIGN.md), [BIN-SYNC-ROADMAP-v3.md](BIN-SYNC-ROADMAP-v3.md), and [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md).
 
@@ -113,7 +113,7 @@ All default to false. The options are supplied when constructing the namespace G
 
 For rollback, the embedding Host must stop scheduling new passes, cancel any in-flight pass through its cancellation token, and restart/recreate the GC store/coordinator with all three flags false. A completed deletion is not undone; rollback means stopping further reclamation, not restoring an older Metadata snapshot. The Host application owns scheduling and transport lifecycle.
 
-**One release gate remains before a controlled opt-in:** add a read-only readiness/diagnostics report with operator-visible blocked reasons, finalize independent flag configuration, document disable/rollback and retention policy, and perform a staged canary. Do not enable any physical GC flag as part of this documentation update.
+**Multiple release gates remain before a controlled opt-in:** close the Metadata writer-bypass boundary; complete provider-specific crash/replay and representative scale measurements; finalize independent flag configuration, operator-visible blocked-reason handling, disable/rollback and retention policy; then perform a staged canary. The async readiness report is implemented but is not an authorization to delete. Do not enable any physical GC flag as part of this documentation update.
 
 ## 9. Node-owned mode and provider cutover
 
