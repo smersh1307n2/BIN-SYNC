@@ -67,11 +67,15 @@ Unknown, disconnected, joining, stale or lagging active members contribute zero 
 
 The code and integration tests cover independent Host-reference vetoes, relay payload release, pushed-reservation/lost-ACK recovery after durable Storage reopen, bounded pages, restart and stale replay below the signed frontier. `EnableChangeIdGc` still defaults to false; test fixtures opt in explicitly. Payload ACK/compaction alone never authorizes ledger deletion.
 
-## 4. Tombstone/ghost GC: tombstone path implemented, Ghost remains disabled
+## 4. Field/record tombstone GC: both candidate kinds are distinct; Ghost remains disabled
 
 The asynchronous tombstone path is implemented through `AsyncStorageSyncCoordinator.CompactTombstonesAsync` and the FLD Host's `IAsyncProviderTombstoneGc` boundary. The coordinator requires a valid signed roster/checkpoint and FULL_REPLACE generation, validates candidate provenance/HLC against the safe origin frontier, and excludes Metadata live-record references and immutable reservations.
 
 The Host performs the final exact-candidate revalidation under its database commit monitor. It seals the committed WAL prefix before opening the final reference snapshot, then checks draft horizon, Outbox/ApplyJournal references, relay references and active/persisted snapshot pins before deleting a candidate. The Host GC lease excludes competing IPC sessions across the scan/commit window; disconnect, expiry, stale Host generation or incomplete reference evidence fails closed.
+
+FLD exposes two distinct candidate kinds: a standalone field tombstone (`IsFieldTombstone`, exact RecordId + FieldId + ChangeId + origin/HLC) and a record lifecycle tombstone (`IsRecordTombstone`). They share the signed origin-frontier and installed FULL_REPLACE safety horizon, but each exact candidate is independently revalidated and reference-scanned. A field tombstone is not authorized merely because a different record tombstone is safe.
+
+If a record-level Dead tombstone is present but not yet reclaimable, FLD retains all field tombstones for that record; removing one could reveal an older value after a later undelete. Once the record tombstone itself is proven and reclaimed, older field versions are not re-exposed, while fields newer than the record deletion remain. FLD's exact-candidate tests cover field tombstone removal without resurrection, record tombstone behavior and the record-delete fence.
 
 The two-independent-Host integration scenario exercises signed retirement/rejoin, fresh FULL_REPLACE, real A→B and B→relay SyncSessions, bounded physical tombstone pages, Host restarts, ChangeId/Receipt horizons and reservation/ACK serialization. Candidate provenance/HLC negative tests and Host snapshot-pin/reference tests remain separate supporting matrices.
 
@@ -132,10 +136,11 @@ The safe frontier is the minimum contiguous applied-origin frontier across every
 
 ### Remaining production enablement gate
 
-- read-only GC readiness diagnostics and operator-visible blocked reasons;
-- independent feature-flag configuration and a documented disable/rollback procedure;
-- retention policy and staged canary/rollout review;
-- exact-head CI must remain green before each individual domain is opted in.
+- close the remaining Metadata writer-bypass boundary: coordinator admission does not fence arbitrary direct public Metadata Store mutations;
+- complete and exact-head-validate the async Host readiness/maintenance API. The sample now exposes a read-only per-domain readiness report and one bounded sequential async maintenance round; these additions are not accepted until exact-head CI and integration tests pass;
+- operator-visible blocked reasons, independent feature-flag configuration, disable/rollback and retention policy;
+- complete provider-specific crash/replay matrices and representative large-namespace performance/retention measurements;
+- staged canary/rollout review. Exact-head cross-platform CI must remain green before each individual domain is opted in.
 
 ## 7. Non-negotiable rules
 
