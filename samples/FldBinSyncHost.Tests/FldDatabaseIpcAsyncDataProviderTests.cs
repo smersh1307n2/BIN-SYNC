@@ -251,10 +251,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, checked((int)namespaceId));
                 coordinator.AttachNamespaceGcGuard(gc, trust);
 
-                // Cut 1: the Host has returned a bounded candidate snapshot, but no
-                // physical delete has been requested. Killing/reopening the Host must
-                // preserve the tombstone and make it eligible for a fresh pass.
-                var beforeDeleteCrash = new CrashAfterTombstoneCandidateRead(provider, host!);
+                // Cut 1: the Host has durably opened its provider snapshot pin, but
+                // candidate enumeration and physical deletion have not begun. Killing
+                // and reopening must preserve the tombstone and discard the stale pin.
+                var beforeDeleteCrash = new CrashAfterTombstoneCandidateRead(provider!, host!);
                 await Assert.ThrowsAsync<IOException>(
                     () => coordinator.CompactTombstonesAsync(beforeDeleteCrash, 16));
             }
