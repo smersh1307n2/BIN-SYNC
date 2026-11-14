@@ -143,7 +143,7 @@ public sealed class FldBinSyncAsyncHostAdapter
             common.Add("Signed namespace retention state is invalid: " + exception.Message);
         }
 
-        int unpublishedDraftCount = 0;
+        ulong unpublishedDraftCount = 0;
         IAsyncApplicationGcReferenceScanner? referenceScanner =
             _provider as IAsyncApplicationGcReferenceScanner;
         if (referenceScanner is null)
