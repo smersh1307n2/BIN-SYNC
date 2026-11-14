@@ -105,6 +105,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         {
             private int _blocked;
 
+            public bool HasSnapshotPin => inner.HasSnapshotPin;
+
             public ValueTask<ApplicationDraftHorizon> GetUnpublishedLocalDraftHorizonAsync(
                 CancellationToken cancellationToken = default)
                 => inner.GetUnpublishedLocalDraftHorizonAsync(cancellationToken);
