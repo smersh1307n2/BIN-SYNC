@@ -24,6 +24,8 @@ internal sealed class TestAsyncGcReferenceScanner(
         bool hasChangeIdReference,
         bool hasRecordReference) : IAsyncApplicationGcReferenceScan
     {
+        public bool HasSnapshotPin => false;
+
         public ValueTask<ApplicationDraftHorizon> GetUnpublishedLocalDraftHorizonAsync(
             CancellationToken cancellationToken = default)
         {
