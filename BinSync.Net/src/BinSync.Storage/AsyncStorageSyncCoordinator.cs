@@ -162,6 +162,71 @@ public sealed class AsyncStorageSyncCoordinator
     }
 
     /// <summary>
+    /// Compact signed-frontier-covered ChangeId rows through one asynchronous Host
+    /// reference snapshot. The Host lease remains held through candidate queries and
+    /// the final Metadata transaction; no Monitor is held across an await.
+    /// </summary>
+    public async Task<int> CompactChangeLedgerAsync(
+        IAsyncApplicationGcReferenceScanner externalReferences,
+        int limit = 256,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(externalReferences);
+        if (limit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("Async ChangeId GC requires the durable StorageMetadataStore.");
+        if (_namespaceGcStore is null || _namespaceGcTrustStore is null)
+            throw new InvalidOperationException("Attach the async namespace-GC guard before ChangeId compaction.");
+        if (!_namespaceGcStore.IsChangeIdGcProofEnabled)
+            return 0;
+
+        await _asyncAdmissionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await storageMetadata.CompactChangeLedgerAsync(
+                _scopeId, _node.NodeId, _namespaceId, limit,
+                externalReferences, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _asyncAdmissionGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Compact retired-transport receipts through one asynchronous Host reference
+    /// snapshot. Receive-chain replay fences remain durable and independent.
+    /// </summary>
+    public async Task<int> CompactReceiptsAsync(
+        IAsyncApplicationGcReferenceScanner externalReferences,
+        int limit = 256,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(externalReferences);
+        if (limit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("Async receipt GC requires the durable StorageMetadataStore.");
+        if (_namespaceGcStore is null || _namespaceGcTrustStore is null)
+            throw new InvalidOperationException("Attach the async namespace-GC guard before receipt compaction.");
+        if (!_namespaceGcStore.IsReceiptGcProofEnabled)
+            return 0;
+
+        await _asyncAdmissionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await storageMetadata.CompactReceiptsAsync(
+                _scopeId, _node.NodeId, _namespaceId, limit,
+                externalReferences, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _asyncAdmissionGate.Release();
+        }
+    }
+
+    /// <summary>
     /// Recover durable remote APPLY intents and publish the captured local provider feed
     /// before the host accepts new synchronization sessions. Call during startup, with
     /// no concurrent coordinator session operations. A failure is fail-closed and the
