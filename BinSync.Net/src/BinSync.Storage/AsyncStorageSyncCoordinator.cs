@@ -58,6 +58,21 @@ public sealed class AsyncStorageSyncCoordinator
         _metadataGate = _admissionGates.MetadataGate;
     }
 
+    /// <summary>Stable namespace identity used by the embedding Host's GC diagnostics.</summary>
+    public int NamespaceId => _namespaceId;
+
+    /// <summary>Local replica identity used by the embedding Host's GC diagnostics.</summary>
+    public NodeId LocalReplicaId => _node.NodeId;
+
+    /// <summary>Stable Metadata partition scope used by the embedding Host's GC diagnostics.</summary>
+    public string MetadataScopeId => _scopeId;
+
+    /// <summary>True only when this coordinator is bound to these exact GC/trust instances.</summary>
+    public bool IsNamespaceGcGuardAttached(
+        StorageNamespaceGcStore gcStore, TrustStore trustStore)
+        => ReferenceEquals(_namespaceGcStore, gcStore) &&
+           ReferenceEquals(_namespaceGcTrustStore, trustStore);
+
     /// <summary>
     /// Attach the exact signed namespace-GC store used by this Metadata partition.
     /// Physical tombstone GC remains disabled unless its independent proof flag is enabled.
