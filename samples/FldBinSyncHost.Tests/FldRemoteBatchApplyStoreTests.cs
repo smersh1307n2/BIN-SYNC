@@ -597,25 +597,29 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             }
 
             int ownerPid = int.Parse(File.ReadAllText(ownerPidPath));
-            using (var owner = System.Diagnostics.Process.GetProcessById(ownerPid))
+
+            // The probe terminates itself immediately after the durable FLD commit.
+            // This avoids relying on Windows process-tree teardown to kill a nested
+            // dotnet testhost, which has proved nondeterministic under CI.
+            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            Assert.NotEqual(0, child.ExitCode);
+
+            bool ownerExited;
+            try
             {
-                // Kill the dotnet test root, not only the testhost child. On Windows
-                // the CLI may otherwise remain alive while its worker process is
-                // being torn down, making the crash/reopen cut nondeterministic.
-                if (!child.HasExited)
-                    child.Kill(entireProcessTree: true);
-                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-
-                // Confirm the exact process that held the FLD partition lease is gone
-                // before attempting recovery in this process.
-                if (!owner.HasExited)
-                {
-                    owner.Kill(entireProcessTree: true);
-                    await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-                }
+                using var owner = System.Diagnostics.Process.GetProcessById(ownerPid);
+                await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                ownerExited = owner.HasExited;
             }
+            catch (ArgumentException)
+            {
+                ownerExited = true; // The testhost exited before its PID could be reopened.
+            }
+            Assert.True(ownerExited,
+                $"The exact FLD lease-owner process {ownerPid} survived its self-termination.");
 
-            // Reopen every durable store after the owner process has been killed.
+            // Reopen every durable store only after the process that held the FLD
+            // partition lease has exited and Windows has abandoned its named mutex.
             using var fldA = FldDatabase.Open(Path.Combine(directory, "fld-a"), namespaceId, authorA);
             using var fldB = FldDatabase.Open(Path.Combine(directory, "fld-b"), namespaceId, authorB);
             using var providerB = new FldDatabaseDataProvider(fldB, () => 1);
@@ -718,7 +722,7 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             File.WriteAllText(ownerPidPath, Environment.ProcessId.ToString(
                 System.Globalization.CultureInfo.InvariantCulture));
             File.WriteAllText(readyPath, "after-fld-commit");
-            Thread.Sleep(Timeout.Infinite);
+            Environment.FailFast("Intentional hard process termination after durable FLD APPLY and before metadata receipt finalization.");
         };
         var blockingStore = new ApplyAndBlockStore(new FldRemoteBatchApplyStore(fldB), signalAndBlock);
         var coordinatorB = new StorageSyncCoordinator(
