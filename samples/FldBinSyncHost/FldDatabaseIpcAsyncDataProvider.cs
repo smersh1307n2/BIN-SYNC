@@ -862,6 +862,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             }
             finally
             {
+                _renewalShutdown.Dispose();
                 _ownerGate.Release();
             }
             if (failure is not null)
