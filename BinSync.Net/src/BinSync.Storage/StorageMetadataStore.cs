@@ -899,6 +899,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             (draftHorizon.MaxHlcWall != 0 || draftHorizon.MaxHlcLogical != 0))
             throw new InvalidDataException("Async Host GC scanner returned an HLC maximum for an empty draft horizon.");
 
+        if (externalScan.HasSnapshotPin)
+            return 0; // An immutable provider snapshot may still retain identities from the captured generation.
+
         StorageNamespaceGcStore gcStore = _namespaceGcStore
             ?? throw new InvalidOperationException("Attach the durable namespace-GC replay guard before ChangeId GC.");
         TrustStore trustStore = _namespaceGcTrustStore
