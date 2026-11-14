@@ -155,6 +155,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             clientDisconnected: dispatcher.OnClientDisconnected);
         Task serverTask = server.RunAsync(shutdown.Token);
         FldDatabaseIpcAsyncDataProvider? provider = null;
+        FldDatabaseIpcClient? competingClient = null;
 
         try
         {
@@ -166,17 +167,26 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 NodeId.From(authorBytes), () => 1,
                 cancellationToken: default,
                 gcLeaseRenewalInterval: TimeSpan.FromMilliseconds(500));
+            competingClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                root, Guid.NewGuid(), TimeSpan.FromSeconds(10));
 
-            await using IAsyncApplicationGcReferenceScan scan = await provider.OpenScanAsync(
-                "lease-renewal-test", NodeId.From(authorBytes), checked((int)namespaceId));
-            // The Host idle TTL is five seconds. Keep the scan open for over two
-            // TTLs without issuing any reference query: only the provider heartbeat
-            // can keep the Host-wide admission boundary alive.
-            await Task.Delay(12000);
-            Assert.False(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x65))));
+            Task<byte[]> blockedReader;
+            await using (IAsyncApplicationGcReferenceScan scan = await provider.OpenScanAsync(
+                "lease-renewal-test", NodeId.From(authorBytes), checked((int)namespaceId)))
+            {
+                blockedReader = competingClient.GetLocalAuthorAsync();
+                await Task.Delay(12000);
+                Assert.False(blockedReader.IsCompleted,
+                    "The Host-wide boundary must remain held beyond multiple idle TTLs while the async provider heartbeat is active.");
+                Assert.False(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x65))));
+            }
+
+            Assert.Equal(authorBytes, await blockedReader.WaitAsync(TimeSpan.FromSeconds(5)));
         }
         finally
         {
+            if (competingClient is not null)
+                await competingClient.DisposeAsync();
             if (provider is not null)
                 await provider.DisposeAsync();
             shutdown.Cancel();
