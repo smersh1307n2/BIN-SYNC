@@ -184,7 +184,7 @@ The earlier 2026-11-08 audit below is superseded. Immutable Origin is now implem
 - Physical deletion must not race PendingApply, outbound/relay reservations, provider publication intents or pinned snapshot generations.
 
 
-The v3.1 roster/frontier/checkpoint and FULL_REPLACE implementation is now present and covered by exact-head CI. This supersedes the historical 2026-11-08 audit below wherever it says the signed roster or GC paths do not yet exist. The remaining blockers are the complete Host-death/uncertain-IPC crash matrix and staged enablement review. All physical GC feature flags remain false by default.
+The v3.1 roster/frontier/checkpoint and FULL_REPLACE implementation is present and covered by repeated exact-head CI. This supersedes the historical 2026-11-08 audit below wherever it says the signed roster or GC paths do not yet exist. The Host-death/uncertain-completion matrix is now covered; one release gate remains for readiness diagnostics, operator-visible blocked reasons, independent flags, disable/rollback, retention policy and staged canary. All physical GC feature flags remain false by default.
 
 
 ## 9. Current implementation and composed integration evidence — 2026-11-14
