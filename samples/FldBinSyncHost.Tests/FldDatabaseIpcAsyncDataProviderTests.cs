@@ -365,6 +365,22 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
             metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, checked((int)namespaceId), BatchId.From(changeId),
+                out NodeId ledgerAuthor, out uint ledgerEpoch, out ulong ledgerSequence));
+            Assert.Equal(authority, ledgerAuthor);
+            Assert.Equal(8U, ledgerEpoch);
+            Assert.Equal(9UL, ledgerSequence);
+            Assert.Empty(metadata.ReadRelayAuthors(scope, local, checked((int)namespaceId)));
+            Assert.Empty(metadata.ReadPeerStreamStates(
+                scope, local, authority, 2, checked((int)namespaceId)));
+            var referenceScanner = Assert.IsAssignableFrom<IAsyncApplicationGcReferenceScanner>(provider);
+            await using (IAsyncApplicationGcReferenceScan hostScan = await referenceScanner.OpenScanAsync(
+                scope, local, checked((int)namespaceId)))
+            {
+                Assert.Equal(0UL, (await hostScan.GetUnpublishedLocalDraftHorizonAsync()).Count);
+                Assert.False(await hostScan.HasExternalChangeIdReferenceAsync(BatchId.From(changeId)));
+            }
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
             var adapter = new FldBinSyncAsyncHostAdapter(
