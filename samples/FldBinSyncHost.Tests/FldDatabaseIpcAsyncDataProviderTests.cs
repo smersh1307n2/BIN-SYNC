@@ -1317,10 +1317,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             var gcA = new StorageNamespaceGcStore(
                 nodeStorageA, scope, authorA,
-                new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+                new StorageNamespaceGcFeatureOptions(
+                    EnableTombstoneGc: true, EnableChangeIdGc: true));
             var gcB = new StorageNamespaceGcStore(
                 nodeStorageB, scope, authorB,
-                new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+                new StorageNamespaceGcFeatureOptions(
+                    EnableTombstoneGc: true, EnableChangeIdGc: true));
             // Before C receives the tombstone there is deliberately no accepted
             // three-member frontier proof. The retained Metadata payloads independently
             // keep both physical GC passes fail-closed.
@@ -1424,8 +1426,26 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // The signed namespace proof alone never deletes payloads.
             metadataA.CompactOutboundThrough(scope, nodeA.NodeId, namespaceId, authorA, 2);
             metadataB.CompactRelayThrough(scope, nodeB.NodeId, namespaceId, authorA, 2);
+            // C's transport ACK also releases B's immutable outbound copy. Relay
+            // consumer ACK and peer transport ACK are separate retention references.
+            metadataB.CompactOutboundThrough(scope, nodeB.NodeId, namespaceId, authorA, 2);
             Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record));
             Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record));
+
+            BatchId[] tombstoneChangeIds = [BatchId.From(Id(0x94)), BatchId.From(Id(0x95))];
+            int CountTombstoneChangeIds(StorageMetadataStore metadata, NodeId local) =>
+                tombstoneChangeIds.Count(changeId => metadata.TryGetChangeIdentity(
+                    scope, local, checked((int)namespaceId), changeId, out _, out _, out _));
+            Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
+
+            // The signed causal horizon is already safe and every immutable Metadata
+            // payload is ACKed/compacted, but the live FLD tombstones still pin their
+            // ChangeIds. Metadata GC must not outrun physical tombstone reclamation.
+            Assert.Equal(0, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
+            Assert.Equal(0, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
+            Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
             // Distinguish a conservative Metadata reservation block from provider
             // candidate/proof rejection before invoking physical GC. The Host seals
@@ -1520,6 +1540,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
             Assert.Single(await providerA.ReadTombstoneGcCandidatesAsync(16));
             Assert.Single(await providerB.ReadTombstoneGcCandidatesAsync(16));
+            // One physical tombstone is gone on each Host. Exactly its ChangeId
+            // can now pass the independent Metadata horizon; the remaining live
+            // tombstone continues to veto the other ChangeId.
+            Assert.Equal(1, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
+            Assert.Equal(1, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
+            Assert.Equal(1, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(1, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
             Assert.NotEqual(
                 await providerA.ReadCurrentAsync(record, 0x0951) is null,
                 await providerA.ReadCurrentAsync(record, 0x0952) is null);
@@ -1548,6 +1575,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Null(await providerA.ReadCurrentAsync(record, 0x0952));
             Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
             Assert.Null(await providerB.ReadCurrentAsync(record, 0x0952));
+
+            // After Host restart and tombstone page two, the final external
+            // ChangeId references disappear. The second independent bounded
+            // compaction page can now reclaim the remaining Metadata identity.
+            Assert.Equal(1, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
+            Assert.Equal(1, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
+            Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
             await remoteA.DisposeAsync(); remoteA = null;
             await remoteB.DisposeAsync(); remoteB = null;
