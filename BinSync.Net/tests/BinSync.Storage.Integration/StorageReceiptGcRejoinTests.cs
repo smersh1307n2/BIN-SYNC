@@ -143,13 +143,15 @@ public sealed class StorageReceiptGcRejoinTests
             }
         };
 
-    private static IApplicationGcReferenceScanner Scanner(bool hasReceiptReference)
+    private static IApplicationGcReferenceScanner Scanner(
+        bool hasReceiptReference, bool hasChangeIdReference = false,
+        IReadOnlySet<BatchId>? changeIds = null)
         => new DelegateApplicationGcReferenceScanner((_, _, _) =>
             new DelegateApplicationGcReferenceScan(
                 new MemoryStream(),
                 new ApplicationDraftHorizon(0, 0, 0),
                 (_, _, _, _) => hasReceiptReference,
-                _ => false,
+                id => hasChangeIdReference && (changeIds is null || changeIds.Contains(id)),
                 (_, _) => false));
 
     [Fact]
@@ -179,15 +181,22 @@ public sealed class StorageReceiptGcRejoinTests
         };
         var oldBatches = new List<MetadataIncomingBatch>();
         MetadataIncomingBatch? replacementBatch = null;
+        var changeIds = new HashSet<BatchId>
+        {
+            BatchId.From(Id(0x51)), BatchId.From(Id(0x52)),
+            BatchId.From(Id(0x53)), BatchId.From(Id(0x59))
+        };
 
         try
         {
             using (var storage = StorageDatabase.Open(directory, partitionId))
             using (var metadata = new StorageMetadataStore(storage))
+            using (var provider = new StorageDataProvider(storage))
             {
                 var gc = new StorageNamespaceGcStore(
                     storage, scope, local,
-                    new StorageNamespaceGcFeatureOptions(EnableReceiptGc: true));
+                    new StorageNamespaceGcFeatureOptions(
+                        EnableReceiptGc: true, EnableChangeIdGc: true));
                 NamespaceRosterCertificate roster1 = gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(
                         MakeRoster(1, new byte[32], keys,
@@ -221,6 +230,31 @@ public sealed class StorageReceiptGcRejoinTests
                 replacementBatch = Batch(
                     scope, local, sender, 12, 4, priorDigest[0], 0x47, 0x58, 53);
                 Assert.False(metadata.AcceptIncomingBatch(replacementBatch).IsDuplicate);
+
+                // A downstream immutable batch is pushed but its ACK is lost just
+                // before process shutdown. The exact reservation must survive reopen.
+                NodeId downstream = NodeId.From(Id(3));
+                metadata.RegisterInterestedPeer(scope, local, downstream, 1, 19);
+                metadata.CompletePeerInitialSync(
+                    scope, local, downstream, 1, 19,
+                    new[] { new MetadataPeerStreamBaseline(sender, 0, 3) });
+                var lostAckReservation = new MetadataOutboundBatchReservation
+                {
+                    BatchId = BatchId.From(Id(0x70)),
+                    IssuerEpoch = 3,
+                    CursorStart = 1,
+                    CursorEnd = 4,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)0x71, 16).ToArray(),
+                    Payload = new byte[] { 0x72 }
+                };
+                metadata.ReserveOutboundBatch(
+                    scope, local, downstream, 1, 19, sender, lostAckReservation);
+                metadata.MarkOutboundBatchPushed(
+                    scope, local, downstream, 1, 19, sender, lostAckReservation.BatchId);
+                Assert.Equal(0, metadata.CompactChangeLedger(
+                    scope, local, 19, provider, 1,
+                    () => new MemoryStream(), Scanner(false, false, changeIds)));
 
                 // The retiring author signs a final issued-origin report before
                 // the authority closes that origin epoch in the signed roster.
@@ -276,40 +310,115 @@ public sealed class StorageReceiptGcRejoinTests
                 // the signed current-epoch proof is complete.
                 Assert.Equal(0, metadata.CompactReceipts(
                     scope, local, 19, 16, () => new MemoryStream(), Scanner(true)));
+                Assert.Equal(0, metadata.CompactChangeLedger(
+                    scope, local, 19, provider, 16,
+                    () => new MemoryStream(), Scanner(false, true, changeIds)));
 
                 // Commit one bounded page, then reopen the complete durable scope.
                 Assert.Equal(1, metadata.CompactReceipts(
                     scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
             }
 
-            using var reopenedStorage = StorageDatabase.Open(directory, partitionId);
-            using var reopenedMetadata = new StorageMetadataStore(reopenedStorage);
-            var reopenedGc = new StorageNamespaceGcStore(
-                reopenedStorage, scope, local,
-                new StorageNamespaceGcFeatureOptions(EnableReceiptGc: true));
-            reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
+            // First reopen: recover the exact pushed reservation, finish its ACK,
+            // release the relay payload, then commit one ChangeId-GC page.
+            {
+                using var reopenedStorage = StorageDatabase.Open(directory, partitionId);
+                using var reopenedMetadata = new StorageMetadataStore(reopenedStorage);
+                using var reopenedProvider = new StorageDataProvider(reopenedStorage);
+                var reopenedGc = new StorageNamespaceGcStore(
+                    reopenedStorage, scope, local,
+                    new StorageNamespaceGcFeatureOptions(
+                        EnableReceiptGc: true, EnableChangeIdGc: true));
+                reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
 
-            Assert.True(reopenedGc.TryReadNamespaceRoster(19, trust, out NamespaceRosterCertificate? persistedRoster));
-            Assert.NotNull(persistedRoster);
-            Assert.Equal(6UL, persistedRoster!.RosterGeneration);
-            Assert.True(reopenedGc.TryReadRetentionCheckpoint(persistedRoster, trust, out _));
+                Assert.True(reopenedGc.TryReadNamespaceRoster(19, trust, out NamespaceRosterCertificate? persistedRoster));
+                Assert.NotNull(persistedRoster);
+                Assert.Equal(6UL, persistedRoster!.RosterGeneration);
+                Assert.True(reopenedGc.TryReadRetentionCheckpoint(persistedRoster, trust, out _));
 
-            Assert.Equal(1, reopenedMetadata.CompactReceipts(
-                scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
-            Assert.Equal(1, reopenedMetadata.CompactReceipts(
-                scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
-            Assert.Equal(0, reopenedMetadata.CompactReceipts(
-                scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
+                Assert.Equal(1, reopenedMetadata.CompactReceipts(
+                    scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
+                Assert.Equal(1, reopenedMetadata.CompactReceipts(
+                    scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
+                Assert.Equal(0, reopenedMetadata.CompactReceipts(
+                    scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
 
-            // Receipt rows are gone, but the receive cursor/digest chain is durable:
-            // every old-epoch replay is rejected and the replacement batch is a duplicate.
-            foreach (MetadataIncomingBatch oldBatch in oldBatches)
-                Assert.Throws<InvalidDataException>(() =>
-                    reopenedMetadata.AcceptIncomingBatch(oldBatch));
-            Assert.NotNull(replacementBatch);
-            Assert.True(reopenedMetadata.AcceptIncomingBatch(replacementBatch!).IsDuplicate);
-            Assert.Equal(0, reopenedMetadata.CompactReceipts(
-                scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
+                MetadataPeerStreamState recovered = reopenedMetadata.GetPeerStreamState(
+                    scope, local, NodeId.From(Id(3)), 1, 19, sender);
+                Assert.Equal(0UL, recovered.AckedCursor);
+                Assert.Equal(4UL, recovered.PushedCursor);
+                MetadataOutboundBatchReservation recoveredReservation =
+                    Assert.IsType<MetadataOutboundBatchReservation>(recovered.PendingBatch);
+                Assert.Equal(BatchId.From(Id(0x70)), recoveredReservation.BatchId);
+                Assert.Equal(new byte[] { 0x72 }, recoveredReservation.Payload);
+
+                // Retrying the exact push is idempotent; only the matching ACK can
+                // clear the durable reservation and release its immutable payload.
+                reopenedMetadata.MarkOutboundBatchPushed(
+                    scope, local, NodeId.From(Id(3)), 1, 19, sender, recoveredReservation.BatchId);
+                reopenedMetadata.AcknowledgePeerBatch(
+                    scope, local, NodeId.From(Id(3)), 1, 19, sender,
+                    recoveredReservation.BatchId, 4, recoveredReservation.BatchDigest);
+                reopenedMetadata.AcknowledgeRelay(scope, local, 19, sender, 4);
+                Assert.Equal(4, reopenedMetadata.CompactRelayThroughBounded(
+                    scope, local, 19, sender, 4, maxEntries: 16));
+
+                Assert.Equal(0, reopenedMetadata.CompactChangeLedger(
+                    scope, local, 19, reopenedProvider, 16,
+                    () => new MemoryStream(), Scanner(false, true, changeIds)));
+                ProviderSnapshotHandle snapshot = reopenedProvider.OpenSnapshot();
+                Assert.Equal(0, reopenedMetadata.CompactChangeLedger(
+                    scope, local, 19, reopenedProvider, 16,
+                    () => new MemoryStream(), Scanner(false, false, changeIds)));
+                reopenedProvider.ReleaseSnapshot(snapshot.Token);
+
+                int CountLiveChangeIds() => changeIds.Count(id =>
+                    reopenedMetadata.TryGetChangeIdentity(scope, local, 19, id, out _, out _, out _));
+                Assert.Equal(4, CountLiveChangeIds());
+                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
+                    scope, local, 19, reopenedProvider, 1,
+                    () => new MemoryStream(), Scanner(false, false, changeIds)));
+                Assert.Equal(3, CountLiveChangeIds());
+            }
+
+            // Second reopen resumes the ChangeId ledger page sequence. The signed
+            // checkpoint and receive cursor survive independently of deleted rows.
+            {
+                using var reopenedStorage = StorageDatabase.Open(directory, partitionId);
+                using var reopenedMetadata = new StorageMetadataStore(reopenedStorage);
+                using var reopenedProvider = new StorageDataProvider(reopenedStorage);
+                var reopenedGc = new StorageNamespaceGcStore(
+                    reopenedStorage, scope, local,
+                    new StorageNamespaceGcFeatureOptions(
+                        EnableReceiptGc: true, EnableChangeIdGc: true));
+                reopenedMetadata.AttachNamespaceGcGuard(reopenedGc, trust, scope, local);
+
+                Assert.True(reopenedGc.TryReadNamespaceRoster(19, trust, out NamespaceRosterCertificate? persistedRoster));
+                Assert.NotNull(persistedRoster);
+                Assert.Equal(6UL, persistedRoster!.RosterGeneration);
+                Assert.True(reopenedGc.TryReadRetentionCheckpoint(persistedRoster, trust, out _));
+                Assert.Equal(3, changeIds.Count(id =>
+                    reopenedMetadata.TryGetChangeIdentity(scope, local, 19, id, out _, out _, out _)));
+
+                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
+                    scope, local, 19, reopenedProvider, 1,
+                    () => new MemoryStream(), Scanner(false, false, changeIds)));
+                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
+                    scope, local, 19, reopenedProvider, 1,
+                    () => new MemoryStream(), Scanner(false, false, changeIds)));
+                Assert.Equal(0, changeIds.Count(id =>
+                    reopenedMetadata.TryGetChangeIdentity(scope, local, 19, id, out _, out _, out _)));
+
+                // Receipt rows for the retired epoch are gone; the receive cursor
+                // and active-epoch receipt still reject duplicates independently.
+                foreach (MetadataIncomingBatch oldBatch in oldBatches)
+                    Assert.Throws<InvalidDataException>(() =>
+                        reopenedMetadata.AcceptIncomingBatch(oldBatch));
+                Assert.NotNull(replacementBatch);
+                Assert.True(reopenedMetadata.AcceptIncomingBatch(replacementBatch!).IsDuplicate);
+                Assert.Equal(0, reopenedMetadata.CompactReceipts(
+                    scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
+            }
         }
         finally
         {
