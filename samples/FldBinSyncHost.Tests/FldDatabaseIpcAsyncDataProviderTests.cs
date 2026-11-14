@@ -1210,6 +1210,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(2UL, secondTombstoneAtA.OriginSequence);
             Assert.Equal(2UL, secondTombstoneAtB.OriginSequence);
 
+            uint retiredTransportEpoch = checked((uint)initiator.PeerEpoch);
+            uint rejoinedTransportEpoch = checked(retiredTransportEpoch + 1);
             var keys = new[]
             {
                 BatchSignature.GenerateKeyPair(),
@@ -1238,7 +1240,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     {
                         NodeId = authorB,
                         PublicKey = keys[1].PublicKey,
-                        TransportPeerEpoch = 11,
+                        TransportPeerEpoch = retiredTransportEpoch,
                         Status = NamespaceMemberStatus.Active
                     },
                     new NamespaceRosterMember
@@ -1268,7 +1270,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         RosterGeneration = 1,
                         RosterDigest = initialDigest,
                         MemberNodeId = authorB,
-                        MemberTransportEpoch = 11,
+                        MemberTransportEpoch = retiredTransportEpoch,
                         ReportSequence = 1,
                         FinalForAuthor = true,
                         Entries =
@@ -1292,7 +1294,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         Members =
                         [
                             new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
-                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 11, Status = NamespaceMemberStatus.Retired, RetiredThroughEpoch = 11 },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = retiredTransportEpoch, Status = NamespaceMemberStatus.Retired, RetiredThroughEpoch = retiredTransportEpoch },
                             new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
                         ]
                     }, keys[0].Seed), trust);
@@ -1306,7 +1308,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         Members =
                         [
                             new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
-                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 13, Status = NamespaceMemberStatus.Joining },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = rejoinedTransportEpoch, Status = NamespaceMemberStatus.Joining },
                             new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
                         ]
                     }, keys[0].Seed), trust);
@@ -1320,7 +1322,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         Members =
                         [
                             new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
-                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 13, Status = NamespaceMemberStatus.Active },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = rejoinedTransportEpoch, Status = NamespaceMemberStatus.Active },
                             new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
                         ]
                     }, keys[0].Seed), trust);
@@ -1366,7 +1368,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         RosterGeneration = 6,
                         RosterDigest = rosterDigest,
                         MemberNodeId = authorB,
-                        MemberTransportEpoch = 13,
+                        MemberTransportEpoch = rejoinedTransportEpoch,
                         ReportSequence = 1,
                         Entries =
                         [
@@ -1401,7 +1403,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 foreach (var item in new[]
                 {
                     (Member: authorA, Epoch: 10U, Key: keys[0]),
-                    (Member: authorB, Epoch: 13U, Key: keys[1]),
+                    (Member: authorB, Epoch: rejoinedTransportEpoch, Key: keys[1]),
                     (Member: relayMember, Epoch: 12U, Key: keys[2])
                 })
                 {
@@ -1433,11 +1435,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var gcA = new StorageNamespaceGcStore(
                 nodeStorageA, scope, authorA,
                 new StorageNamespaceGcFeatureOptions(
-                    EnableTombstoneGc: true, EnableChangeIdGc: true));
+                    EnableTombstoneGc: true, EnableChangeIdGc: true, EnableReceiptGc: true));
             var gcB = new StorageNamespaceGcStore(
                 nodeStorageB, scope, authorB,
                 new StorageNamespaceGcFeatureOptions(
-                    EnableTombstoneGc: true, EnableChangeIdGc: true));
+                    EnableTombstoneGc: true, EnableChangeIdGc: true, EnableReceiptGc: true));
             // Before C receives the tombstone there is deliberately no accepted
             // three-member frontier proof. The retained Metadata payloads independently
             // keep both physical GC passes fail-closed.
@@ -1535,6 +1537,121 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 trust, authorA, 17, 1, tombstoneAtB.HlcWall, tombstoneAtB.HlcLogical,
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host B must independently validate all three Active members' signed applied frontiers.");
+
+            // Compose retired-epoch receipt rollover into this same two-Host lifecycle.
+            // B's old transport incarnation forwards already-known A-origin changes back
+            // through its relay stream. The operation identity is unchanged; only the
+            // transport receipt identity/cursor belongs to B's retiring incarnation.
+            Assert.True(metadataA.TryGetChangeIdentity(
+                scope, nodeA.NodeId, namespaceId, tombstoneChangeIds[0],
+                out ReadOnlyMemory<byte> receiptFingerprint,
+                out OperationOrigin receiptOrigin, out bool receiptIsLocalOutbound));
+            Assert.True(receiptIsLocalOutbound);
+            Assert.Equal(nodeA.NodeId, receiptOrigin.AuthorNodeId);
+            Assert.Equal(17U, receiptOrigin.AuthorEpoch);
+
+            var retiredReceiptBatches = new List<MetadataIncomingBatch>(3);
+            byte[] priorReceiptDigest = new byte[16];
+            for (byte index = 0; index < 3; index++)
+            {
+                var retiredReceiptBatch = new MetadataIncomingBatch
+                {
+                    ScopeId = scope,
+                    LocalReplica = nodeA.NodeId,
+                    SenderPeer = nodeB.NodeId,
+                    SenderEpoch = receiptOrigin.AuthorEpoch,
+                    TransportPeerEpoch = retiredTransportEpoch,
+                    AuthorStreamNodeId = nodeA.NodeId,
+                    NamespaceId = namespaceId,
+                    BatchId = BatchId.From(Id((byte)(0xA1 + index))),
+                    CursorStart = (ulong)(index + 1),
+                    CursorEnd = (ulong)(index + 1),
+                    PreviousBatchDigest = priorReceiptDigest,
+                    BatchDigest = Enumerable.Repeat((byte)(0xB1 + index), 16).ToArray(),
+                    HeaderFingerprint = Enumerable.Repeat((byte)(0xC1 + index), 16).ToArray(),
+                    Operations =
+                    [
+                        new MetadataOperation
+                        {
+                            AuthorNodeId = nodeA.NodeId,
+                            ChangeId = tombstoneChangeIds[0],
+                            Fingerprint = receiptFingerprint.ToArray(),
+                            Payload = Array.Empty<byte>(),
+                            RelayEligible = false,
+                            OriginAuthorEpoch = receiptOrigin.AuthorEpoch,
+                            OriginSequence = receiptOrigin.Sequence
+                        }
+                    ]
+                };
+                Assert.False(metadataA.AcceptIncomingBatch(retiredReceiptBatch).IsDuplicate);
+                retiredReceiptBatches.Add(retiredReceiptBatch);
+                priorReceiptDigest = retiredReceiptBatch.BatchDigest;
+            }
+
+            // Complete the replacement transport baseline before retiring the old
+            // incarnation. The receive cursor/digest chain remains continuous across
+            // transport epochs and the old receipt rows remain independently collectible.
+            metadataA.RegisterInterestedPeer(
+                scope, nodeA.NodeId, nodeB.NodeId, rejoinedTransportEpoch, namespaceId);
+            metadataA.CompletePeerInitialSync(
+                scope, nodeA.NodeId, nodeB.NodeId, rejoinedTransportEpoch, namespaceId,
+                [new MetadataPeerStreamBaseline(nodeA.NodeId, 0, 17)]);
+            metadataA.RetireInterestedPeer(
+                scope, nodeA.NodeId, nodeB.NodeId,
+                retiredTransportEpoch, rejoinedTransportEpoch, namespaceId);
+
+            var replacementReceiptBatch = new MetadataIncomingBatch
+            {
+                ScopeId = scope,
+                LocalReplica = nodeA.NodeId,
+                SenderPeer = nodeB.NodeId,
+                SenderEpoch = receiptOrigin.AuthorEpoch,
+                TransportPeerEpoch = rejoinedTransportEpoch,
+                AuthorStreamNodeId = nodeA.NodeId,
+                NamespaceId = namespaceId,
+                BatchId = BatchId.From(Id(0xA4)),
+                CursorStart = 4,
+                CursorEnd = 4,
+                PreviousBatchDigest = priorReceiptDigest,
+                BatchDigest = Enumerable.Repeat((byte)0xB4, 16).ToArray(),
+                HeaderFingerprint = Enumerable.Repeat((byte)0xC4, 16).ToArray(),
+                Operations =
+                [
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = nodeA.NodeId,
+                        ChangeId = tombstoneChangeIds[0],
+                        Fingerprint = receiptFingerprint.ToArray(),
+                        Payload = Array.Empty<byte>(),
+                        RelayEligible = false,
+                        OriginAuthorEpoch = receiptOrigin.AuthorEpoch,
+                        OriginSequence = receiptOrigin.Sequence
+                    }
+                ]
+            };
+            Assert.False(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate);
+            metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
+
+            // The actual Host-owned immutable reference scan must allow only the
+            // retired transport receipts to be reclaimed. The active replacement
+            // receipt remains the replay proof after all three bounded pages.
+            for (int page = 0; page < retiredReceiptBatches.Count; page++)
+            {
+                (int compactedChangeIds, int compactedReceipts) =
+                    await adapterA.RunMetadataGcPassAsync(gcA, trust, limit: 1);
+                Assert.Equal(0, compactedChangeIds);
+                Assert.Equal(1, compactedReceipts);
+            }
+            (int remainingChangeIds, int remainingReceipts) =
+                await adapterA.RunMetadataGcPassAsync(gcA, trust, limit: 1);
+            Assert.Equal(0, remainingChangeIds);
+            Assert.Equal(0, remainingReceipts);
+
+            foreach (MetadataIncomingBatch retiredReceiptBatch in retiredReceiptBatches)
+                Assert.Throws<InvalidDataException>(
+                    () => metadataA.AcceptIncomingBatch(retiredReceiptBatch));
+            Assert.True(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate,
+                "The current transport epoch's receipt must remain a durable replay proof.");
 
             // Compact only after both the local apply consumer and every interested
             // downstream peer have acknowledged the immutable relay prefix.
