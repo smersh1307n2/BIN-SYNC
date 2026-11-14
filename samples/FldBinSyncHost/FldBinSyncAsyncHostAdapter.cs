@@ -27,6 +27,7 @@ public sealed record FldBinSyncAsyncGcReadinessReport(
     ulong? RosterGeneration,
     Guid? FullReplaceGeneration,
     ulong UnpublishedDraftCount,
+    bool HasSnapshotPin,
     FldBinSyncGcDomainReadiness Receipts,
     FldBinSyncGcDomainReadiness ChangeIds,
     FldBinSyncGcDomainReadiness Tombstones);
@@ -144,6 +145,7 @@ public sealed class FldBinSyncAsyncHostAdapter
         }
 
         ulong unpublishedDraftCount = 0;
+        bool hasSnapshotPin = false;
         IAsyncApplicationGcReferenceScanner? referenceScanner =
             _provider as IAsyncApplicationGcReferenceScanner;
         if (referenceScanner is null)
@@ -162,8 +164,11 @@ public sealed class FldBinSyncAsyncHostAdapter
                     await scan.GetUnpublishedLocalDraftHorizonAsync(cancellationToken)
                         .ConfigureAwait(false);
                 unpublishedDraftCount = drafts.Count;
+                hasSnapshotPin = scan.HasSnapshotPin;
                 if (drafts.Count != 0 || drafts.MaxHlcWall != 0 || drafts.MaxHlcLogical != 0)
                     common.Add($"Host reports an unpublished local draft horizon (count={drafts.Count}).");
+                if (hasSnapshotPin)
+                    common.Add("Host reports one or more active immutable provider snapshot pins.");
             }
             catch (Exception exception) when (exception is IOException or InvalidOperationException or
                 NotSupportedException or TimeoutException)
@@ -198,6 +203,7 @@ public sealed class FldBinSyncAsyncHostAdapter
             roster?.RosterGeneration,
             checkpoint?.FullReplaceGeneration,
             unpublishedDraftCount,
+            hasSnapshotPin,
             new FldBinSyncGcDomainReadiness(
                 "Receipt", gcStore.IsReceiptGcProofEnabled, receiptReasons.Count == 0, receiptReasons),
             new FldBinSyncGcDomainReadiness(
