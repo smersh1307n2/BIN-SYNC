@@ -3671,3 +3671,12 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] Exact HEAD `d3089952` passed both `BinSync.Net` and `FLD Storage Integration`; duplicate push/PR runs also completed successfully. FLD provider integration passed on Linux, macOS and Windows.
 - [!] This closes the unknown-payload source matrix only. It does not prove every malformed checkpoint, provenance/epoch mismatch, duplicate receipt, missing frontier, or all receipt/ChangeId/tombstone lifecycle and rejoin cases. Physical GC remains disabled by default.
 - [ ] Next: continue the end-to-end GC proof matrix with candidate provenance and author-epoch mismatch, duplicate/stale receipt fences, missing or malformed signed frontier/checkpoint, and retirement/rejoin with fresh transport epochs. For each negative case, assert failure occurs before provider scan/delete and that durable state survives reopen. Keep physical GC disabled until the complete safety gate is independently demonstrated.
+
+
+## 1.146. Tombstone candidate provenance/HLC rejection matrix — 2026-11-14
+
+- [x T] Expanded the async provider-level negative matrix to cover author-epoch mismatch, unknown author, origin sequence beyond the signed safe frontier, zero origin sequence, zero author identity, tombstone wall-clock beyond the issued/FULL_REPLACE floor, and logical-clock overclaim at the floor.
+- [x T] Every case starts from a valid signed roster, complete active-member origin reports, matching FULL_REPLACE installation ACKs and a valid retention checkpoint. This isolates the candidate identity/HLC gate rather than merely testing missing proof setup.
+- [x T] Each rejected candidate is observed after provider candidate enumeration but before provider compaction: one read call, zero compact calls, and no approved candidates.
+- [!] These tests cover candidate-level provenance and HLC boundaries. They do not by themselves prove crash consistency for every provider implementation or authorize enabling physical GC by default.
+- [ ] Next: consolidate remaining receipt/ChangeId/tombstone lifecycle negative cases into end-to-end restart scenarios, including stale replay after receipt collection, replacement transport epoch preservation, malformed/missing signed evidence, and durable state after interrupted compaction. Keep physical GC disabled by default until the full safety gate is independently demonstrated.
