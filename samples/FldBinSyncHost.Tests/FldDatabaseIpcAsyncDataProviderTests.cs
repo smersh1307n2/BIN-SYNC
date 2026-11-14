@@ -1095,10 +1095,53 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             async Task RestartHostAAfterGcPageAsync()
             {
-                await remoteA!.DisposeAsync(); remoteA = null;
-                await providerA!.DisposeAsync(); providerA = null;
+                // Crash Host A while its GC reference scan/lease is active. A second
+                // IPC session must be blocked before the crash; after process death the
+                // blocked request fails, and the reopened Host must have no stale lease.
                 Guid previousOwner = ownerA;
-                await StopDatabaseHostAsync(hostA!); hostA = null;
+                IAsyncApplicationGcReferenceScan? activeScan = null;
+                FldDatabaseIpcClient? blockedClient = null;
+                Task<byte[]>? blockedRequest = null;
+                try
+                {
+                    activeScan = await providerA!.OpenScanAsync(scope, nodeA!.NodeId, namespaceId);
+                    blockedClient = await FldDatabaseIpcClient.ConnectAsync(
+                        hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15));
+                    blockedRequest = blockedClient.GetLocalAuthorAsync();
+                    await Task.Delay(100);
+                    Assert.False(blockedRequest.IsCompleted);
+
+                    await StopDatabaseHostAsync(hostA!);
+                    hostA = null;
+                    await Assert.ThrowsAnyAsync<IOException>(
+                        async () => await blockedRequest.WaitAsync(TimeSpan.FromSeconds(10)));
+                }
+                finally
+                {
+                    if (activeScan is not null)
+                    {
+                        try { await activeScan.DisposeAsync(); }
+                        catch (Exception) { /* The owning Host process has already exited. */ }
+                    }
+                    if (blockedClient is not null)
+                    {
+                        try { await blockedClient.DisposeAsync(); }
+                        catch (Exception) { /* The IPC endpoint belonged to the dead Host. */ }
+                    }
+                    if (remoteA is not null)
+                    {
+                        try { await remoteA.DisposeAsync(); }
+                        catch (Exception) { /* The IPC endpoint belonged to the dead Host. */ }
+                        remoteA = null;
+                    }
+                    if (providerA is not null)
+                    {
+                        try { await providerA.DisposeAsync(); }
+                        catch (Exception) { /* The IPC endpoint belonged to the dead Host. */ }
+                        providerA = null;
+                    }
+                }
+
                 await WaitForDatabaseWriterReleaseAsync(
                     hostRootA, namespaceId, authorABytes, TimeSpan.FromSeconds(15));
                 hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes, enableTombstoneGc: true);
@@ -1114,6 +1157,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     current => StorageNodePersistence.Save(nodeStorageA!, current));
                 Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                     await adapterA.RecoverBeforeAcceptingSessionsAsync());
+
+                await using var reopenedProbe = await FldDatabaseIpcClient.ConnectAsync(
+                    hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15));
+                Assert.Equal(authorABytes, await reopenedProbe.GetLocalAuthorAsync());
             }
 
             async Task RestartHostBAfterGcPageAsync()
