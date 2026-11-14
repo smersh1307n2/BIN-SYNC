@@ -656,6 +656,23 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { });
 
+            // An already-open provider snapshot is a global GC veto. The IPC scan
+            // exposes the pin and both Metadata compaction domains must stop before
+            // candidate deletion, even though the signed control plane is otherwise ready.
+            ProviderSnapshotHandle pinnedSnapshot = await provider.OpenSnapshotAsync();
+            FldBinSyncAsyncGcReadinessReport pinnedReadiness =
+                await adapter.GetGcReadinessAsync(gc, trust);
+            Assert.True(pinnedReadiness.HasSnapshotPin);
+            Assert.False(pinnedReadiness.Receipts.PrerequisitesSatisfied);
+            Assert.False(pinnedReadiness.ChangeIds.PrerequisitesSatisfied);
+            Assert.False(pinnedReadiness.Tombstones.PrerequisitesSatisfied);
+            FldBinSyncAsyncGcPassResult blockedPass =
+                await adapter.RunGcMaintenanceAsync(gc, trust, limit: 1);
+            Assert.Equal(0, blockedPass.ReceiptsReclaimed);
+            Assert.Equal(0, blockedPass.ChangeIdsReclaimed);
+            Assert.Equal(0, blockedPass.TombstonesReclaimed);
+            await provider.ReleaseSnapshotAsync(pinnedSnapshot.Token);
+
             // Readiness is a read-only preflight over the real Host's immutable
             // reference snapshot. The signed roster/checkpoint and FULL_REPLACE install
             // are present; no unpublished drafts remain. Tombstone GC stays disabled.
