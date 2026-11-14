@@ -231,19 +231,19 @@ public sealed class StorageReceiptGcRejoinTests
 
                 NamespaceRosterCertificate retiredRoster = gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(
-                        MakeRoster(3, NamespaceRosterProtocol.ComputeDigest(roster1), keys,
+                        MakeRoster(2, NamespaceRosterProtocol.ComputeDigest(roster1), keys,
                             NamespaceMemberStatus.Retired, 11, 11, retiredOrigin),
                         keys[0].Seed),
                     trust);
                 NamespaceRosterCertificate joiningRoster = gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(
-                        MakeRoster(5, NamespaceRosterProtocol.ComputeDigest(retiredRoster), keys,
+                        MakeRoster(4, NamespaceRosterProtocol.ComputeDigest(retiredRoster), keys,
                             NamespaceMemberStatus.Joining, 12, 0, retiredOrigin),
                         keys[0].Seed),
                     trust);
                 NamespaceRosterCertificate rejoinedRoster = gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(
-                        MakeRoster(7, NamespaceRosterProtocol.ComputeDigest(joiningRoster), keys,
+                        MakeRoster(6, NamespaceRosterProtocol.ComputeDigest(joiningRoster), keys,
                             NamespaceMemberStatus.Active, 12, 0, retiredOrigin),
                         keys[0].Seed),
                     trust);
