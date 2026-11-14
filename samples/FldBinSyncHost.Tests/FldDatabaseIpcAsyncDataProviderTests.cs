@@ -686,11 +686,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 cancelledScanner, limit: 1, cancellationToken: gcCancellation.Token);
             await cancelledScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
 
-            var writerMutation = new FldDatabaseIpcMutation(
-                FldDatabase.NewRecordId(), 8, 1, false,
-                "writer-after-cancelled-metadata-gc"u8.ToArray());
+            // Use an empty idempotent write request: it still traverses the Host's
+            // writer admission/commit path, but it must not create a new unpublished
+            // provider draft that would correctly veto the subsequent ChangeId-GC retry.
             Task<FldDatabaseIpcWriteResult> blockedWriter = writerClient!.WriteBatchAsync(
-                Guid.NewGuid(), clientSequence: 1, [writerMutation]);
+                Guid.NewGuid(), clientSequence: 1, Array.Empty<FldDatabaseIpcMutation>());
             await Task.Delay(100);
             Assert.False(blockedWriter.IsCompleted,
                 "A competing IPC writer must remain blocked while the cancelled GC scan still owns the Host lease.");
@@ -701,7 +701,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             FldDatabaseIpcWriteResult writerResult =
                 await blockedWriter.WaitAsync(TimeSpan.FromSeconds(15));
             Assert.False(writerResult.IsDuplicate);
-            Assert.Equal(1, writerResult.MutationCount);
+            Assert.Equal(0, writerResult.MutationCount);
             Assert.True(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _),
