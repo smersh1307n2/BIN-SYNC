@@ -5597,17 +5597,23 @@ public sealed class StorageSyncCoordinatorTests
         };
 
         Task<MetadataOutboundBatchReservation> reservation;
+        using var reservationStarted = new ManualResetEventSlim();
         using (IDisposable guard = metadata.AcquireTombstoneGcCommitGuard(
             scope, local.NodeId, namespaceId, gc, trust, out IReadOnlySet<RecordId>? liveReferences))
         {
             Assert.NotNull(liveReferences);
             Assert.Contains(record, liveReferences!);
 
-            reservation = Task.Run(() => metadata.ReserveOutboundBatch(
-                scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId, local.NodeId, candidate));
+            reservation = Task.Run(() =>
+            {
+                reservationStarted.Set();
+                return metadata.ReserveOutboundBatch(
+                    scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId, local.NodeId, candidate);
+            });
 
-            // Reservation must wait behind the GC commit lease. The source outbound row
-            // remains durable and visible to the snapshot throughout this interval.
+            // Ensure the worker reached the call before asserting that the commit lease
+            // blocks it; the source outbound row remains durable during this interval.
+            Assert.True(reservationStarted.Wait(TimeSpan.FromSeconds(5)));
             Assert.False(reservation.Wait(TimeSpan.FromMilliseconds(150)));
             Assert.True(metadata.HasLiveRecordReference(scope, local.NodeId, namespaceId, record));
         }
@@ -5676,7 +5682,7 @@ public sealed class StorageSyncCoordinatorTests
 
         Assert.Equal(oldPeerEpoch, metadata.GetRetiredPeerEpoch(
             scope, local.NodeId, peer.NodeId, namespaceId));
-        Assert.ThrowsAny<Exception>(() => metadata.ReserveOutboundBatch(
+        Assert.Throws<InvalidDataException>(() => metadata.ReserveOutboundBatch(
             scope, local.NodeId, peer.NodeId, oldPeerEpoch, namespaceId, local.NodeId, staleCandidate));
         Assert.Null(metadata.GetPendingOutboundBatch(
             scope, local.NodeId, peer.NodeId, oldPeerEpoch, namespaceId, local.NodeId));
