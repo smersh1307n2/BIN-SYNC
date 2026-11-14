@@ -527,10 +527,27 @@ public sealed class StorageNamespaceGcStoreTests
             using var storage = StorageDatabase.Open(directory, 910);
             using var metadata = new StorageMetadataStore(storage);
             using var node = new NodeBuilder().WithNodeId(Id(0x99)).WithEpoch(1).Build();
+            var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
             var trust = new TrustStore();
+            trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
             var gc = new StorageNamespaceGcStore(
                 storage, scope, node.NodeId,
                 new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+            var roster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(Roster(1, new byte[32], keys), keys[0].Seed), trust);
+            var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+            var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+            Guid generation = Guid.Parse("12345678-1234-5678-9abc-def012345678");
+            byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("unknown-payload proof"));
+            gc.AcceptFullReplaceInstalledAck(
+                SignedAck(roster, 0, keys, generation, replaceDigest), roster);
+            gc.AcceptFullReplaceInstalledAck(
+                SignedAck(roster, 1, keys, generation, replaceDigest), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { report0, report1 }, generation, replaceDigest,
+                fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
             // Unknown retained payloads cannot be decoded into a trustworthy RecordId
             // reference. The snapshot must therefore be unavailable, not empty.
@@ -552,11 +569,13 @@ public sealed class StorageNamespaceGcStoreTests
                 RecordId = RecordId.From(Id(0x92)),
                 FieldId = 7,
                 IsTombstone = true,
-                AuthorNodeId = node.NodeId,
+                HlcWall = 100,
+                HlcLogical = 2,
+                AuthorNodeId = NodeId.From(Id(2)),
                 Value = Array.Empty<byte>(),
                 ChangeId = BatchId.From(Id(0x93)),
-                OriginAuthorEpoch = 1,
-                OriginSequence = 1
+                OriginAuthorEpoch = 3,
+                OriginSequence = 90
             };
             var provider = new RecordingTombstoneGc(new[] { candidate });
             var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, namespaceId);
