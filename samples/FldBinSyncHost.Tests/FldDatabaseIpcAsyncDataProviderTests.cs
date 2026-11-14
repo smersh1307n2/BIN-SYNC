@@ -172,6 +172,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         Task serverTask = server.RunAsync(shutdown.Token);
         FldDatabaseIpcAsyncDataProvider? provider = null;
         FldDatabaseIpcClient? competingClient = null;
+        IAsyncApplicationGcReferenceScan? scan = null;
 
         try
         {
@@ -187,7 +188,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 root, Guid.NewGuid(), TimeSpan.FromSeconds(10));
 
             Task<byte[]> blockedReader;
-            IAsyncApplicationGcReferenceScan scan = await provider.OpenScanAsync(
+            scan = await provider.OpenScanAsync(
                 "lease-renewal-test", NodeId.From(authorBytes), checked((int)namespaceId));
             blockedReader = competingClient.GetLocalAuthorAsync();
             await Task.Delay(12000);
@@ -206,11 +207,19 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 "Scan disposal must drain the in-flight renewal before releasing the Host lease.");
             allowRenewal.TrySetResult();
             await scanDispose.WaitAsync(TimeSpan.FromSeconds(5));
+            scan = null;
 
             Assert.Equal(authorBytes, await blockedReader.WaitAsync(TimeSpan.FromSeconds(5)));
         }
         finally
         {
+            // Never strand the provider's single-scan gate if an assertion or
+            // heartbeat timeout fails before the normal disposal path.
+            allowRenewal.TrySetResult();
+            if (scan is not null)
+            {
+                try { await scan.DisposeAsync(); } catch { }
+            }
             if (competingClient is not null)
                 await competingClient.DisposeAsync();
             if (provider is not null)
