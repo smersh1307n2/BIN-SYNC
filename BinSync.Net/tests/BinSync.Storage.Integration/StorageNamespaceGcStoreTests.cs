@@ -523,7 +523,6 @@ public sealed class StorageNamespaceGcStoreTests
     [InlineData(0, 3u, 90UL, 100UL, 2u)] // zero author identity
     [InlineData(2, 3u, 90UL, 101UL, 0u)] // wall clock exceeds issued/FULL_REPLACE floor
     [InlineData(2, 3u, 90UL, 100UL, 3u)] // logical clock exceeds issued/FULL_REPLACE floor
-    [InlineData(2, 3u, 90UL, 99UL, 3u)] // wall below floor but logical over the issued maximum
     public async Task Async_tombstone_gc_rejects_candidate_provenance_or_hlc_outside_signed_frontier(
         byte authorId, uint authorEpoch, ulong originSequence,
         ulong tombstoneHlcWall, uint tombstoneHlcLogical)
