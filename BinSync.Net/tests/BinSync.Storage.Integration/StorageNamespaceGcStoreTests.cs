@@ -2298,8 +2298,6 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
 
-}
-
     [Theory]
     [InlineData("missing-roster")]
     [InlineData("missing-frontier")]
@@ -2392,4 +2390,4 @@ public sealed class StorageNamespaceGcStoreTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
-
+}
