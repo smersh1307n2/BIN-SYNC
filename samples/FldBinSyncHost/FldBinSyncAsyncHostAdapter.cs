@@ -28,6 +28,7 @@ public sealed record FldBinSyncAsyncGcReadinessReport(
     Guid? FullReplaceGeneration,
     ulong UnpublishedDraftCount,
     bool HasSnapshotPin,
+    MetadataGcReservationDiagnostics? MetadataReservations,
     FldBinSyncGcDomainReadiness Receipts,
     FldBinSyncGcDomainReadiness ChangeIds,
     FldBinSyncGcDomainReadiness Tombstones);
@@ -146,6 +147,17 @@ public sealed class FldBinSyncAsyncHostAdapter
 
         ulong unpublishedDraftCount = 0;
         bool hasSnapshotPin = false;
+        MetadataGcReservationDiagnostics? metadataReservations = null;
+        try
+        {
+            metadataReservations = _coordinator.GetGcReservationDiagnostics();
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or
+            NotSupportedException or IOException)
+        {
+            common.Add("Durable Metadata reservation diagnostics are unavailable: " +
+                exception.GetType().Name + ": " + exception.Message);
+        }
         IAsyncApplicationGcReferenceScanner? referenceScanner =
             _provider as IAsyncApplicationGcReferenceScanner;
         if (referenceScanner is null)
@@ -181,6 +193,12 @@ public sealed class FldBinSyncAsyncHostAdapter
         var receiptReasons = new List<string>(common);
         var changeIdReasons = new List<string>(common);
         var tombstoneReasons = new List<string>(common);
+        if (metadataReservations?.HasOutstandingPeerReservation == true)
+        {
+            string reason = $"Metadata has {metadataReservations.OutstandingPeerReservationCount} pushed-but-unacknowledged or pending peer reservation(s).";
+            changeIdReasons.Add(reason);
+            tombstoneReasons.Add(reason);
+        }
         if (_provider is not IAsyncProviderTombstoneGc)
             tombstoneReasons.Add("Provider does not expose process-isolated tombstone candidate/delete operations.");
         if (!hasCheckpoint || checkpoint is null ||
@@ -204,6 +222,7 @@ public sealed class FldBinSyncAsyncHostAdapter
             checkpoint?.FullReplaceGeneration,
             unpublishedDraftCount,
             hasSnapshotPin,
+            metadataReservations,
             new FldBinSyncGcDomainReadiness(
                 "Receipt", gcStore.IsReceiptGcProofEnabled, receiptReasons.Count == 0, receiptReasons),
             new FldBinSyncGcDomainReadiness(
