@@ -36,7 +36,7 @@ public sealed class FldDatabaseWalSealRecoveryTests
                 ulong highWatermark = database.GetOutboxHighWatermark();
                 if (highWatermark != 0)
                 {
-                    var lease = database.AcquireOutboxLease(Guid.NewGuid());
+                    var lease = database.AcquireOutboxLease(Id(0x7E));
                     database.AcknowledgeOutbox(highWatermark, lease);
                 }
 
