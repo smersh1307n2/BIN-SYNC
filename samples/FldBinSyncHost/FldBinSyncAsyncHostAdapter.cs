@@ -176,15 +176,11 @@ public sealed class FldBinSyncAsyncHostAdapter
         var receiptReasons = new List<string>(common);
         var changeIdReasons = new List<string>(common);
         var tombstoneReasons = new List<string>(common);
-        if (_provider is not IAsyncApplicationGcReferenceScanner)
-        {
-            // The common scanner blocker already explains this for every domain.
-        }
         if (_provider is not IAsyncProviderTombstoneGc)
             tombstoneReasons.Add("Provider does not expose process-isolated tombstone candidate/delete operations.");
         if (!hasCheckpoint || checkpoint is null ||
-            checkpoint.FullReplaceGeneration is not Guid fullReplaceGeneration ||
-            checkpoint.FullReplaceDigest is not { Length: NamespaceRosterProtocol.DigestSize } fullReplaceDigest)
+            !checkpoint.FullReplaceGeneration.HasValue ||
+            checkpoint.FullReplaceDigest is not { Length: NamespaceRosterProtocol.DigestSize })
         {
             tombstoneReasons.Add("No authoritative FULL_REPLACE generation/digest is covered by the accepted checkpoint.");
         }
