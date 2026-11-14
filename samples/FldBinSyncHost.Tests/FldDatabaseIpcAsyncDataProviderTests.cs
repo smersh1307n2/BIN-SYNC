@@ -654,13 +654,28 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { });
 
-            // The real FLD Host has a sealed ApplyJournal receipt, so the retired
-            // transport receipt can be compacted. The imported ChangeId is different:
-            // it is still referenced by BIN-SYNC's relay stream and must remain live
-            // until relay delivery is acknowledged and its payload is safely compacted.
-            (int changeIds, int receipts) = await adapter.RunMetadataGcPassAsync(gc, trust, 1);
-            Assert.Equal(1, receipts);
-            Assert.Equal(0, changeIds);
+            // Readiness is a read-only preflight over the real Host's immutable
+            // reference snapshot. The signed roster/checkpoint and FULL_REPLACE install
+            // are present; no unpublished drafts remain. Tombstone GC stays disabled.
+            FldBinSyncAsyncGcReadinessReport readiness =
+                await adapter.GetGcReadinessAsync(gc, trust);
+            Assert.True(readiness.HasAcceptedRoster);
+            Assert.True(readiness.HasRetentionCheckpoint);
+            Assert.True(readiness.HasInstalledFullReplaceBaseline);
+            Assert.Equal(0UL, readiness.UnpublishedDraftCount);
+            Assert.True(readiness.Receipts.PrerequisitesSatisfied, string.Join("; ", readiness.Receipts.BlockedReasons));
+            Assert.True(readiness.ChangeIds.PrerequisitesSatisfied, string.Join("; ", readiness.ChangeIds.BlockedReasons));
+            Assert.True(readiness.Tombstones.PrerequisitesSatisfied, string.Join("; ", readiness.Tombstones.BlockedReasons));
+            Assert.False(readiness.Tombstones.Enabled);
+            Assert.False(readiness.Tombstones.ReadyForAttempt);
+
+            // One bounded Host-owned round reclaims the retired Receipt, but leaves the
+            // imported ChangeId because its relay payload is still live.
+            FldBinSyncAsyncGcPassResult gcPass =
+                await adapter.RunGcMaintenanceAsync(gc, trust, limit: 1);
+            Assert.Equal(1, gcPass.ReceiptsReclaimed);
+            Assert.Equal(0, gcPass.ChangeIdsReclaimed);
+            Assert.Equal(0, gcPass.TombstonesReclaimed);
             Assert.True(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _));
