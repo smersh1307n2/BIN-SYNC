@@ -78,8 +78,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         string hostRoot = Path.Combine(Path.GetTempPath(), "fld-binsync-host-tombstone-gc-" + Guid.NewGuid().ToString("N"));
         string nodeRoot = Path.Combine(Path.GetTempPath(), "binsync-host-tombstone-gc-metadata-" + Guid.NewGuid().ToString("N"));
         const uint namespaceId = 0x536;
+        const string scope = "fld-host-tombstone-gc";
         byte[] authorBytes = Id(0x65);
         NodeId author = NodeId.From(authorBytes);
+        NodeId authority = NodeId.From(Id(0x11));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(authority, keys[0].PublicKey, TrustMode.PreShared);
         Guid clientId = Guid.NewGuid();
         Guid ownerId = Guid.Empty;
         Process? host = null;
@@ -121,15 +126,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                 hostRoot, Guid.NewGuid(), checked((ushort)namespaceId), TimeSpan.FromSeconds(15));
 
-            const string scope = "fld-host-tombstone-gc";
             using (var nodeStorage = StorageDatabase.Open(nodeRoot, 902))
             using (var metadata = new StorageMetadataStore(nodeStorage))
             using (var node = new NodeBuilder().WithNodeId(author).WithEpoch(8).Build())
             {
-                var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
-                NodeId authority = NodeId.From(Id(0x11));
-                var trust = new TrustStore();
-                trust.Allow(authority, keys[0].PublicKey, TrustMode.PreShared);
                 var roster = new NamespaceRosterCertificate
                 {
                     NamespaceId = checked((int)namespaceId),
@@ -296,41 +296,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             using (var metadata = new StorageMetadataStore(nodeStorage))
             using (var node = new NodeBuilder().WithNodeId(author).WithEpoch(8).Build())
             {
-                var trust = new TrustStore();
-                trust.Allow(NodeId.From(Id(0x11)), keys[0].PublicKey, TrustMode.PreShared);
-                var gc = new StorageNamespaceGcStore(
-                    nodeStorage, "fld-host-tombstone-gc", author,
-                    new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
-                var roster = gc.AcceptNamespaceRoster(
-                    NamespaceRosterProtocol.Sign(new NamespaceRosterCertificate
-                    {
-                        NamespaceId = checked((int)namespaceId),
-                        RosterGeneration = 1,
-                        PreviousRosterDigest = new byte[32],
-                        AuthorityNodeId = NodeId.From(Id(0x11)),
-                        Members =
-                        [
-                            new NamespaceRosterMember
-                            {
-                                NodeId = NodeId.From(Id(0x11)),
-                                PublicKey = keys[0].PublicKey,
-                                TransportPeerEpoch = 10,
-                                Status = NamespaceMemberStatus.Active
-                            },
-                            new NamespaceRosterMember
-                            {
-                                NodeId = author,
-                                PublicKey = keys[1].PublicKey,
-                                TransportPeerEpoch = 11,
-                                Status = NamespaceMemberStatus.Active
-                            }
-                        ]
-                    }, keys[0].Seed), trust);
-                byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(roster);
-                // The durable proof was installed in the first scope above; reload the
-                // existing GC store rather than creating a new, empty proof namespace.
+                // Reopen the durable signed proof state from the same Metadata partition.
                 var reopenedGc = new StorageNamespaceGcStore(
-                    nodeStorage, "fld-host-tombstone-gc", author,
+                    nodeStorage, scope, author,
                     new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
                 Assert.True(reopenedGc.TryReadNamespaceRoster(
                     checked((int)namespaceId), trust, out NamespaceRosterCertificate? acceptedRoster));
