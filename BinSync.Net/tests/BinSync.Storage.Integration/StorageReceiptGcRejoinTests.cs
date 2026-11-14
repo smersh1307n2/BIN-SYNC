@@ -400,8 +400,12 @@ public sealed class StorageReceiptGcRejoinTests
                 Assert.Equal(3, changeIds.Count(id =>
                     reopenedMetadata.TryGetChangeIdentity(scope, local, 19, id, out _, out _, out _)));
 
-                Assert.Equal(1, await reopenedMetadata.CompactChangeLedgerAsync(
-                    scope, local, 19, 1, new TestAsyncGcReferenceScanner()));
+                using var asyncNode = new NodeBuilder().WithNodeId(local).WithEpoch(1).Build();
+                var asyncCoordinator = new AsyncStorageSyncCoordinator(
+                    asyncNode, reopenedMetadata, scope, 19);
+                asyncCoordinator.AttachNamespaceGcGuard(reopenedGc, trust);
+                Assert.Equal(1, await asyncCoordinator.CompactChangeLedgerAsync(
+                    new TestAsyncGcReferenceScanner(), 1));
                 Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
                     scope, local, 19, reopenedProvider, 1,
                     () => new MemoryStream(), Scanner(false, false, changeIds)));

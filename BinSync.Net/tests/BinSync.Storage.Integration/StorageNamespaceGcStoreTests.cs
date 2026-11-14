@@ -198,6 +198,9 @@ public sealed class StorageNamespaceGcStoreTests
                 NamespaceRosterCertificate roster = gc.AcceptNamespaceRoster(
                     NamespaceRosterProtocol.Sign(Roster(1, new byte[32], keys), keys[0].Seed), trust);
                 metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
+                using var asyncNode = new NodeBuilder().WithNodeId(local).WithEpoch(1).Build();
+                var asyncCoordinator = new AsyncStorageSyncCoordinator(asyncNode, metadata, scope, namespaceId);
+                asyncCoordinator.AttachNamespaceGcGuard(gc, trust);
 
                 metadata.RegisterInterestedPeer(scope, local, sender, 1, namespaceId);
                 var batch = new MetadataIncomingBatch
@@ -324,7 +327,7 @@ public sealed class StorageNamespaceGcStoreTests
 
                 // Even with both signed proof domains satisfied, a host-side
                 // reference snapshot must veto receipt deletion.
-                Assert.Equal(0, await metadata.CompactReceiptsAsync(
+                Assert.Equal(0, await asyncCoordinator.CompactReceiptsAsync(
                     scope, local, namespaceId, 16,
                     new TestAsyncGcReferenceScanner(hasReceiptReference: true)));
 
