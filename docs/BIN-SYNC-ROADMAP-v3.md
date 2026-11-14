@@ -3841,7 +3841,7 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [!] Scope: the retiring-epoch Receipt chain and the pushed-reservation lost-ACK cut are injected at the durable Metadata boundary to isolate those state machines; the two real FLD Hosts and the A→B / B→C SyncSession data/tombstone path are real. The separate Host ApplyJournal receipt-reference test remains the proof that an actual FLD application receipt blocks reclamation.
 - [x T] The crash/uncertain-completion matrix that was open at this checkpoint is closed by §1.153.
 - [ ] Next: staged production enablement review — read-only readiness diagnostics, independent feature flags, operational disable/rollback, retention policy and staged canary. Keep all physical GC flags false until that review is accepted.
-- [!] Readiness estimate: approximately **1 substantial release gate** remains before a first controlled opt-in: operational diagnostics, rollback/kill-switch procedure, retention policy and staged rollout. Ghost GC remains excluded. This is not an authorization or calendar guarantee.
+- [!] Historical estimate from this 2026-11-14 checkpoint is superseded by §1.154–§1.156. Multiple independent engineering and operational gates remain before any controlled opt-in; Ghost GC remains excluded. This is not an authorization or calendar guarantee.
 - [!] `EnableReceiptGc`, `EnableChangeIdGc` and `EnableTombstoneGc` remain false by default; Ghost GC remains disabled. No production-wide reclamation and no merge to main are authorized by this checkpoint.
 
 
