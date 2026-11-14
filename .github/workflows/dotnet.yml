@@ -25,7 +25,7 @@ on:
     - cron: "17 3 * * *"
 
 concurrency:
-  group: binsync-net-${{ github.workflow }}-${{ github.ref }}
+  group: binsync-net-${{ github.workflow }}-${{ github.ref }}-gcdiag-v2
   cancel-in-progress: false
 
 jobs:
