@@ -1,72 +1,120 @@
 # BIN-SYNC Metadata Store retention and GC contract
 
-**Status:** fail-closed retention policy for the Storage-backed Metadata Store. This document records what may be reclaimed today, what is retained indefinitely, and the proofs required before adding destructive GC. It does not authorize TTL-based deletion.
+**Status (2026-11-14):** Receipt, ChangeId and record-tombstone compaction are implemented with independent proof gates and independent feature flags. The signed v3.1 roster/frontier/checkpoint/FULL_REPLACE control plane and FLD Host reference-scan boundary are implemented and validated. All physical GC flags remain **false by default**; this document does not authorize production reclamation. The crash/uncertain-completion matrix and exact-head cross-platform CI are complete; one release gate remains for operator diagnostics, rollback, retention policy and staged canary.
+
+Normative detail: [METADATA-STORE-GC-DESIGN.md](METADATA-STORE-GC-DESIGN.md), [BIN-SYNC-ROADMAP-v3.md](BIN-SYNC-ROADMAP-v3.md), and [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md).
 
 ## 1. Retention domains are independent
 
-Do not treat ACK, a completed snapshot, peer disconnection, HLC age, or one generic safe cursor as a universal retention horizon. The durable state has distinct identities and purposes:
+ACK, snapshot completion, peer disconnection, HLC age or one generic safe cursor is never a universal retention horizon.
 
-| State | Current lifecycle | Why it cannot share another domain's horizon |
+| State | Current lifecycle | Required proof / reason |
 |---|---|---|
-| Outbound payload (local author stream) | Compact only through the minimum safe per-peer stream cursor, with required peer baselines complete; if a local lease consumer exists, also bounded by its durable ACK. | A peer ACK does not prove a local transport consumer has finished, and vice versa. |
-| Relay payload (original author stream) | Compact only through the minimum safe peer cursor and relay consumer ACK where present. | Relay retention is tied to downstream delivery, not local outbound ACK. |
-| Per-peer stream state | Removed atomically when a peer epoch is retired; the maximum retired epoch remains durable. | The retired-epoch fence prevents stale sessions from reappearing after their stream rows are removed. |
-| Outbound/relay high-watermarks and ACKs | Retained after payload compaction. | Sequence continuity and replay cursors must survive payload removal. |
-| ChangeId ledger | Retained; no GC is currently authorized. | It is route-independent (namespace, ChangeId) equivocation/dedup evidence. Current ledger values do not retain a provable author-sequence frontier for every route. |
-| Inbox receipts (sender, author epoch, namespace, BatchId) | Reclaim receipts only when their authenticated transport-peer epoch is durably retired; active-epoch receipts and legacy rows without transport-epoch provenance remain retained. | The retired-through fence rejects the old transport epoch on receive; deletion and fence commit atomically. PendingApply must be resolved first. |
-| Receive cursors and digest-chain checkpoints | Retained. | They are the contiguous per-author cursor and sender/epoch digest-chain continuity anchors. |
-| PendingApply | Deleted atomically when provider application is finalized; retained and replayed after interrupted provider application. | It is the durable cross-store recovery intent, not a historical receipt archive. |
-| CompletedPendingApply | Retained as the idempotency mapping from provider apply token to finalized digest/receipt. | It makes repeated finalization with the same token idempotent and rejects token reuse with different input. It is distinct from network duplicate detection. |
-| Field/record tombstones and ghost lifecycle facts | Destructive GC remains disabled by E-25. | A stale or offline peer may otherwise resurrect deleted data. Snapshot completion, TTL, HLC age, and GC_NOTICE are not proof of safe namespace-wide deletion. |
+| Outbound payload (local author stream) | Compact only through the minimum safe per-peer stream cursor, with required peer baselines complete; also respect a durable local lease-consumer ACK when present. | Peer ACK does not prove a local transport consumer has finished, and vice versa. |
+| Relay payload (original author stream) | Compact only through the minimum safe downstream peer cursor and relay-consumer ACK where present. | Relay retention is tied to downstream delivery, not local outbound ACK. |
+| Per-peer stream state | May be removed atomically when a transport epoch is retired; retain the maximum retired epoch as a durable fence. | The fence rejects stale sessions after stream rows are removed. |
+| Outbound/relay high-watermarks, ACKs and receive cursors/digest chains | Retain after payload/receipt compaction. | Sequence continuity, retry identity and replay rejection must survive payload removal. |
+| Inbox batch receipts | Receipt GC is implemented behind the signed roster/frontier proof, durable transport-epoch retirement fence, receive-cursor/digest-chain checks, no-PendingApply check and Host reference scan. Default off. | A lost ACK may require a receipt for exact retry. A retired transport fence and signed origin horizon must make stale replay rejectable after deletion. |
+| ChangeId identity/provenance ledger | ChangeId GC is implemented behind the signed safe-origin frontier and internal + Host reference scans. Default off. | (namespace, ChangeId) remains route-independent dedup/equivocation evidence; the immutable origin tuple and signed replay fence survive row deletion. |
+| PendingApply | Delete atomically when provider application is finalized; retain and replay after interrupted provider application. | It is a durable cross-store recovery intent, not a historical receipt archive. |
+| CompletedPendingApply | Retain as the idempotency mapping from provider apply token to finalized digest/receipt; no independent GC horizon is authorized here. | It makes repeated finalization with the same token idempotent and rejects token reuse with different input. |
+| Field/record tombstones | Record-tombstone GC is implemented behind signed frontier + installed FULL_REPLACE generation proof, Host reference scan and final exact-candidate revalidation. Default off. | A stale or offline peer must not resurrect deleted data. |
+| Ghost lifecycle facts | Retain; Ghost GC is not implemented/enabled. | Ghost reclamation requires its own lifecycle and anti-resurrection proof. |
 
-## 2. Exact payload compaction conditions
+## 2. Payload compaction rules
 
-CompactOutboundThrough and CompactRelayThrough are the only current destructive stream-payload compaction entry points.
+CompactOutboundThrough and CompactRelayThrough are delivery-payload compaction entry points, not ChangeId or tombstone GC.
 
 - The requested sequence cannot exceed the durable ACK of an active local consumer.
-- It cannot exceed GetSafePeerCursor, which is the minimum AckedCursor + StreamOffset over all interested peers and required author streams.
-- A peer without a committed initial-sync baseline contributes a safe cursor of zero.
-- If there is no local consumer and no peer requirement, a positive compaction request is rejected. No consumer is not equivalent to proof that delivery is unnecessary.
-- Payload deletion is committed in Storage before the in-memory projection is changed.
-- High-watermarks, ACK state, peer state, and ChangeId ledger rows are not deleted by payload compaction.
+- It cannot exceed GetSafePeerCursor, the minimum AckedCursor + StreamOffset across all interested peers and required author streams.
+- A peer without a committed initial-sync baseline contributes safe cursor zero.
+- If there is no local consumer and no peer requirement, a positive compaction request is rejected. No consumer is not proof that delivery is unnecessary.
+- Payload deletion is committed in Storage before the in-memory projection changes.
+- High-watermarks, ACK state, receive cursors/digest chains and ChangeId identity rows are not deleted by payload compaction.
 
-Retiring a peer epoch is allowed only after a newer peer epoch is durably registered and its complete initial-sync baseline is committed. It removes the old roster, baseline, per-author peer-stream rows and eligible Inbox receipts in one delta transaction, while persisting the maximum retired epoch. A later connection using that epoch or an older one is rejected. Inbox receipts attributed to that retired transport epoch are also deleted in the same transaction; epoch-unknown legacy receipts and ChangeId evidence are not.
+Retiring a transport peer epoch requires a newer peer epoch and a committed initial-sync baseline. It removes old peer-stream state and eligible transport receipts atomically while persisting the maximum retired epoch. A later connection using that epoch or an older one is rejected. Epoch-unknown legacy receipts are never assigned an origin epoch by guesswork.
 
-## 3. Why global ChangeId GC and active-epoch Inbox GC are still disabled
+## 3. Receipt GC
 
-The ChangeId ledger is keyed by (namespace, ChangeId) and currently stores a canonical fingerprint plus local/incoming origin. It intentionally survives Outbound/Relay payload compaction. It does not currently encode enough durable origin-stream sequence information to prove that every stale route capable of replaying a ChangeId has crossed a common safe frontier.
+Receipt reclamation is independent of ChangeId and tombstone reclamation. A receipt is eligible only when all applicable conditions hold:
 
-Inbox receipts are keyed by (sender, author epoch, namespace, BatchId), and now also record the authenticated transport-peer epoch separately. They preserve cursor range, previous/current digest, durable author and (for new authoritative receipts) the canonical full-wire-header fingerprint. When a newer peer incarnation is registered and its complete initial-sync baseline is durably committed, the old transport epoch is durably fenced. In the same Storage transaction, receipts attributed to that retired transport epoch are deleted. Retirement is blocked while a matching or epoch-unknown PendingApply remains unresolved. Receive entry points reject old epochs and reject epoch-less input after a retirement fence exists. Legacy receipts without transport-epoch provenance remain retained until an exact duplicate is received from a durably registered current epoch; that authenticated replay re-attributes the receipt to the new epoch so it can be reclaimed only when that epoch is later retired.
+1. Its authenticated transport-peer epoch is durably retired/fenced.
+2. The accepted signed namespace roster and retention checkpoint cover the receipt's immutable origin coordinates.
+3. The durable receive cursor covers CursorEnd, and the sender digest-chain anchor remains retained.
+4. No matching PendingApply or unresolved provider application intent remains.
+5. The FLD Host reference scan reports no live receipt reference; an unsealed committed WAL prefix is a positive/unknown reference and blocks reclamation.
+6. The bounded page commit and its cursor/checkpoint are durable before the caller may treat the result as complete.
 
-The active transport epoch's receipts are still retained. The last receipt may be needed to answer a retransmission after an ACK was lost. CompletedPendingApply tokens and receive cursor/digest-chain checkpoints are also retained; they have separate lifecycle rules.
+The receive cursor, digest-chain row and retired-epoch fence remain after receipt deletion. Old-epoch replay is rejected by the transport fence; replay below the signed origin frontier is rejected even if a batch-level receipt has been pruned. Active-epoch receipts and provenance-less legacy rows remain until their own proof exists.
 
-Therefore:
-- no TTL, size-based eviction, LRU eviction, or age-based cleanup;
-- no coupling of ChangeId deletion to relay/outbound payload ACK;
-- no claim that a snapshot baseline alone makes old dedup evidence obsolete;
-- retain legacy receipt rows without transport-epoch provenance; do not guess their origin epoch. Re-attribute only after an exact, authenticated duplicate from a durably registered epoch.
+## 4. ChangeId GC
 
-A safe ChangeId GC design needs immutable origin author + author epoch + origin sequence preserved unchanged through every relay, an administrator-signed authoritative namespace roster generation, signed monotonic per-member retention checkpoints, the minimum contiguous applied-origin frontier across every member in that roster, and stale-peer/epoch fencing. Missing members/checkpoints contribute zero; legacy rows without origin coordinates are never collected. A safe tombstone GC design additionally needs the same roster/frontier proof and a versioned FULL_REPLACE snapshot that atomically switches the provider's namespace generation; current snapshot merge does not delete rows absent from the snapshot. The exact certificate/checkpoint contract and mandatory implementation order are in [METADATA-STORE-GC-DESIGN.md](METADATA-STORE-GC-DESIGN.md). These features remain disabled until their protocol/storage changes and restart/fault tests are complete.
+The global ledger remains one shared row per (namespaceId, ChangeId); do not create per-peer duplicate ChangeId history.
 
-## 4. Tombstone/ghost GC remains disabled
+A ChangeId row is eligible only when:
 
-E-25 is normative: tombstone and ghost reclamation is disabled until durable authoritative namespace membership, a safe per-author frontier, stale-peer fencing and mandatory FULL_REPLACE resync semantics are established. GC_NOTICE is advisory/control information, not deletion authority. Neither elapsed time nor HLC age can substitute for those proofs.
+- its immutable (originAuthorNodeId, originAuthorEpoch, originSequence) is covered by the signed safe frontier (minimum contiguous applied frontier across every Active member in the accepted roster generation);
+- missing, offline, unknown, joining, disconnected or lagging members have contributed zero, unless a signed roster generation and durable epoch fence have retired them;
+- no PendingApply, local provider publication intent, relay/outbound payload, immutable pushed reservation, active feed lease, snapshot/apply pin or other Metadata reference remains;
+- the Host-owned IApplicationGcReferenceScan reports no external FLD/WAL/Outbox/ApplyJournal reference;
+- the bounded deletion and retention checkpoint are persisted consistently, so replay below the committed frontier is rejected after the identity row is gone.
 
-## 5. Storage cost and release posture
+A pushed outbound reservation survives Metadata Storage reopen after a lost ACK. Retry returns the same immutable reservation and only the matching ACK releases it. A transport ACK, sender cursor, relay cursor, WAL sequence, FLD JournalSeq or OutboxSeq alone never authorizes ChangeId deletion.
 
-The current policy deliberately trades bounded metadata growth for correctness. Payload bytes can be reclaimed when the per-stream ACK/baseline proof exists. Retired-epoch inbox receipts can be reclaimed behind the durable transport fence; active receipts, ChangeId facts, receive-chain anchors and tombstones remain until their independent proof is available. Do not advertise bounded total metadata size or automatic historical GC.
+## 5. Record tombstone GC and Ghost retention
 
-Measure growth using realistic operation and peer cardinalities before deployment. A future GC implementation must include crash-consistent checkpoint publication, restart/replay tests, stale-peer rejoin tests, equivocation tests across the GC boundary, and a measured metadata-size comparison. Do not implement speculative GC as part of routine payload compaction.
+Record-tombstone reclamation additionally requires:
 
-## 6. Node-owned mode and provider cutover
+- every Active signed-roster member has installed the exact authoritative FULL_REPLACE generation/digest (or a later proven generation);
+- the tombstone's origin is covered by the signed safe frontier;
+- no PendingApply, provider intent, relay payload, immutable reservation, snapshot/apply pin or other Metadata reference can require the tombstone;
+- the Host has sealed the committed WAL prefix, opened one immutable reference scan, and revalidated exact candidate versions under the FLD commit monitor immediately before deletion;
+- bounded deletion is durable and restart-safe.
 
-Pure standalone BIN-SYNC Core operation without durable provider/Metadata Store remains a supported Node-owned mode, including volatile/in-memory use. It is not the migration bridge and is not a compatibility promise for the removed legacy public TcpSyncSession API.
+The Host scanner treats an unsealed WAL prefix conservatively as a non-zero draft/reference horizon. The cross-process lease/heartbeat excludes competing IPC writers during the final scan/commit window. Cancellation, Host death and restart must release process-local leases and preserve durable progress.
+
+Ghost GC remains disabled. It is not covered by the record-tombstone flag and must not be inferred safe from tombstone eligibility.
+
+## 6. Non-negotiable retention rules
+
+- No TTL, LRU, size cap, HLC-age or wall-clock-only deletion for receipts, ChangeId, tombstones or ghosts.
+- No coupling of ChangeId deletion to outbound/relay payload ACK.
+- No GC of provenance-less legacy records.
+- No reclamation while PendingApply or an immutable outbound reservation references the state.
+- Missing roster members/checkpoints/frontiers contribute zero.
+- A retired member that rejoins must install the current authoritative FULL_REPLACE generation before reactivation.
+- Signatures authenticate claims under the pinned-authority/crash-fault model; they do not provide Byzantine quorum safety.
+- Do not advertise bounded total metadata size until all GC domains are separately enabled, measured and observed under realistic peer/operation cardinalities.
+
+## 7. Crash and uncertain-completion evidence
+
+The exact validated code HEAD is 93fed52445a5328ef4340916897aa190a90accf7.
+
+- Host A is killed while a GC reference scan/lease is active and a second IPC session is blocked. The blocked request fails; after Host restart, startup recovery and a fresh non-owner request succeed.
+- A committed tombstone is WAL-sealed, the database is closed/reopened before deletion, and the tombstone remains while the unsealed-WAL Receipt barrier is cleared. A later bounded page safely reclaims it.
+- A bounded ChangeId-GC Metadata page commits, then its caller-visible result is lost. The persisted cursor and deletion survive reopen; compaction resumes without repeating or resurrecting the page.
+- Existing Host-death cuts before candidate enumeration and after durable provider deletion remain green, as do cancellation, heartbeat, snapshot-pin, lease-expiry and writer-exclusion tests.
+- BinSync.Net runs 43612231242 and 43612238417 passed all six jobs each. Linux/Windows .NET suites passed 686/686; FLD Host tests passed 35/35 on both Linux and Windows; signed v3.1 vectors and Fuzz + Lab passed; Linux line coverage was 68.7%.
+- FLD Storage Integration runs 43612231211 and 43612238406 passed all three durable-provider jobs on Ubuntu, Windows and macOS 15.
+
+The WAL-seal test closes/reopens after a completed durable checkpoint and before deletion; lower-level torn-WAL/checkpoint recovery remains covered by FLD WAL/Engine crash tests. This evidence validates the code checkpoint, not production authorization.
+
+## 8. Feature flags, rollback and release gates
+
+The three physical GC domains are independently gated:
+
+- EnableReceiptGc
+- EnableChangeIdGc
+- EnableTombstoneGc
+
+All default to false. The options are supplied when constructing the namespace GC store/coordinator; there is no implicit global enablement. Ghost GC remains disabled.
+
+For rollback, the embedding Host must stop scheduling new passes, cancel any in-flight pass through its cancellation token, and restart/recreate the GC store/coordinator with all three flags false. A completed deletion is not undone; rollback means stopping further reclamation, not restoring an older Metadata snapshot. The Host application owns scheduling and transport lifecycle.
+
+**One release gate remains before a controlled opt-in:** add a read-only readiness/diagnostics report with operator-visible blocked reasons, finalize independent flag configuration, document disable/rollback and retention policy, and perform a staged canary. Do not enable any physical GC flag as part of this documentation update.
+
+## 9. Node-owned mode and provider cutover
+
+Pure standalone BIN-SYNC Core operation without durable provider/Metadata Store remains supported, including volatile/in-memory use. It is not the migration bridge and is not a compatibility promise for the removed legacy public TcpSyncSession API.
 
 For a provider being migrated to Metadata Store authority, the pre-cutover Node-Outbox path is a temporary drain/freeze bridge. After the durable provider cutover marker is committed, Metadata Store is the sole outbound/receive metadata authority for that namespace; Node write, publication and legacy receive paths are fenced, and startup reinstalls the fence. There is no fallback from a committed cutover to Node-owned authority.
-
-## 7. Release gates
-
-- Deterministic tests now inject a partial WAL record write, a WAL fsync error and a WAL directory-fsync error after sealed-segment reclamation; they verify fail-closed behavior and reopen recovery. These process-level injections do not reproduce actual device-cache loss, filesystem bugs or power loss.
-- Linux/macOS directory-entry updates use native directory fsync and propagate errors. Windows directory-entry durability is not claimed by the current implementation.
-- Receipt GC is enabled only for receipts with a recorded transport-peer epoch after that epoch is durably retired; active-epoch and legacy epoch-unknown receipts remain retained. ChangeId and tombstone/ghost GC remain disabled until their independent proofs exist.
-- The section-by-section normative audit still needs requirement-ID to exact-test mapping and cross-implementation coverage for §§4–18.
