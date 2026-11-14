@@ -793,13 +793,33 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 await _client.ReleaseGcReferenceScanAsync(
                     _scanToken, CancellationToken.None).ConfigureAwait(false);
             }
-            catch (Exception error) { failure = error; }
+            catch (Exception first)
+            {
+                try
+                {
+                    // The Host treats release of an already-closed scan token as a
+                    // no-op while this session still owns the GC lease.
+                    await _client.ReleaseGcReferenceScanAsync(
+                        _scanToken, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception retry) { failure = new AggregateException(first, retry); }
+            }
             try
             {
                 await _client.ReleaseGcLeaseAsync(
                     _leaseToken, CancellationToken.None).ConfigureAwait(false);
             }
-            catch (Exception error) { failure ??= error; }
+            catch (Exception first)
+            {
+                try
+                {
+                    // Releasing an already-released Host lease is idempotent. If both
+                    // attempts fail, connection teardown is the final Host cleanup.
+                    await _client.ReleaseGcLeaseAsync(
+                        _leaseToken, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception retry) { failure ??= new AggregateException(first, retry); }
+            }
             finally
             {
                 _ownerGate.Release();
