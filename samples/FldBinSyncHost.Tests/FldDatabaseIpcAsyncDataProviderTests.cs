@@ -367,10 +367,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
             Assert.True(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
-                out NodeId ledgerAuthor, out uint ledgerEpoch, out ulong ledgerSequence));
-            Assert.Equal(authority, ledgerAuthor);
-            Assert.Equal(8U, ledgerEpoch);
-            Assert.Equal(9UL, ledgerSequence);
+                out ReadOnlyMemory<byte> fingerprint, out OperationOrigin origin,
+                out bool isLocalOutbound));
+            Assert.Equal(16, fingerprint.Length);
+            Assert.Equal(authority, origin.AuthorNodeId);
+            Assert.Equal(8U, origin.AuthorEpoch);
+            Assert.Equal(9UL, origin.Sequence);
+            Assert.False(isLocalOutbound);
             Assert.Empty(metadata.ReadRelayAuthors(scope, local, checked((int)namespaceId)));
             Assert.Empty(metadata.ReadPeerStreamStates(
                 scope, local, authority, 2, checked((int)namespaceId)));
