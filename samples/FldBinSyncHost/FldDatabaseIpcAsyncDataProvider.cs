@@ -654,12 +654,17 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         await _gcScanGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         bool transferred = false;
         Guid lease = Guid.Empty;
+        Guid scanToken = Guid.Empty;
         try
         {
             ThrowIfUnavailable(cancellationToken);
             lease = await _client.AcquireGcLeaseAsync(cancellationToken).ConfigureAwait(false);
             FldDatabaseIpcGcReferenceScan scan =
                 await _client.OpenGcReferenceScanAsync(cancellationToken).ConfigureAwait(false);
+            scanToken = scan.Token;
+            if (scan.NamespaceId != checked((ushort)namespaceId))
+                throw new InvalidOperationException(
+                    "The FLD Host GC reference scan belongs to a different namespace.");
             var result = new FldDatabaseIpcAsyncGcReferenceScan(
                 _client, _gcScanGate, lease, scan);
             transferred = true;
@@ -669,6 +674,11 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         {
             if (!transferred)
             {
+                if (scanToken != Guid.Empty)
+                {
+                    try { await _client.ReleaseGcReferenceScanAsync(scanToken, CancellationToken.None).ConfigureAwait(false); }
+                    catch { /* A broken IPC session releases its Host scan on disconnect. */ }
+                }
                 if (lease != Guid.Empty)
                 {
                     try { await _client.ReleaseGcLeaseAsync(lease, CancellationToken.None).ConfigureAwait(false); }
@@ -681,27 +691,35 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 
     public async ValueTask DisposeAsync()
     {
-        FldDatabaseIpcSnapshotHandle[] snapshots;
-        lock (_gate)
+        await _gcScanGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (_disposed) return;
-            _disposed = true;
-            snapshots = _snapshots.Values.ToArray();
-            _snapshots.Clear();
-        }
-        List<Exception>? failures = null;
-        foreach (FldDatabaseIpcSnapshotHandle snapshot in snapshots)
-        {
-            try { await _client.ReleaseSnapshotAsync(snapshot).ConfigureAwait(false); }
+            FldDatabaseIpcSnapshotHandle[] snapshots;
+            lock (_gate)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                snapshots = _snapshots.Values.ToArray();
+                _snapshots.Clear();
+            }
+            List<Exception>? failures = null;
+            foreach (FldDatabaseIpcSnapshotHandle snapshot in snapshots)
+            {
+                try { await _client.ReleaseSnapshotAsync(snapshot).ConfigureAwait(false); }
+                catch (Exception error) { (failures ??= new List<Exception>()).Add(error); }
+            }
+            try { await _client.ReleaseOutboxLeaseAsync(_outboxLease).ConfigureAwait(false); }
             catch (Exception error) { (failures ??= new List<Exception>()).Add(error); }
+            try { await _client.DisposeAsync().ConfigureAwait(false); }
+            catch (Exception error) { (failures ??= new List<Exception>()).Add(error); }
+            finally { _feedGate.Dispose(); }
+            if (failures is not null)
+                throw new AggregateException("One or more FLD IPC provider resources could not be released cleanly.", failures);
         }
-        try { await _client.ReleaseOutboxLeaseAsync(_outboxLease).ConfigureAwait(false); }
-        catch (Exception error) { (failures ??= new List<Exception>()).Add(error); }
-        try { await _client.DisposeAsync().ConfigureAwait(false); }
-        catch (Exception error) { (failures ??= new List<Exception>()).Add(error); }
-        finally { _feedGate.Dispose(); }
-        if (failures is not null)
-            throw new AggregateException("One or more FLD IPC provider resources could not be released cleanly.", failures);
+        finally
+        {
+            _gcScanGate.Release();
+        }
     }
 
     private sealed class FldDatabaseIpcAsyncGcReferenceScan : IAsyncApplicationGcReferenceScan
