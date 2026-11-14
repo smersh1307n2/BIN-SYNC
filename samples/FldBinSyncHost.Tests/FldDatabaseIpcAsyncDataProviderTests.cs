@@ -685,6 +685,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.True(readiness.HasInstalledFullReplaceBaseline);
             Assert.Equal(0UL, readiness.UnpublishedDraftCount);
             Assert.False(readiness.HasSnapshotPin);
+            Assert.NotNull(readiness.MetadataReservations);
+            Assert.Equal(0, readiness.MetadataReservations!.PendingApplyCount);
+            Assert.Equal(0, readiness.MetadataReservations.OutstandingPeerReservationCount);
             Assert.True(readiness.Receipts.PrerequisitesSatisfied, string.Join("; ", readiness.Receipts.BlockedReasons));
             Assert.True(readiness.ChangeIds.PrerequisitesSatisfied, string.Join("; ", readiness.ChangeIds.BlockedReasons));
             Assert.True(readiness.Tombstones.PrerequisitesSatisfied, string.Join("; ", readiness.Tombstones.BlockedReasons));
