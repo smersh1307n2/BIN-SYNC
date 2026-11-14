@@ -137,8 +137,8 @@ The safe frontier is the minimum contiguous applied-origin frontier across every
 ### Remaining production enablement gate
 
 - close the remaining Metadata writer-bypass boundary: coordinator admission does not fence arbitrary direct public Metadata Store mutations;
-- complete and exact-head-validate the async Host readiness/maintenance API. The sample now exposes a read-only per-domain readiness report and one bounded sequential async maintenance round; these additions are not accepted until exact-head CI and integration tests pass;
-- operator-visible blocked reasons, independent feature-flag configuration, disable/rollback and retention policy;
+- keep the async Host readiness/maintenance API green on every exact PR head. The read-only report exposes signed roster/checkpoint/FULL_REPLACE state, draft horizon, snapshot pins, provider capability and Metadata reservation/payload counts; one bounded sequential round is tested. Readiness never authorizes deletion;
+- complete operator-facing diagnostics presentation, independent feature-flag configuration, disable/rollback and retention policy;
 - complete provider-specific crash/replay matrices and representative large-namespace performance/retention measurements;
 - staged canary/rollout review. Exact-head cross-platform CI must remain green before each individual domain is opted in.
 
