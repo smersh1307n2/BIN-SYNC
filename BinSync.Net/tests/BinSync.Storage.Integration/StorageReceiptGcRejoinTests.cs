@@ -375,9 +375,17 @@ public sealed class StorageReceiptGcRejoinTests
                 int CountLiveChangeIds() => changeIds.Count(id =>
                     reopenedMetadata.TryGetChangeIdentity(scope, local, 19, id, out _, out _, out _));
                 Assert.Equal(4, CountLiveChangeIds());
-                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
-                    scope, local, 19, reopenedProvider, 1,
-                    () => new MemoryStream(), Scanner(false, false, changeIds)));
+
+                // Simulate losing the caller-visible result after the bounded
+                // Metadata page has durably committed. Reopen below must resume from
+                // the persisted page cursor rather than repeat or resurrect this page.
+                Assert.Throws<IOException>(() =>
+                {
+                    _ = reopenedMetadata.CompactChangeLedger(
+                        scope, local, 19, reopenedProvider, 1,
+                        () => new MemoryStream(), Scanner(false, false, changeIds));
+                    throw new IOException("Injected lost response after durable ChangeId-GC page commit.");
+                });
                 Assert.Equal(3, CountLiveChangeIds());
             }
 
