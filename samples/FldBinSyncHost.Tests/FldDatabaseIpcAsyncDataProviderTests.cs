@@ -148,7 +148,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
-                StorageIpcEndpoint.DeleteIfOwned(hostRoot, namespaceId, ownerId);
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, 0, ownerId);
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
         }
     }
@@ -389,7 +389,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
-                StorageIpcEndpoint.DeleteIfOwned(hostRoot, namespaceId, ownerId);
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, 0, ownerId);
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
             try { Directory.Delete(nodeRoot, recursive: true); } catch { }
         }
@@ -666,7 +666,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
-                StorageIpcEndpoint.DeleteIfOwned(hostRoot, namespaceId, ownerId);
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, 0, ownerId);
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
             try { Directory.Delete(nodeRoot, recursive: true); } catch { }
         }
