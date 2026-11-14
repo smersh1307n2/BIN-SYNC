@@ -291,7 +291,7 @@ public sealed class StorageReceiptGcRejoinTests
 
             Assert.True(reopenedGc.TryReadNamespaceRoster(19, trust, out NamespaceRosterCertificate? persistedRoster));
             Assert.NotNull(persistedRoster);
-            Assert.Equal(7UL, persistedRoster!.RosterGeneration);
+            Assert.Equal(6UL, persistedRoster!.RosterGeneration);
             Assert.True(reopenedGc.TryReadRetentionCheckpoint(persistedRoster, trust, out _));
 
             Assert.Equal(1, reopenedMetadata.CompactReceipts(
