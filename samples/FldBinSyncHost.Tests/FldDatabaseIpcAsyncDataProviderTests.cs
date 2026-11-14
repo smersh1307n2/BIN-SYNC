@@ -1722,6 +1722,56 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 metadataA.MarkOutboundBatchPushed(
                     scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, reserved.BatchId);
 
+                // The batch was durably marked pushed, but its ACK is intentionally
+                // lost. Reopen the Metadata Storage database before acknowledging it;
+                // the exact immutable reservation must survive and be safely retried.
+                metadataA.Dispose();
+                metadataA = null;
+                nodeStorageA!.Dispose();
+                nodeStorageA = null;
+
+                nodeStorageA = StorageDatabase.Open(nodeRootA, nodeStorageNamespace);
+                metadataA = new StorageMetadataStore(nodeStorageA);
+                gcA = new StorageNamespaceGcStore(
+                    nodeStorageA, scope, nodeA!.NodeId,
+                    new StorageNamespaceGcFeatureOptions(
+                        EnableTombstoneGc: true,
+                        EnableChangeIdGc: true,
+                        EnableReceiptGc: true));
+                metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
+                coordinatorA = new AsyncStorageSyncCoordinator(nodeA, metadataA, scope, namespaceId);
+                adapterA = new FldBinSyncAsyncHostAdapter(
+                    coordinatorA, providerA!, remoteA!,
+                    current => StorageNodePersistence.Save(nodeStorageA!, current));
+                Assert.True(gcA.TryReadNamespaceRoster(namespaceId, trust, out _));
+                Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
+                    await adapterA.RecoverBeforeAcceptingSessionsAsync());
+
+                MetadataOutboundBatchReservation? recoveredReservation =
+                    metadataA.GetPendingOutboundBatch(
+                        scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA);
+                Assert.NotNull(recoveredReservation);
+                Assert.Equal(raceReservation.BatchId, recoveredReservation!.BatchId);
+                Assert.Equal(raceReservation.IssuerEpoch, recoveredReservation.IssuerEpoch);
+                Assert.Equal(raceReservation.StreamOffset, recoveredReservation.StreamOffset);
+                Assert.Equal(raceReservation.CursorStart, recoveredReservation.CursorStart);
+                Assert.Equal(raceReservation.CursorEnd, recoveredReservation.CursorEnd);
+                Assert.True(raceReservation.PreviousBatchDigest.AsSpan()
+                    .SequenceEqual(recoveredReservation.PreviousBatchDigest));
+                Assert.True(raceReservation.BatchDigest.AsSpan()
+                    .SequenceEqual(recoveredReservation.BatchDigest));
+                Assert.True(raceReservation.Payload.AsSpan()
+                    .SequenceEqual(recoveredReservation.Payload));
+
+                MetadataOutboundBatchReservation retriedReservation =
+                    metadataA.ReserveOutboundBatch(
+                        scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, raceReservation);
+                Assert.Equal(raceReservation.BatchId, retriedReservation.BatchId);
+                Assert.True(raceReservation.Payload.AsSpan()
+                    .SequenceEqual(retriedReservation.Payload));
+                metadataA.MarkOutboundBatchPushed(
+                    scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, retriedReservation.BatchId);
+
                 started.Reset();
                 Task ackTask;
                 using (metadataA.AcquireTombstoneGcCommitGuard(
@@ -1790,6 +1840,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
             Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
+            Assert.Throws<InvalidDataException>(
+                () => metadataA.AcceptIncomingBatch(replacementReceiptBatch));
             Assert.NotEqual(
                 await providerA.ReadCurrentAsync(record, 0x0951) is null,
                 await providerA.ReadCurrentAsync(record, 0x0952) is null);
