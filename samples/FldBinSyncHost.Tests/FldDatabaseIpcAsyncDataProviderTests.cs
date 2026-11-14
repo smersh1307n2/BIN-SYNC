@@ -113,7 +113,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     batchDigest: Id(0x55),
                     recordsRoot: Id(0x56),
                     writes: [mutation],
-                    relayWrites: [],
+                    relayWrites: [mutation],
                     protocolStateDelta: [0xA1]);
                 Assert.False(database.ApplyRemoteBatch(batch).IsDuplicate);
                 Assert.NotEqual(0UL, database.Checkpoint());
@@ -162,8 +162,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Path.GetTempPath(), "binsync-host-metadata-gc-" + Guid.NewGuid().ToString("N"));
         const uint namespaceId = 0x537;
         const string scope = "fld-host-async-metadata-gc";
-        byte[] authorBytes = Id(0x65);
-        NodeId author = NodeId.From(authorBytes);
+        byte[] localAuthorBytes = Id(0x65);
+        NodeId local = NodeId.From(localAuthorBytes);
         NodeId authority = NodeId.From(Id(0x11));
         var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
         var trust = new TrustStore();
@@ -179,17 +179,17 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
         try
         {
-            using (var database = FldDatabase.Open(hostRoot, namespaceId, authorBytes))
+            using (var database = FldDatabase.Open(hostRoot, namespaceId, localAuthorBytes))
             {
                 var mutation = new RemoteFieldWrite(
                     recordId, 7, "metadata-gc-reference"u8.ToArray(), 100, 1,
-                    authorBytes, changeId, keyEpoch: 0, isTombstone: false,
+                    authority.ToArray(), changeId, keyEpoch: 0, isTombstone: false,
                     originAuthorEpoch: 8, originSequence: 9);
                 var remoteBatch = new RemoteBatchCommit(
                     senderPeer: authority.ToArray(),
                     senderEpoch: 1,
                     namespaceId: checked((int)namespaceId),
-                    issuerNodeId: authorBytes,
+                    issuerNodeId: authority.ToArray(),
                     issuerEpoch: 8,
                     batchId: batchId,
                     cursorStart: 1,
@@ -209,15 +209,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 hostRoot, host, TimeSpan.FromSeconds(45));
             ownerId = endpoint.OwnerId;
             provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
-                hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), author, () => 8);
+                hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), local, () => 17);
             remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                 hostRoot, Guid.NewGuid(), checked((ushort)namespaceId), TimeSpan.FromSeconds(15));
 
             using var nodeStorage = StorageDatabase.Open(nodeRoot, 903);
             using var metadata = new StorageMetadataStore(nodeStorage);
-            using var node = new NodeBuilder().WithNodeId(author).WithEpoch(8).Build();
+            using var node = new NodeBuilder().WithNodeId(local).WithEpoch(17).Build();
             var gc = new StorageNamespaceGcStore(
-                nodeStorage, scope, author,
+                nodeStorage, scope, local,
                 new StorageNamespaceGcFeatureOptions(
                     EnableReceiptGc: true, EnableChangeIdGc: true));
 
@@ -238,7 +238,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     },
                     new NamespaceRosterMember
                     {
-                        NodeId = author,
+                        NodeId = local,
                         PublicKey = keys[1].PublicKey,
                         TransportPeerEpoch = 11,
                         Status = NamespaceMemberStatus.Active
@@ -250,15 +250,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             // The Metadata receipt belongs to an old transport incarnation. Its
             // durable receive chain remains the replay fence after receipt GC.
-            metadata.RegisterInterestedPeer(scope, author, authority, 1, checked((int)namespaceId));
+            metadata.RegisterInterestedPeer(scope, local, authority, 1, checked((int)namespaceId));
             var incoming = new MetadataIncomingBatch
             {
                 ScopeId = scope,
-                LocalReplica = author,
+                LocalReplica = local,
                 SenderPeer = authority,
                 SenderEpoch = 8,
                 TransportPeerEpoch = 1,
-                AuthorStreamNodeId = author,
+                AuthorStreamNodeId = authority,
                 NamespaceId = checked((int)namespaceId),
                 BatchId = BatchId.From(batchId),
                 CursorStart = 1,
@@ -270,7 +270,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 [
                     new MetadataOperation
                     {
-                        AuthorNodeId = author,
+                        AuthorNodeId = authority,
                         ChangeId = BatchId.From(changeId),
                         OriginAuthorEpoch = 8,
                         OriginSequence = 9,
@@ -280,12 +280,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 ]
             };
             Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
-            metadata.RegisterInterestedPeer(scope, author, authority, 2, checked((int)namespaceId));
+            metadata.RegisterInterestedPeer(scope, local, authority, 2, checked((int)namespaceId));
             metadata.CompletePeerInitialSync(
                 scope, author, authority, 2, checked((int)namespaceId),
-                [new MetadataPeerStreamBaseline(author, 0, 8)]);
+                [new MetadataPeerStreamBaseline(authority, 0, 8)]);
             metadata.RetireInterestedPeer(
-                scope, author, authority, 1, 2, checked((int)namespaceId));
+                scope, local, authority, 1, 2, checked((int)namespaceId));
 
             var report0 = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
                 new AppliedOriginFrontierReport
@@ -300,7 +300,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     [
                         new AppliedOriginFrontierEntry
                         {
-                            OriginAuthorNodeId = author,
+                            OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
                             ContiguousAppliedOriginSequence = 9
                         }
@@ -312,7 +312,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     NamespaceId = checked((int)namespaceId),
                     RosterGeneration = 1,
                     RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
-                    MemberNodeId = author,
+                    MemberNodeId = local,
                     MemberTransportEpoch = 11,
                     ReportSequence = 1,
                     Entries =
@@ -324,16 +324,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             ContiguousAppliedOriginSequence = 9
                         }
                     ],
-                    IssuedOrigins =
-                    [
-                        new IssuedOriginFrontierEntry
-                        {
-                            OriginAuthorEpoch = 8,
-                            IssuedOriginSequence = 9,
-                            MaxIssuedHlcWall = 100,
-                            MaxIssuedHlcLogical = 1
-                        }
-                    ]
                 }, keys[1].Seed), roster);
 
             Guid fullReplaceGeneration = Guid.Parse("12345678-1234-5678-9abc-def012345678");
@@ -364,7 +354,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             gc.AcceptRetentionCheckpoint(
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
-            metadata.AttachNamespaceGcGuard(gc, trust, scope, author);
+            metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
             var adapter = new FldBinSyncAsyncHostAdapter(
@@ -377,7 +367,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1, receipts);
             Assert.Equal(1, changeIds);
             Assert.False(metadata.TryGetChangeIdentity(
-                scope, author, checked((int)namespaceId), BatchId.From(changeId),
+                scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _));
         }
         finally
