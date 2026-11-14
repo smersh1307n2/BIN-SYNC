@@ -3816,3 +3816,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Receipt retention remains separately covered by the real Host metadata-GC test: a sealed FLD ApplyJournal receipt can be compacted while a ChangeId remains pinned by an immutable relay payload; after relay ACK/compaction the ChangeId becomes eligible. Receipt and ChangeId horizons are not conflated.
 - [ ] Next: compose retired-epoch Receipt rollover into the same two-Host tombstone/rejoin/restart matrix, including receipt lost-ACK recovery and bounded receipt pages. Then run the complete crash/cancellation matrix for Host death during scan, during WAL seal, between provider deletion pages, and during Metadata commit.
 - [!] Physical Receipt, ChangeId, Tombstone and Ghost GC remain disabled by default. This checkpoint is test evidence, not authorization for production-wide reclamation or merge to main.
+
+
+## 1.151. Cancellation after negative Host reference answer — 2026-11-14
+
+- [x T] Extended the real FLD Host async Metadata-GC integration test with a deterministic cancellation cut after the Host returns a negative ChangeId-reference answer but before the final Metadata deletion transaction.
+- [x T] A competing write from a separate IPC session remains blocked while the immutable scan/Host lease is held. Cancelling the GC pass must unwind the async scan, release the Host lease, and allow the writer to commit exactly once.
+- [x T] The cancelled pass is verified not to delete the ChangeId. A fresh Host-owned scan then retries the same bounded candidate and commits the deletion, proving cancellation is retry-safe rather than an ambiguous partial success.
+- [!] This adds the cancellation cut to the existing real-Host lease/heartbeat, in-flight renewal drain, process-death-before-delete and process-death-after-durable-delete coverage. It does not yet cover the full retired-epoch Receipt rollover composed into the two-Host tombstone/rejoin matrix, nor Host death at every WAL-seal/Metadata-commit boundary.
+- [ ] Next: run exact-HEAD CI on Linux/Windows, signed vectors, fuzz/lab, cross-repository Host adapter and durable-provider integration on Ubuntu/macOS/Windows. If green, complete the remaining receipt/tombstone composition and final staged enablement review. Keep every physical GC feature switch disabled by default.
+- [!] Physical Receipt, ChangeId, Tombstone and Ghost GC remain disabled by default. This test evidence is not authorization for production-wide reclamation or merge to main.

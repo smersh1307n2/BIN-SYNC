@@ -677,33 +677,44 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Empty(metadata.ReadRelay(
                 scope, local, checked((int)namespaceId), authority, relayThrough, 16).Items);
 
-            // Pause after the real Host has answered "unreferenced", while its GC
-            // lease is still owned by the Metadata compaction call. A different IPC
-            // session must not be able to publish a new local mutation in this gap.
-            var blockingScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
-            Task<int> changeIdGc = coordinator.CompactChangeLedgerAsync(
-                blockingScanner, limit: 1);
-            await blockingScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
+            // Cancellation after a negative Host reference answer must abort the
+            // Metadata deletion, dispose the immutable scan, and release the Host
+            // lease. A competing IPC writer stays blocked until that cleanup finishes.
+            var cancelledScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
+            using var gcCancellation = new CancellationTokenSource();
+            Task<int> cancelledGc = coordinator.CompactChangeLedgerAsync(
+                cancelledScanner, limit: 1, cancellationToken: gcCancellation.Token);
+            await cancelledScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
 
             var writerMutation = new FldDatabaseIpcMutation(
                 FldDatabase.NewRecordId(), 8, 1, false,
-                "writer-during-metadata-gc"u8.ToArray());
+                "writer-after-cancelled-metadata-gc"u8.ToArray());
             Task<FldDatabaseIpcWriteResult> blockedWriter = writerClient!.WriteBatchAsync(
                 Guid.NewGuid(), clientSequence: 1, [writerMutation]);
             await Task.Delay(100);
             Assert.False(blockedWriter.IsCompleted,
-                "A competing IPC writer must remain blocked until the async Metadata GC transaction releases the Host lease.");
+                "A competing IPC writer must remain blocked while the cancelled GC scan still owns the Host lease.");
 
-            blockingScanner.ContinueReferenceCheck();
-            Assert.Equal(1, await changeIdGc.WaitAsync(TimeSpan.FromSeconds(15)));
+            gcCancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await cancelledGc.WaitAsync(TimeSpan.FromSeconds(15)));
             FldDatabaseIpcWriteResult writerResult =
                 await blockedWriter.WaitAsync(TimeSpan.FromSeconds(15));
             Assert.False(writerResult.IsDuplicate);
             Assert.Equal(1, writerResult.MutationCount);
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, checked((int)namespaceId), BatchId.From(changeId),
+                out _, out _, out _),
+                "Cancellation must not commit the ChangeId deletion.");
+
+            // Retry from a fresh Host-owned scan. The same candidate is still safe,
+            // and a successful bounded retry may now commit it exactly once.
+            Assert.Equal(1, await coordinator.CompactChangeLedgerAsync(
+                referenceScanner, limit: 1));
             Assert.False(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _),
-                "The ChangeId is deleted only after the Host reference answer and final Metadata commit complete under the held Host lease.");
+                "The retry deletes the ChangeId only after a fresh Host reference answer and final Metadata commit.");
         }
         finally
         {
