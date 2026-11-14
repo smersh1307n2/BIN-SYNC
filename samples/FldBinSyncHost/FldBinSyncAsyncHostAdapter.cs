@@ -26,7 +26,7 @@ public sealed record FldBinSyncAsyncGcReadinessReport(
     bool HasInstalledFullReplaceBaseline,
     ulong? RosterGeneration,
     Guid? FullReplaceGeneration,
-    int UnpublishedDraftCount,
+    ulong UnpublishedDraftCount,
     FldBinSyncGcDomainReadiness Receipts,
     FldBinSyncGcDomainReadiness ChangeIds,
     FldBinSyncGcDomainReadiness Tombstones);
