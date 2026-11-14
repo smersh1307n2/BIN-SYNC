@@ -16,6 +16,62 @@ namespace BinSync.FldHost.Tests;
 
 public sealed class FldDatabaseIpcAsyncDataProviderTests
 {
+
+    private sealed class CrashAfterTombstoneCandidateRead : IAsyncProviderTombstoneGc
+    {
+        private readonly IAsyncProviderTombstoneGc _inner;
+        private readonly Process _host;
+
+        public CrashAfterTombstoneCandidateRead(IAsyncProviderTombstoneGc inner, Process host)
+        {
+            _inner = inner;
+            _host = host;
+        }
+
+        public async ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
+            int limit, CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<ProviderMutation> candidates =
+                await _inner.ReadTombstoneGcCandidatesAsync(limit, cancellationToken);
+            if (candidates.Count == 0)
+                throw new InvalidOperationException("Crash probe expected a durable tombstone candidate.");
+            _host.Kill(entireProcessTree: true);
+            await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            throw new IOException("Injected host death after candidate snapshot and before provider delete.");
+        }
+
+        public ValueTask<int> CompactTombstonesAsync(
+            IReadOnlyList<ProviderMutation> approvedCandidates,
+            int limit, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("The pre-delete crash cut must not compact candidates.");
+    }
+
+    private sealed class CrashAfterTombstoneDelete : IAsyncProviderTombstoneGc
+    {
+        private readonly IAsyncProviderTombstoneGc _inner;
+        private readonly Process _host;
+
+        public CrashAfterTombstoneDelete(IAsyncProviderTombstoneGc inner, Process host)
+        {
+            _inner = inner;
+            _host = host;
+        }
+
+        public ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
+            int limit, CancellationToken cancellationToken = default)
+            => _inner.ReadTombstoneGcCandidatesAsync(limit, cancellationToken);
+
+        public async ValueTask<int> CompactTombstonesAsync(
+            IReadOnlyList<ProviderMutation> approvedCandidates,
+            int limit, CancellationToken cancellationToken = default)
+        {
+            int deleted = await _inner.CompactTombstonesAsync(
+                approvedCandidates, limit, cancellationToken);
+            _host.Kill(entireProcessTree: true);
+            await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            throw new IOException("Injected host death after durable tombstone delete and before coordinator completion.");
+        }
+    }
     [Fact]
     public async Task Async_coordinator_reclaims_only_signed_safe_tombstones_through_real_host_ipc()
     {
@@ -190,17 +246,110 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
                 var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, checked((int)namespaceId));
-                var adapter = new FldBinSyncAsyncHostAdapter(coordinator, provider, remoteApply, _ => { });
-                Assert.Equal(1, await adapter.RunTombstoneGcPassAsync(gc, trust, 16));
+                coordinator.AttachNamespaceGcGuard(gc, trust);
+
+                // Cut 1: the Host has returned a bounded candidate snapshot, but no
+                // physical delete has been requested. Killing/reopening the Host must
+                // preserve the tombstone and make it eligible for a fresh pass.
+                var beforeDeleteCrash = new CrashAfterTombstoneCandidateRead(provider, host!);
+                await Assert.ThrowsAsync<IOException>(
+                    () => coordinator.CompactTombstonesAsync(beforeDeleteCrash, 16));
             }
 
-            Assert.Null(await provider.ReadCurrentAsync(RecordId.From(recordId), 7));
+            async Task RestartHostAndReconnectAsync()
+            {
+                if (remoteApply is not null)
+                {
+                    await remoteApply.DisposeAsync();
+                    remoteApply = null;
+                }
+                if (provider is not null)
+                {
+                    await provider.DisposeAsync();
+                    provider = null;
+                }
+                if (host is not null)
+                {
+                    host.Dispose();
+                    host = null;
+                }
+                await WaitForDatabaseWriterReleaseAsync(
+                    hostRoot, namespaceId, authorBytes, TimeSpan.FromSeconds(15));
+                host = StartDatabaseHost(hostRoot, namespaceId, authorBytes, enableTombstoneGc: true);
+                StorageIpcEndpointInfo restartedEndpoint = await WaitForHostEndpointAsync(
+                    hostRoot, host, TimeSpan.FromSeconds(45), ownerId);
+                ownerId = restartedEndpoint.OwnerId;
+                provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                    hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), author, () => 8);
+                remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                    hostRoot, Guid.NewGuid(), checked((ushort)namespaceId), TimeSpan.FromSeconds(15));
+            }
 
-            await remoteApply.DisposeAsync();
+            await RestartHostAndReconnectAsync();
+            Assert.NotNull(await provider!.ReadCurrentAsync(RecordId.From(recordId), 7));
+
+            // Cut 2: the provider transaction commits the delete, then the Host dies
+            // before the coordinator can observe completion. Reopen must not resurrect
+            // the deleted tombstone, and a retry must not be needed to finish the commit.
+            var afterDeleteCrash = new CrashAfterTombstoneDelete(provider!, host!);
+            using (var nodeStorage = StorageDatabase.Open(nodeRoot, 902))
+            using (var metadata = new StorageMetadataStore(nodeStorage))
+            using (var node = new NodeBuilder().WithNodeId(author).WithEpoch(8).Build())
+            {
+                var trust = new TrustStore();
+                trust.Allow(NodeId.From(Id(0x11)), keys[0].PublicKey, TrustMode.PreShared);
+                var gc = new StorageNamespaceGcStore(
+                    nodeStorage, "fld-host-tombstone-gc", author,
+                    new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+                var roster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(new NamespaceRosterCertificate
+                    {
+                        NamespaceId = checked((int)namespaceId),
+                        RosterGeneration = 1,
+                        PreviousRosterDigest = new byte[32],
+                        AuthorityNodeId = NodeId.From(Id(0x11)),
+                        Members =
+                        [
+                            new NamespaceRosterMember
+                            {
+                                NodeId = NodeId.From(Id(0x11)),
+                                PublicKey = keys[0].PublicKey,
+                                TransportPeerEpoch = 10,
+                                Status = NamespaceMemberStatus.Active
+                            },
+                            new NamespaceRosterMember
+                            {
+                                NodeId = author,
+                                PublicKey = keys[1].PublicKey,
+                                TransportPeerEpoch = 11,
+                                Status = NamespaceMemberStatus.Active
+                            }
+                        ]
+                    }, keys[0].Seed), trust);
+                byte[] rosterDigest = NamespaceRosterProtocol.ComputeDigest(roster);
+                // The durable proof was installed in the first scope above; reload the
+                // existing GC store rather than creating a new, empty proof namespace.
+                var reopenedGc = new StorageNamespaceGcStore(
+                    nodeStorage, "fld-host-tombstone-gc", author,
+                    new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+                Assert.True(reopenedGc.TryReadNamespaceRoster(
+                    checked((int)namespaceId), trust, out NamespaceRosterCertificate? acceptedRoster));
+                Assert.NotNull(acceptedRoster);
+                var coordinator = new AsyncStorageSyncCoordinator(
+                    node, metadata, "fld-host-tombstone-gc", checked((int)namespaceId));
+                coordinator.AttachNamespaceGcGuard(reopenedGc, trust);
+                await Assert.ThrowsAsync<IOException>(
+                    () => coordinator.CompactTombstonesAsync(afterDeleteCrash, 16));
+            }
+
+            await RestartHostAndReconnectAsync();
+            Assert.Null(await provider!.ReadCurrentAsync(RecordId.From(recordId), 7));
+
+            await remoteApply!.DisposeAsync();
             remoteApply = null;
             await provider.DisposeAsync();
             provider = null;
-            await StopDatabaseHostAsync(host);
+            await StopDatabaseHostAsync(host!);
             host = null;
             await WaitForDatabaseWriterReleaseAsync(
                 hostRoot, namespaceId, authorBytes, TimeSpan.FromSeconds(15));
