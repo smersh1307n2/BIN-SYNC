@@ -1636,34 +1636,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate);
             metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
 
-            // The actual Host-owned immutable reference scan must allow only the
-            // retired transport receipts to be reclaimed. The active replacement
-            // receipt remains the replay proof after all three bounded pages.
-            for (int page = 0; page < retiredReceiptBatches.Count; page++)
-            {
-                (int compactedChangeIds, int compactedReceipts) =
-                    await adapterA.RunMetadataGcPassAsync(gcA, trust, limit: 1);
-                Assert.Equal(0, compactedChangeIds);
-                Assert.Equal(1, compactedReceipts);
-                if (page == 0)
-                {
-                    // Restart both real FLD Hosts between receipt-GC pages. The next
-                    // page must acquire fresh Host-owned scans and resume from durable
-                    // Metadata receipts rather than process-local scan state.
-                    await RestartHostAAfterGcPageAsync();
-                    await RestartHostBAfterGcPageAsync();
-                }
-            }
-            (int remainingChangeIds, int remainingReceipts) =
-                await adapterA.RunMetadataGcPassAsync(gcA, trust, limit: 1);
-            Assert.Equal(0, remainingChangeIds);
-            Assert.Equal(0, remainingReceipts);
-
-            foreach (MetadataIncomingBatch retiredReceiptBatch in retiredReceiptBatches)
-                Assert.Throws<InvalidDataException>(
-                    () => metadataA.AcceptIncomingBatch(retiredReceiptBatch));
-            Assert.True(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate,
-                "The current transport epoch's receipt must remain a durable replay proof.");
+            // FLD treats an unsealed WAL as an uncertainty barrier for every
+            // receipt identity. Receipt GC must therefore remain fail-closed until
+            // the first physical tombstone-GC admission seals the committed prefix.
+            Assert.Equal(0, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
 
             // Compact only after both the local apply consumer and every interested
             // downstream peer have acknowledged the immutable relay prefix.
@@ -1784,6 +1760,29 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
             Assert.Single(await providerA.ReadTombstoneGcCandidatesAsync(16));
             Assert.Single(await providerB.ReadTombstoneGcCandidatesAsync(16));
+
+            // WAL is now sealed on both Hosts. Receipt GC can advance independently
+            // from the remaining physical tombstone page. Commit one bounded receipt
+            // page, restart both real Hosts, then resume the remaining pages.
+            Assert.Equal(1, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
+
+            await relayInitiator.DisposeAsync(); relayInitiator = null;
+            await relayAcceptor.DisposeAsync(); relayAcceptor = null;
+            relayNode.Dispose(); relayNode = null;
+            await initiator.DisposeAsync(); initiator = null;
+            await acceptor.DisposeAsync(); acceptor = null;
+            await RestartHostAAfterGcPageAsync();
+            await RestartHostBAfterGcPageAsync();
+
+            for (int page = 1; page < retiredReceiptBatches.Count; page++)
+                Assert.Equal(1, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
+            Assert.Equal(0, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
+
+            foreach (MetadataIncomingBatch retiredReceiptBatch in retiredReceiptBatches)
+                Assert.Throws<InvalidDataException>(
+                    () => metadataA.AcceptIncomingBatch(retiredReceiptBatch));
+            Assert.True(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate,
+                "The current transport epoch's receipt must remain a durable replay proof.");
             // The Host's committed prefix is now sealed and its transient
             // ChangeId references are released. The ChangeId horizon can advance
             // independently even though one physical tombstone remains on each Host.
@@ -1798,16 +1797,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 await providerB.ReadCurrentAsync(record, 0x0951) is null,
                 await providerB.ReadCurrentAsync(record, 0x0952) is null);
 
-            // Kill and reopen both real FLD Host processes after page one. The
-            // next bounded page must use the same durable signed proof and the
-            // same final Metadata reference scan, not an in-memory cache.
-            await relayInitiator.DisposeAsync(); relayInitiator = null;
-            await relayAcceptor.DisposeAsync(); relayAcceptor = null;
-            relayNode.Dispose(); relayNode = null;
-            await initiator.DisposeAsync(); initiator = null;
-            await acceptor.DisposeAsync(); acceptor = null;
-            await RestartHostAAfterGcPageAsync();
-            await RestartHostBAfterGcPageAsync();
+            // Both Hosts were restarted between the bounded Receipt-GC pages above.
+            // The remaining physical tombstone page now resumes from those reopened Hosts.
 
             Assert.Single(await providerA!.ReadTombstoneGcCandidatesAsync(16));
             Assert.Single(await providerB!.ReadTombstoneGcCandidatesAsync(16));
