@@ -927,7 +927,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     });
                     await reserveStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     Task completed = await Task.WhenAny(reserveTask, Task.Delay(100));
-                    Assert.NotSame(reserveTask, completed,
+                    Assert.False(ReferenceEquals(reserveTask, completed),
                         "Outbound reservation must wait behind the final GC commit guard.");
                 }
                 MetadataOutboundBatchReservation reserved =
@@ -950,7 +950,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     });
                     await ackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                     Task completed = await Task.WhenAny(ackTask, Task.Delay(100));
-                    Assert.NotSame(ackTask, completed,
+                    Assert.False(ReferenceEquals(ackTask, completed),
                         "Outbound ACK must wait behind the final GC commit guard.");
                 }
                 await ackTask.WaitAsync(TimeSpan.FromSeconds(5));
