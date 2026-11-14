@@ -257,6 +257,7 @@ public sealed class AsyncCoordinatorProcessCrashTests
             Task<SyncSession> connectTask = SyncSession.ConnectAsync(sender, toSender);
             await using var acceptor = await acceptTask;
             await using var initiator = await connectTask;
+            coordinator.RegisterInterestedPeer(acceptor, NamespaceId);
 
             Assert.True(sender.WriteField(NamespaceId, Record, 0x088B,
                 Encoding.UTF8.GetBytes("gc-admission"), new Hlc(8801, 0)));
