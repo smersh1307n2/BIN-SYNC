@@ -488,7 +488,7 @@ public sealed class StorageNamespaceGcStoreTests
                 IsRecordTombstone = false,
                 HlcWall = 100,
                 HlcLogical = 2,
-                AuthorNodeId = NodeId.From(Id(2)),
+                AuthorNodeId = author,
                 KeyEpoch = 0,
                 Value = Array.Empty<byte>(),
                 ChangeId = BatchId.From(Id(0x56)),
@@ -515,12 +515,15 @@ public sealed class StorageNamespaceGcStoreTests
         }
     }
 
-    [Fact]
-    public async Task Async_tombstone_gc_fails_closed_before_provider_scan_on_unknown_outbound_payload()
+    [Theory]
+    [InlineData("outbound")]
+    [InlineData("pending-apply")]
+    [InlineData("relay")]
+    public async Task Async_tombstone_gc_fails_closed_before_provider_scan_on_unknown_retained_payload(string source)
     {
         string directory = Path.Combine(
-            Path.GetTempPath(), "binsync-async-tombstone-gc-unknown-payload-" + Guid.NewGuid().ToString("N"));
-        const string scope = "async-tombstone-gc-unknown-payload";
+            Path.GetTempPath(), "binsync-async-tombstone-gc-unknown-payload-" + source + "-" + Guid.NewGuid().ToString("N"));
+        string scope = "async-tombstone-gc-unknown-payload-" + source;
         const int namespaceId = 19;
         try
         {
@@ -550,19 +553,60 @@ public sealed class StorageNamespaceGcStoreTests
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
             // Unknown retained payloads cannot be decoded into a trustworthy RecordId
-            // reference. The snapshot must therefore be unavailable, not empty.
-            metadata.FreezeOutbound(scope, node.NodeId, namespaceId, node.NodeId,
-                new[]
-                {
-                    new MetadataFrozenOperation
+            // reference. Each storage path is exercised independently: local outbound,
+            // an unresolved receive PendingApply, and a relayed incoming operation.
+            byte[] unknownPayload = new byte[] { 0x01, 0x02, 0x03 };
+            NodeId author = NodeId.From(Id(2));
+            if (source == "outbound")
+            {
+                metadata.FreezeOutbound(scope, node.NodeId, namespaceId, node.NodeId,
+                    new[]
                     {
-                        ChangeId = BatchId.From(Id(0x91)),
-                        Fingerprint = Enumerable.Repeat((byte)0x91, 16).ToArray(),
-                        Payload = new byte[] { 0x01, 0x02, 0x03 },
-                        OriginAuthorEpoch = 1,
-                        OriginSequence = 1
+                        new MetadataFrozenOperation
+                        {
+                            ChangeId = BatchId.From(Id(0x91)),
+                            Fingerprint = Enumerable.Repeat((byte)0x91, 16).ToArray(),
+                            Payload = unknownPayload,
+                            OriginAuthorEpoch = 1,
+                            OriginSequence = 1
+                        }
+                    });
+            }
+            else
+            {
+                using var sender = new NodeBuilder().WithNodeId(author).WithEpoch(3).Build();
+                var incoming = new MetadataIncomingBatch
+                {
+                    ScopeId = scope,
+                    LocalReplica = node.NodeId,
+                    SenderPeer = NodeId.From(Id(1)),
+                    SenderEpoch = 3,
+                    AuthorStreamNodeId = author,
+                    NamespaceId = namespaceId,
+                    BatchId = BatchId.From(Id(0x91)),
+                    CursorStart = 1,
+                    CursorEnd = 1,
+                    PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)0x91, 16).ToArray(),
+                    Operations = new[]
+                    {
+                        new MetadataOperation
+                        {
+                            AuthorNodeId = author,
+                            ChangeId = BatchId.From(Id(0x92)),
+                            Fingerprint = Enumerable.Repeat((byte)0x92, 16).ToArray(),
+                            Payload = unknownPayload,
+                            RelayEligible = source == "relay",
+                            OriginAuthorEpoch = 3,
+                            OriginSequence = 1
+                        }
                     }
-                });
+                };
+                if (source == "pending-apply")
+                    metadata.BeginPendingApply(incoming, Guid.Parse("91000000-0000-0000-0000-000000000001"));
+                else
+                    metadata.AcceptIncomingBatch(incoming);
+            }
 
             var candidate = new ProviderMutation
             {
