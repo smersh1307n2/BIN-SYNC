@@ -63,6 +63,53 @@ public sealed class FldBinSyncAsyncHostAdapter
         return _coordinator.CompactTombstonesAsync(tombstoneGc, limit, cancellationToken);
     }
 
+    /// <summary>
+    /// Run bounded ChangeId and receipt compaction using the provider's one-scan-at-a-time
+    /// Host IPC reference capability. The two retention domains are evaluated separately.
+    /// </summary>
+    public async Task<(int ChangeIds, int Receipts)> RunMetadataGcPassAsync(
+        StorageNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        int limit = 256,
+        CancellationToken cancellationToken = default)
+    {
+        if (_provider is not IAsyncApplicationGcReferenceScanner referenceScanner)
+            throw new NotSupportedException(
+                "The configured async provider does not expose Host-owned GC reference scans.");
+        _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
+        int receipts = await _coordinator.CompactReceiptsAsync(
+            referenceScanner, limit, cancellationToken).ConfigureAwait(false);
+        int changeIds = await _coordinator.CompactChangeLedgerAsync(
+            referenceScanner, limit, cancellationToken).ConfigureAwait(false);
+        return (changeIds, receipts);
+    }
+
+    public Task<int> RunChangeIdGcPassAsync(
+        StorageNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        int limit = 256,
+        CancellationToken cancellationToken = default)
+    {
+        if (_provider is not IAsyncApplicationGcReferenceScanner referenceScanner)
+            throw new NotSupportedException(
+                "The configured async provider does not expose Host-owned GC reference scans.");
+        _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
+        return _coordinator.CompactChangeLedgerAsync(referenceScanner, limit, cancellationToken);
+    }
+
+    public Task<int> RunReceiptGcPassAsync(
+        StorageNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        int limit = 256,
+        CancellationToken cancellationToken = default)
+    {
+        if (_provider is not IAsyncApplicationGcReferenceScanner referenceScanner)
+            throw new NotSupportedException(
+                "The configured async provider does not expose Host-owned GC reference scans.");
+        _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
+        return _coordinator.CompactReceiptsAsync(referenceScanner, limit, cancellationToken);
+    }
+
     /// <summary>Receive one DELTA_BATCH; transport ACK follows durable FLD APPLY and Metadata finalization.</summary>
     public Task<BatchResult> ReceiveBatchAsync(
         SyncSession session,
