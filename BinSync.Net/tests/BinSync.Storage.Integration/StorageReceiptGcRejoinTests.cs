@@ -379,13 +379,13 @@ public sealed class StorageReceiptGcRejoinTests
                 // Simulate losing the caller-visible result after the bounded
                 // Metadata page has durably committed. Reopen below must resume from
                 // the persisted page cursor rather than repeat or resurrect this page.
-                Assert.Throws<IOException>(() =>
+                Assert.Throws<IOException>((Action)(() =>
                 {
                     _ = reopenedMetadata.CompactChangeLedger(
                         scope, local, 19, reopenedProvider, 1,
                         () => new MemoryStream(), Scanner(false, false, changeIds));
                     throw new IOException("Injected lost response after durable ChangeId-GC page commit.");
-                });
+                }));
                 Assert.Equal(3, CountLiveChangeIds());
             }
 
