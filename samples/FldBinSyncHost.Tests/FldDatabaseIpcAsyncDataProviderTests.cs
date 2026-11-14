@@ -149,9 +149,25 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         using FldDatabase database = FldDatabase.Open(root, namespaceId, authorBytes);
         var dispatcher = new FldDatabaseIpcDispatcher(
             database, gcLeaseIdleTimeout: TimeSpan.FromSeconds(5));
+        var renewalReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowRenewal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int blockNextRenewal = 0;
+        async ValueTask<ReadOnlyMemory<byte>> HandleAsync(
+            StorageIpcRequestContext context, ReadOnlyMemory<byte> payload,
+            CancellationToken cancellationToken)
+        {
+            StorageIpcOperationEnvelope envelope = StorageIpcOperationProtocol.Decode(payload);
+            if (envelope.OperationCode == FldDatabaseIpcOperationCodes.RenewGcLease &&
+                Interlocked.Exchange(ref blockNextRenewal, 0) == 1)
+            {
+                renewalReached.TrySetResult();
+                await allowRenewal.Task.WaitAsync(cancellationToken);
+            }
+            return await dispatcher.HandleAsync(context, payload, cancellationToken).ConfigureAwait(false);
+        }
         var server = new StorageIpcServer(
             StorageIpcEndpoint.ComputePipeName(root, 0),
-            dispatcher.HandleAsync,
+            HandleAsync,
             clientDisconnected: dispatcher.OnClientDisconnected);
         Task serverTask = server.RunAsync(shutdown.Token);
         FldDatabaseIpcAsyncDataProvider? provider = null;
@@ -171,15 +187,25 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 root, Guid.NewGuid(), TimeSpan.FromSeconds(10));
 
             Task<byte[]> blockedReader;
-            await using (IAsyncApplicationGcReferenceScan scan = await provider.OpenScanAsync(
-                "lease-renewal-test", NodeId.From(authorBytes), checked((int)namespaceId)))
-            {
-                blockedReader = competingClient.GetLocalAuthorAsync();
-                await Task.Delay(12000);
-                Assert.False(blockedReader.IsCompleted,
-                    "The Host-wide boundary must remain held beyond multiple idle TTLs while the async provider heartbeat is active.");
-                Assert.False(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x65))));
-            }
+            IAsyncApplicationGcReferenceScan scan = await provider.OpenScanAsync(
+                "lease-renewal-test", NodeId.From(authorBytes), checked((int)namespaceId));
+            blockedReader = competingClient.GetLocalAuthorAsync();
+            await Task.Delay(12000);
+            Assert.False(blockedReader.IsCompleted,
+                "The Host-wide boundary must remain held beyond multiple idle TTLs while the async provider heartbeat is active.");
+            Assert.False(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x65))));
+
+            // Stop on a deterministic in-flight heartbeat. Disposing the scan must
+            // wait for that already-sent IPC request rather than cancelling it and
+            // faulting the single-request named-pipe connection.
+            Interlocked.Exchange(ref blockNextRenewal, 1);
+            await renewalReached.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Task scanDispose = scan.DisposeAsync().AsTask();
+            await Task.Delay(100);
+            Assert.False(scanDispose.IsCompleted,
+                "Scan disposal must drain the in-flight renewal before releasing the Host lease.");
+            allowRenewal.TrySetResult();
+            await scanDispose.WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.Equal(authorBytes, await blockedReader.WaitAsync(TimeSpan.FromSeconds(5)));
         }
