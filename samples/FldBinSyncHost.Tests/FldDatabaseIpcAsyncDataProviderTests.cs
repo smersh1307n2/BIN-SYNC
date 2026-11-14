@@ -154,7 +154,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
-    public async Task Async_host_adapter_compacts_receipt_and_changeid_through_real_host_gc_scan()
+    public async Task Async_host_adapter_compacts_receipt_but_preserves_relay_referenced_changeid()
     {
         string hostRoot = Path.Combine(
             Path.GetTempPath(), "fld-binsync-host-metadata-gc-" + Guid.NewGuid().ToString("N"));
@@ -389,13 +389,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { });
 
-            // The real FLD Host has a sealed ApplyJournal receipt for this batch.
-            // That is its own replay evidence, not a live reference to BIN-SYNC's
-            // receipt row. Both Metadata GC domains must therefore pass independently.
+            // The real FLD Host has a sealed ApplyJournal receipt, so the retired
+            // transport receipt can be compacted. The imported ChangeId is different:
+            // it is still referenced by BIN-SYNC's relay stream and must remain live
+            // until relay delivery is acknowledged and its payload is safely compacted.
             (int changeIds, int receipts) = await adapter.RunMetadataGcPassAsync(gc, trust, 1);
             Assert.Equal(1, receipts);
-            Assert.Equal(1, changeIds);
-            Assert.False(metadata.TryGetChangeIdentity(
+            Assert.Equal(0, changeIds);
+            Assert.True(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _));
         }
