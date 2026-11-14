@@ -328,8 +328,7 @@ public sealed class StorageNamespaceGcStoreTests
                 // Even with both signed proof domains satisfied, a host-side
                 // reference snapshot must veto receipt deletion.
                 Assert.Equal(0, await asyncCoordinator.CompactReceiptsAsync(
-                    scope, local, namespaceId, 16,
-                    new TestAsyncGcReferenceScanner(hasReceiptReference: true)));
+                    new TestAsyncGcReferenceScanner(hasReceiptReference: true), 16));
 
                 // Commit only the first bounded page, then close the entire Storage
                 // process scope below. Remaining receipts must be reclaimable after reopen.
