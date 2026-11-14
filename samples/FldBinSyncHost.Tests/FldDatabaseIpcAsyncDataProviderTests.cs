@@ -686,25 +686,17 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Task<int> cancelledGc = coordinator.CompactChangeLedgerAsync(
                 cancelledScanner, limit: 1, cancellationToken: gcCancellation.Token);
             await cancelledScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
-            Console.WriteLine("GC-CANCEL: Host reference query returned; scan is blocked in test wrapper.");
 
             // A valid acknowledgement for an untracked writer-client receipt traverses
             // Host write admission without creating a new local provider draft.
-            Console.WriteLine("GC-CANCEL: submitting valid receipt acknowledgement behind the Host lease.");
             Task<bool> blockedWriter = writerClient!.AcknowledgeThroughAsync(1);
-            Console.WriteLine("GC-CANCEL: receipt acknowledgement request submitted.");
             await Task.Delay(100);
             Assert.False(blockedWriter.IsCompleted,
                 "A competing IPC writer must remain blocked while the cancelled GC scan still owns the Host lease.");
-            Console.WriteLine("GC-CANCEL: competing writer is correctly waiting behind Host lease.");
-
-            Console.WriteLine("GC-CANCEL: cancelling GC token.");
             gcCancellation.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
                 await cancelledGc.WaitAsync(TimeSpan.FromSeconds(15)));
-            Console.WriteLine("GC-CANCEL: cancelled GC finished and scan disposal returned.");
             bool writerAcknowledged = await blockedWriter.WaitAsync(TimeSpan.FromSeconds(15));
-            Console.WriteLine("GC-CANCEL: competing writer completed after lease release.");
             Assert.False(writerAcknowledged,
                 "The independent writer has no local operation receipts to acknowledge.");
             Assert.True(metadata.TryGetChangeIdentity(
@@ -714,16 +706,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             // Retry from a fresh Host-owned scan. The same candidate is still safe,
             // and a successful bounded retry may now commit it exactly once.
-            Console.WriteLine("GC-CANCEL: starting fresh-scan ChangeId GC retry.");
             int retryDeleted = await coordinator.CompactChangeLedgerAsync(
                 referenceScanner, limit: 1).WaitAsync(TimeSpan.FromSeconds(20));
-            Console.WriteLine($"GC-CANCEL: fresh-scan retry returned {retryDeleted}.");
             Assert.Equal(1, retryDeleted);
             Assert.False(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _),
                 "The retry deletes the ChangeId only after a fresh Host reference answer and final Metadata commit.");
-            Console.WriteLine("GC-CANCEL: retry deleted candidate; test body complete.");
         }
         finally
         {
