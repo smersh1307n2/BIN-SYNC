@@ -1597,7 +1597,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 scope, nodeA.NodeId, nodeB.NodeId, rejoinedTransportEpoch, namespaceId);
             metadataA.CompletePeerInitialSync(
                 scope, nodeA.NodeId, nodeB.NodeId, rejoinedTransportEpoch, namespaceId,
-                [new MetadataPeerStreamBaseline(nodeA.NodeId, 0, 17)]);
+                [new MetadataPeerStreamBaseline(nodeA.NodeId, 2, 17)]);
+            Assert.Equal(2UL, metadataA.GetSafePeerStreamCompactionCursor(
+                scope, nodeA.NodeId, namespaceId, nodeA.NodeId));
             metadataA.RetireInterestedPeer(
                 scope, nodeA.NodeId, nodeB.NodeId,
                 retiredTransportEpoch, rejoinedTransportEpoch, namespaceId);
