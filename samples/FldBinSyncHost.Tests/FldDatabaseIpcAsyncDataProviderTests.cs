@@ -31,13 +31,16 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         public async ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
             int limit, CancellationToken cancellationToken = default)
         {
-            IReadOnlyList<ProviderMutation> candidates =
-                await _inner.ReadTombstoneGcCandidatesAsync(limit, cancellationToken);
-            if (candidates.Count == 0)
-                throw new InvalidOperationException("Crash probe expected a durable tombstone candidate.");
+            // Leave a durable provider snapshot pin open, then kill the Host before
+            // candidate enumeration or physical deletion. Reopen must discard the stale
+            // process-owned pin while preserving the tombstone.
+            var provider = (IAsyncDataProvider)_inner;
+            ProviderSnapshotHandle snapshot = await provider.OpenSnapshotAsync(cancellationToken);
+            if (snapshot.Token == Guid.Empty)
+                throw new InvalidDataException("Crash probe did not obtain a durable provider snapshot.");
             _host.Kill(entireProcessTree: true);
             await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
-            throw new IOException("Injected host death after candidate snapshot and before provider delete.");
+            throw new IOException("Injected host death with a provider GC snapshot pin open.");
         }
 
         public ValueTask<int> CompactTombstonesAsync(
@@ -69,7 +72,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 approvedCandidates, limit, cancellationToken);
             _host.Kill(entireProcessTree: true);
             await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
-            throw new IOException("Injected host death after durable tombstone delete and before coordinator completion.");
+            throw new IOException($"Injected host death after durable tombstone delete ({deleted}) and before coordinator completion.");
         }
     }
     [Fact]
