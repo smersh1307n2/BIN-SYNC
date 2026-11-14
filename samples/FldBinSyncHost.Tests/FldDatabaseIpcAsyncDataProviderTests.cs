@@ -76,6 +76,83 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
     }
     [Fact]
+    public async Task Async_provider_opens_one_host_owned_reference_scan_for_changeid_record_and_receipt()
+    {
+        string hostRoot = Path.Combine(
+            Path.GetTempPath(), "fld-binsync-host-gc-reference-scan-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x535;
+        const string scope = "fld-host-gc-reference-scan";
+        byte[] authorBytes = Id(0x65);
+        NodeId author = NodeId.From(authorBytes);
+        byte[] sender = Id(0x51);
+        byte[] issuer = Id(0x53);
+        byte[] record = FldDatabase.NewRecordId();
+        byte[] changeId = Id(0x71);
+        byte[] batchId = Id(0x52);
+        Guid ownerId = Guid.Empty;
+        Process? host = null;
+        FldDatabaseIpcAsyncDataProvider? provider = null;
+
+        try
+        {
+            using (var database = FldDatabase.Open(hostRoot, namespaceId, authorBytes))
+            {
+                var mutation = new RemoteFieldWrite(
+                    record, 5, "gc-reference"u8.ToArray(), 100, 1, issuer, changeId,
+                    keyEpoch: 0, isTombstone: false, originAuthorEpoch: 8, originSequence: 9);
+                var batch = new RemoteBatchCommit(
+                    senderPeer: sender,
+                    senderEpoch: 6,
+                    namespaceId: checked((int)namespaceId),
+                    issuerNodeId: issuer,
+                    issuerEpoch: 8,
+                    batchId: batchId,
+                    cursorStart: 9,
+                    cursorEnd: 9,
+                    previousBatchDigest: Id(0x54),
+                    batchDigest: Id(0x55),
+                    recordsRoot: Id(0x56),
+                    writes: [mutation],
+                    relayWrites: [],
+                    protocolStateDelta: [0xA1]);
+                Assert.False(database.ApplyRemoteBatch(batch).IsDuplicate);
+                Assert.NotEqual(0UL, database.Checkpoint());
+            }
+
+            host = StartDatabaseHost(hostRoot, namespaceId, authorBytes, enableTombstoneGc: false);
+            StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
+                hostRoot, host, TimeSpan.FromSeconds(45));
+            ownerId = endpoint.OwnerId;
+            provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), author, () => 8);
+
+            var scanner = Assert.IsAssignableFrom<IAsyncApplicationGcReferenceScanner>(provider);
+            await using IAsyncApplicationGcReferenceScan scan = await scanner.OpenScanAsync(
+                scope, author, checked((int)namespaceId));
+            ApplicationDraftHorizon horizon =
+                await scan.GetUnpublishedLocalDraftHorizonAsync();
+            Assert.Equal(0UL, horizon.Count);
+            Assert.True(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(changeId)));
+            Assert.True(await scan.HasExternalRecordReferenceAsync(
+                RecordId.From(record), BatchId.From(changeId)));
+            Assert.True(await scan.HasExternalReceiptReferenceAsync(
+                NodeId.From(sender), authorEpoch: 8, transportPeerEpoch: 6,
+                BatchId.From(batchId)));
+            Assert.False(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x79))));
+        }
+        finally
+        {
+            if (provider is not null)
+                await provider.DisposeAsync();
+            if (host is not null)
+                await StopDatabaseHostAsync(host);
+            if (ownerId != Guid.Empty)
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, namespaceId, ownerId);
+            try { Directory.Delete(hostRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Async_coordinator_reclaims_only_signed_safe_tombstones_through_real_host_ipc()
     {
         string hostRoot = Path.Combine(Path.GetTempPath(), "fld-binsync-host-tombstone-gc-" + Guid.NewGuid().ToString("N"));
