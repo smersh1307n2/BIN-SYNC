@@ -3661,3 +3661,13 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] Exact HEAD `0736e074614e4491cf87a085c54e1f020a681f96` passed `BinSync.Net` and `FLD Storage Integration`. Cross-repository FLD host adapter build and host tests passed on Linux and Windows; durable provider integration passed on Linux, macOS and Windows. The FLD host integration suite passed 30/30 on Linux.
 - [!] These are selected process-level crash cuts, not an exhaustive power-loss/fsync proof for every instruction boundary. Physical tombstone, ChangeId and receipt GC remain disabled by default unless independently opted in with complete signed proof.
 - [ ] Next: continue the end-to-end signed-frontier/tombstone proof and malformed/unknown-payload fail-closed matrix; keep physical GC disabled until the full safety gate is independently demonstrated.
+
+
+## 1.145. Unknown retained-payload fail-closed matrix — 2026-11-14
+
+- [x T] Expanded the signed-proof tombstone-GC negative test into a three-source matrix: unknown retained payload in the outbound feed, unresolved receive PendingApply, and relay incoming operations.
+- [x T] Each case uses a valid signed roster/frontier/FULL_REPLACE/retention proof and an otherwise eligible tombstone candidate. The unknown payload must stop GC before provider candidate scanning: zero compacted tombstones, zero provider read calls and zero provider compact calls.
+- [x T] The matrix therefore verifies that malformed/unknown retained payload is treated as a namespace-wide fail-closed condition across all three retained-payload paths, rather than being silently ignored by one path.
+- [x CI] Exact HEAD `d3089952` passed both `BinSync.Net` and `FLD Storage Integration`; duplicate push/PR runs also completed successfully. FLD provider integration passed on Linux, macOS and Windows.
+- [!] This closes the unknown-payload source matrix only. It does not prove every malformed checkpoint, provenance/epoch mismatch, duplicate receipt, missing frontier, or all receipt/ChangeId/tombstone lifecycle and rejoin cases. Physical GC remains disabled by default.
+- [ ] Next: continue the end-to-end GC proof matrix with candidate provenance and author-epoch mismatch, duplicate/stale receipt fences, missing or malformed signed frontier/checkpoint, and retirement/rejoin with fresh transport epochs. For each negative case, assert failure occurs before provider scan/delete and that durable state survives reopen. Keep physical GC disabled until the complete safety gate is independently demonstrated.
