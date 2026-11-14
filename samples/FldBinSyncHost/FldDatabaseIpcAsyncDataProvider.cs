@@ -647,9 +647,9 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         ThrowIfUnavailable(cancellationToken);
-        if (localReplica != _localAuthor || namespaceId != _namespaceId)
+        if (localReplica != _localAuthor || namespaceId <= 0 || namespaceId > ushort.MaxValue)
             throw new InvalidOperationException(
-                "The requested GC reference scan does not match this FLD IPC provider identity and namespace.");
+                "The requested GC reference scan does not match this FLD IPC provider identity or a valid namespace.");
 
         await _gcScanGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         bool transferred = false;
