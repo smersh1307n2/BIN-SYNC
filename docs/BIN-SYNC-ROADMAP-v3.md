@@ -3855,3 +3855,37 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x CI] Exact same HEAD: FLD Storage Integration runs `43612231211` and `43612238406` both passed all three durable-provider jobs on Ubuntu, Windows and macOS 15. The lost-response ChangeId-GC integration test passed on all three platforms.
 - [!] Scope: the WAL-seal cut closes/reopens the database after a completed durable checkpoint and before deletion; torn-WAL/checkpoint recovery during lower-level writes remains covered by the FLD WAL/Engine crash tests. No wire-format or protocol behavior changed in this test block.
 - [ ] Remaining release gate: read-only readiness diagnostics, operator-visible blocked reasons, independent feature-flag configuration, disable/rollback procedure, retention policy and staged canary. `EnableReceiptGc`, `EnableChangeIdGc` and `EnableTombstoneGc` remain false by default; Ghost GC remains disabled.
+
+## 1.154. Reconcile physical-GC release gate against the current async Host implementation — 2026-11-14
+
+This section is the current authoritative implementation audit for physical GC. It corrects the abbreviated "one release gate" estimate in §1.153: the crash/uncertain-completion matrix is substantially closed, but several independent implementation, composition and validation gates from §1.128 remain open. A green CI run does not close a source-level architecture gate.
+
+### Implemented and evidenced
+
+- [x C] The three independent physical-GC feature switches exist in `StorageNamespaceGcFeatureOptions`; all default to false.
+- [x C] The synchronous sample Host exposes bounded ChangeId, Receipt and provider tombstone maintenance through `FldBinSyncHostAdapter.RunGcMaintenance`, with exact coordinator/Metadata/namespace-GC store/TrustStore binding checks.
+- [x C] The process-isolated async path exists: `IAsyncProviderTombstoneGc`, `IAsyncApplicationGcReferenceScanner`, `AsyncStorageSyncCoordinator.CompactTombstonesAsync`, `CompactChangeLedgerAsync`, `CompactReceiptsAsync`, and the corresponding `FldBinSyncAsyncHostAdapter` entry points. Async Host candidate discovery is separate from final Host-side exact-candidate/reference revalidation; no sync-over-async or thread-affine Monitor is used across awaits.
+- [x C/T] The async coordinator shares process-wide namespace admission among coordinator facades for the same local replica/namespace. This excludes mutations routed through that coordinator, but does not by itself fence arbitrary direct public Metadata Store mutations.
+- [x T] §1.151–§1.153 cover the tested Host death, lease/scan exclusion, cancellation, heartbeat, snapshot pin, WAL-seal-before-delete and uncertain Metadata page completion cases.
+- [x CI] Exact PR head `9fd5f7c29f52c32feebd126933803dc8fe76c0a1` has successful BIN-SYNC runs `43613543360` and `43613554276`, and FLD Storage Integration runs `43613543353` and `43613554307`. These are CI evidence for the current PR head, not production authorization.
+
+### Still open — do not mark GC ready
+
+- [ ] C/T Confirm and, if absent, implement independent safe reclamation of standalone field tombstones in the FLD provider. Record tombstone eligibility must not be assumed to prove field tombstone eligibility. Preserve field-vs-record tombstone semantics and add offline-peer, alternate-route, rejoin and crash tests.
+- [ ] A/C/T Close the Metadata writer-bypass boundary. The shared async admission gate only fences calls routed through the coordinator. Production composition must prevent direct Metadata mutation while a GC snapshot/commit is active, or implement a shared writer admission protocol used by every mutation path. Add a negative test proving a bypass writer cannot mutate during a held GC lease.
+- [ ] C/T Add one async Host-owned maintenance orchestration entry point that validates the exact provider, Metadata scope, local replica, namespace, namespace-GC store and TrustStore; runs the three domains in bounded pages; returns per-domain attempted/reclaimed counts and explicit blocked reasons; and respects cancellation between domains/pages.
+- [ ] C/T Add read-only readiness diagnostics. Report missing/invalid roster or checkpoint, missing FULL_REPLACE install proof, disabled flags, absent provider capabilities, unavailable Host reference scan, pending drafts/snapshot pins and unresolved Metadata reservations separately. Readiness must never enable a feature flag or authorize a candidate by itself.
+- [ ] T Complete the provider physical-compaction crash matrix at each actual durable boundary (replacement Run/blob creation, manifest switch, old-Run cleanup, Metadata page commit). Existing WAL-seal and uncertain-completion tests do not replace those provider-specific cuts; use FLD Engine crash tests where they cover the exact same durable boundary and cite the exact test.
+- [ ] T Complete adversarial replay/rejoin coverage after actual deletion: stale DELTA_BATCH, retired transport epoch, lost ACK/replay, offline member rejoin, skipped roster/checkpoint generations, missing/lagging Active member and failed FULL_REPLACE installation. Every ambiguous proof must produce zero deletions.
+- [ ] P/A Measure retained metadata cardinality, reference-scan allocations, bounded delete throughput and restart cost on representative large namespaces. Record workload cardinalities, platform, runtime, batch size and peak memory; do not infer bounded total metadata size from passing correctness tests.
+- [ ] O Document and test the operator kill switch, restart/rollback and retention policy; run a staged canary with all three domains independently controlled. Ghost GC remains excluded.
+
+### Revised release sequence
+
+1. Close the Metadata writer-bypass boundary and field-tombstone lifecycle.
+2. Complete the async Host orchestration + read-only readiness diagnostics.
+3. Close the provider crash/replay matrix and exact cross-repository CI.
+4. Run representative scale/performance measurements and publish retention bounds.
+5. Exercise operator rollback and staged canary; only then consider a separately approved opt-in for each physical-GC domain.
+
+No physical-GC flag is enabled by this roadmap update. `EnableReceiptGc`, `EnableChangeIdGc` and `EnableTombstoneGc` remain false by default; Ghost GC remains disabled.
