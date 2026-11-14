@@ -154,6 +154,261 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
+    public async Task Async_host_adapter_compacts_receipt_and_changeid_through_real_host_gc_scan()
+    {
+        string hostRoot = Path.Combine(
+            Path.GetTempPath(), "fld-binsync-host-metadata-gc-" + Guid.NewGuid().ToString("N"));
+        string nodeRoot = Path.Combine(
+            Path.GetTempPath(), "binsync-host-metadata-gc-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x537;
+        const string scope = "fld-host-async-metadata-gc";
+        byte[] authorBytes = Id(0x65);
+        NodeId author = NodeId.From(authorBytes);
+        NodeId authority = NodeId.From(Id(0x11));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(authority, keys[0].PublicKey, TrustMode.PreShared);
+        Guid ownerId = Guid.Empty;
+        Process? host = null;
+        FldDatabaseIpcAsyncDataProvider? provider = null;
+        FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
+        byte[] recordId = FldDatabase.NewRecordId();
+        byte[] changeId = Id(0x76);
+        byte[] batchId = Id(0x73);
+        byte[] batchDigest = Id(0x75);
+
+        try
+        {
+            using (var database = FldDatabase.Open(hostRoot, namespaceId, authorBytes))
+            {
+                var mutation = new RemoteFieldWrite(
+                    recordId, 7, "metadata-gc-reference"u8.ToArray(), 100, 1,
+                    authorBytes, changeId, keyEpoch: 0, isTombstone: false,
+                    originAuthorEpoch: 8, originSequence: 9);
+                var remoteBatch = new RemoteBatchCommit(
+                    senderPeer: authority.ToArray(),
+                    senderEpoch: 1,
+                    namespaceId: checked((int)namespaceId),
+                    issuerNodeId: authorBytes,
+                    issuerEpoch: 8,
+                    batchId: batchId,
+                    cursorStart: 1,
+                    cursorEnd: 1,
+                    previousBatchDigest: new byte[16],
+                    batchDigest: batchDigest,
+                    recordsRoot: Id(0x77),
+                    writes: [mutation],
+                    relayWrites: [],
+                    protocolStateDelta: [0xA1]);
+                Assert.False(database.ApplyRemoteBatch(remoteBatch).IsDuplicate);
+                Assert.NotEqual(0UL, database.Checkpoint());
+            }
+
+            host = StartDatabaseHost(hostRoot, namespaceId, authorBytes, enableTombstoneGc: false);
+            StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
+                hostRoot, host, TimeSpan.FromSeconds(45));
+            ownerId = endpoint.OwnerId;
+            provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), author, () => 8);
+            remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRoot, Guid.NewGuid(), checked((ushort)namespaceId), TimeSpan.FromSeconds(15));
+
+            using var nodeStorage = StorageDatabase.Open(nodeRoot, 903);
+            using var metadata = new StorageMetadataStore(nodeStorage);
+            using var node = new NodeBuilder().WithNodeId(author).WithEpoch(8).Build();
+            var gc = new StorageNamespaceGcStore(
+                nodeStorage, scope, author,
+                new StorageNamespaceGcFeatureOptions(
+                    EnableReceiptGc: true, EnableChangeIdGc: true));
+
+            var roster = new NamespaceRosterCertificate
+            {
+                NamespaceId = checked((int)namespaceId),
+                RosterGeneration = 1,
+                PreviousRosterDigest = new byte[32],
+                AuthorityNodeId = authority,
+                Members =
+                [
+                    new NamespaceRosterMember
+                    {
+                        NodeId = authority,
+                        PublicKey = keys[0].PublicKey,
+                        TransportPeerEpoch = 10,
+                        Status = NamespaceMemberStatus.Active
+                    },
+                    new NamespaceRosterMember
+                    {
+                        NodeId = author,
+                        PublicKey = keys[1].PublicKey,
+                        TransportPeerEpoch = 11,
+                        Status = NamespaceMemberStatus.Active
+                    }
+                ]
+            };
+            roster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+
+            // The Metadata receipt belongs to an old transport incarnation. Its
+            // durable receive chain remains the replay fence after receipt GC.
+            metadata.RegisterInterestedPeer(scope, author, authority, 1, checked((int)namespaceId));
+            var providerMutation = new ProviderMutation
+            {
+                RecordId = RecordId.From(recordId),
+                FieldId = 7,
+                HlcWall = 100,
+                HlcLogical = 1,
+                AuthorNodeId = author,
+                KeyEpoch = 0,
+                Value = "metadata-gc-reference"u8.ToArray(),
+                ChangeId = BatchId.From(changeId),
+                OriginAuthorEpoch = 8,
+                OriginSequence = 9
+            };
+            var incoming = new MetadataIncomingBatch
+            {
+                ScopeId = scope,
+                LocalReplica = author,
+                SenderPeer = authority,
+                SenderEpoch = 8,
+                TransportPeerEpoch = 1,
+                AuthorStreamNodeId = author,
+                NamespaceId = checked((int)namespaceId),
+                BatchId = BatchId.From(batchId),
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = batchDigest,
+                HeaderFingerprint = Id(0x78),
+                Operations =
+                [
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = author,
+                        ChangeId = BatchId.From(changeId),
+                        OriginAuthorEpoch = 8,
+                        OriginSequence = 9,
+                        Fingerprint = Id(0x79),
+                        Payload = ProviderMutationCodec.Encode(providerMutation)
+                    }
+                ]
+            };
+            Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
+            metadata.RegisterInterestedPeer(scope, author, authority, 2, checked((int)namespaceId));
+            metadata.CompletePeerInitialSync(
+                scope, author, authority, 2, checked((int)namespaceId),
+                [new MetadataPeerStreamBaseline(author, 0, 8)]);
+            metadata.RetireInterestedPeer(
+                scope, author, authority, 1, 2, checked((int)namespaceId));
+
+            var report0 = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                new AppliedOriginFrontierReport
+                {
+                    NamespaceId = checked((int)namespaceId),
+                    RosterGeneration = 1,
+                    RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                    MemberNodeId = authority,
+                    MemberTransportEpoch = 10,
+                    ReportSequence = 1,
+                    Entries =
+                    [
+                        new AppliedOriginFrontierEntry
+                        {
+                            OriginAuthorNodeId = author,
+                            OriginAuthorEpoch = 8,
+                            ContiguousAppliedOriginSequence = 9
+                        }
+                    ]
+                }, keys[0].Seed), roster);
+            var report1 = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                new AppliedOriginFrontierReport
+                {
+                    NamespaceId = checked((int)namespaceId),
+                    RosterGeneration = 1,
+                    RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                    MemberNodeId = author,
+                    MemberTransportEpoch = 11,
+                    ReportSequence = 1,
+                    Entries =
+                    [
+                        new AppliedOriginFrontierEntry
+                        {
+                            OriginAuthorNodeId = author,
+                            OriginAuthorEpoch = 8,
+                            ContiguousAppliedOriginSequence = 9
+                        }
+                    ],
+                    IssuedOrigins =
+                    [
+                        new IssuedOriginFrontierEntry
+                        {
+                            OriginAuthorEpoch = 8,
+                            IssuedOriginSequence = 9,
+                            MaxIssuedHlcWall = 100,
+                            MaxIssuedHlcLogical = 1
+                        }
+                    ]
+                }, keys[1].Seed), roster);
+
+            Guid fullReplaceGeneration = Guid.Parse("12345678-1234-5678-9abc-def012345678");
+            byte[] fullReplaceDigest = SHA256.HashData("async Host metadata GC baseline"u8);
+            foreach (int memberIndex in new[] { 0, 1 })
+            {
+                NamespaceRosterMember member = roster.Members[memberIndex];
+                byte[] seed = keys[memberIndex].Seed;
+                gc.AcceptFullReplaceInstalledAck(FullReplaceInstalledAckProtocol.Sign(
+                    new FullReplaceInstalledAck
+                    {
+                        NamespaceId = checked((int)namespaceId),
+                        RosterGeneration = 1,
+                        RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                        Generation = fullReplaceGeneration,
+                        Digest = fullReplaceDigest,
+                        MemberNodeId = member.NodeId,
+                        MemberTransportEpoch = member.TransportPeerEpoch,
+                        HlcWallFloor = 100,
+                        HlcLogicalFloor = 1,
+                        Installed = true
+                    }, seed), roster);
+            }
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { report0, report1 },
+                fullReplaceGeneration, fullReplaceDigest,
+                fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 1);
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+            metadata.AttachNamespaceGcGuard(gc, trust, scope, author);
+            var coordinator = new AsyncStorageSyncCoordinator(
+                node, metadata, scope, checked((int)namespaceId));
+            var adapter = new FldBinSyncAsyncHostAdapter(
+                coordinator, provider, remoteApply, _ => { });
+
+            // The real FLD Host has a sealed ApplyJournal receipt for this batch.
+            // That is its own replay evidence, not a live reference to BIN-SYNC's
+            // receipt row. Both Metadata GC domains must therefore pass independently.
+            (int changeIds, int receipts) = await adapter.RunMetadataGcPassAsync(gc, trust, 1);
+            Assert.Equal(1, receipts);
+            Assert.Equal(1, changeIds);
+            Assert.False(metadata.TryGetChangeIdentity(
+                scope, author, checked((int)namespaceId), BatchId.From(changeId),
+                out _, out _, out _));
+        }
+        finally
+        {
+            if (remoteApply is not null)
+                await remoteApply.DisposeAsync();
+            if (provider is not null)
+                await provider.DisposeAsync();
+            if (host is not null)
+                await StopDatabaseHostAsync(host);
+            if (ownerId != Guid.Empty)
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, namespaceId, ownerId);
+            try { Directory.Delete(hostRoot, recursive: true); } catch { }
+            try { Directory.Delete(nodeRoot, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Async_coordinator_reclaims_only_signed_safe_tombstones_through_real_host_ipc()
     {
         string hostRoot = Path.Combine(Path.GetTempPath(), "fld-binsync-host-tombstone-gc-" + Guid.NewGuid().ToString("N"));
