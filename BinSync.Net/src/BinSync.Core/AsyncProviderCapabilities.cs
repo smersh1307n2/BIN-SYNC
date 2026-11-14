@@ -133,6 +133,9 @@ public interface IAsyncApplicationGcReferenceScanner
 
 public interface IAsyncApplicationGcReferenceScan : IAsyncDisposable
 {
+    /// <summary>True when any immutable provider snapshot pin can still retain the captured state.</summary>
+    bool HasSnapshotPin { get; }
+
     ValueTask<ApplicationDraftHorizon> GetUnpublishedLocalDraftHorizonAsync(
         CancellationToken cancellationToken = default);
     ValueTask<bool> HasExternalReceiptReferenceAsync(
