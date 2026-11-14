@@ -6,7 +6,7 @@
 
 **Historical pre-v3.1 baseline:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). The later `4382c49...` failure snapshot is also historical and is superseded by the exact-head validation in §10.38.
 
-This addendum is the mandatory v3.1 wire/control-plane contract for signed namespace membership, applied-origin frontiers, retention checkpoints and authoritative FULL_REPLACE. Its implementation and exact-head cross-platform tests are now complete for this scope, including the crash/uncertain-completion matrix. v3.1 frames remain explicitly negotiated; a v3.0-only session cannot contribute a GC frontier. The remaining work is operational readiness and staged opt-in review; all physical GC flags remain false.
+This addendum is the mandatory v3.1 wire/control-plane contract for signed namespace membership, applied-origin frontiers, retention checkpoints and authoritative FULL_REPLACE. Its implementation and exact-head cross-platform tests are complete for this protocol scope, including the crash/uncertain-completion matrix. v3.1 frames remain explicitly negotiated; a v3.0-only session cannot contribute a GC frontier. Physical-GC release work remains broader than the protocol scope: Metadata writer-bypass closure, reservation diagnostics, provider crash/replay proof, representative scale measurements and operator rollback/canary. All physical GC flags remain false.
 
 
 
