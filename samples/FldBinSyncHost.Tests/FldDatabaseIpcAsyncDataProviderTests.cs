@@ -1538,6 +1538,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host B must independently validate all three Active members' signed applied frontiers.");
 
+            BatchId[] tombstoneChangeIds = [BatchId.From(Id(0x94)), BatchId.From(Id(0x95))];
+
             // Compose retired-epoch receipt rollover into this same two-Host lifecycle.
             // B's old transport incarnation forwards already-known A-origin changes back
             // through its relay stream. The operation identity is unchanged; only the
@@ -1664,7 +1666,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record));
             Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record));
 
-            BatchId[] tombstoneChangeIds = [BatchId.From(Id(0x94)), BatchId.From(Id(0x95))];
             int CountTombstoneChangeIds(StorageMetadataStore metadata, NodeId local) =>
                 tombstoneChangeIds.Count(changeId => metadata.TryGetChangeIdentity(
                     scope, local, checked((int)namespaceId), changeId, out _, out _, out _));
