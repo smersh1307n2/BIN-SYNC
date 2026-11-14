@@ -671,7 +671,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(0UL, state.AckedCursor);
                 Assert.Equal(3UL, state.PushedCursor);
                 Assert.NotNull(state.PendingBatch);
-                Assert.Equal(1, store.GetGcReservationDiagnostics(scope, local, 7).OutstandingPeerReservationCount);
+                Assert.Equal(1, store.GetGcReservationDiagnostics(scope, local, 9).OutstandingPeerReservationCount);
             }
 
             using (var reopened = new StorageMetadataStore(directory, 415, deleteOnDispose: false))
@@ -690,7 +690,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(3u, state.IssuerEpoch);
                 Assert.Equal(pending.BatchDigest, state.LastBatchDigest);
                 Assert.Null(state.PendingBatch);
-                Assert.Equal(0, reopened.GetGcReservationDiagnostics(scope, local, 7).OutstandingPeerReservationCount);
+                Assert.Equal(0, reopened.GetGcReservationDiagnostics(scope, local, 9).OutstandingPeerReservationCount);
                 Assert.Throws<InvalidOperationException>(() =>
                     reopened.AcknowledgePeerBatch(scope, local, peer, 7, 9, author,
                         pending.BatchId, pending.CursorEnd, pending.BatchDigest));
