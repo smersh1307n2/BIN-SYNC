@@ -145,6 +145,8 @@ The session bootstrap validates the v3.1 dependency mask on both encode and deco
 The process-isolated sample adapter `FldBinSyncAsyncHostAdapter` exposes:
 
 - `GetGcReadinessAsync(gcStore, trustStore)`: reports the accepted signed roster/checkpoint state, FULL_REPLACE installation state, unpublished local draft horizon, provider capabilities, and independent readiness for Receipt, ChangeId and Record/Field Tombstone GC. It opens and disposes one read-only Host reference scan; it does not delete rows or change feature flags.
+- The read-only report includes `HasSnapshotPin`. Any active immutable provider snapshot pin appears as a global blocked reason for all three domains. The async Metadata compactors independently recheck this veto before candidate deletion.
+- Metadata PendingApply and pushed-but-unacknowledged peer reservations are still enforced by the exact compaction/candidate checks; separate per-domain reservation counts in the readiness report remain an open diagnostics item.
 - `RunGcMaintenanceAsync(gcStore, trustStore, limit, cancellationToken)`: executes at most one bounded page per independently enabled and globally ready domain, sequentially. Cancellation is checked between domains. Durable compaction cursors make later invocations resume safely.
 - Each result carries per-domain enablement, prerequisite status and explicit global blocked reasons, plus reclaimed counts.
 
