@@ -516,11 +516,17 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Theory]
-    [InlineData(2, 4u, 90UL)]
-    [InlineData(9, 3u, 90UL)]
-    [InlineData(2, 3u, 91UL)]
-    public async Task Async_tombstone_gc_rejects_candidate_provenance_outside_signed_frontier(
-        byte authorId, uint authorEpoch, ulong originSequence)
+    [InlineData(2, 4u, 90UL, 100UL, 2u)] // author epoch mismatch
+    [InlineData(9, 3u, 90UL, 100UL, 2u)] // unknown author
+    [InlineData(2, 3u, 91UL, 100UL, 2u)] // beyond signed safe frontier
+    [InlineData(2, 3u, 0UL, 100UL, 2u)] // zero origin sequence
+    [InlineData(0, 3u, 90UL, 100UL, 2u)] // zero author identity
+    [InlineData(2, 3u, 90UL, 101UL, 0u)] // wall clock exceeds issued/FULL_REPLACE floor
+    [InlineData(2, 3u, 90UL, 100UL, 3u)] // logical clock exceeds issued/FULL_REPLACE floor
+    [InlineData(2, 3u, 90UL, 99UL, 3u)] // wall below floor but logical over the issued maximum
+    public async Task Async_tombstone_gc_rejects_candidate_provenance_or_hlc_outside_signed_frontier(
+        byte authorId, uint authorEpoch, ulong originSequence,
+        ulong tombstoneHlcWall, uint tombstoneHlcLogical)
     {
         string directory = Path.Combine(
             Path.GetTempPath(), "binsync-tombstone-gc-provenance-" + Guid.NewGuid().ToString("N"));
@@ -556,8 +562,8 @@ public sealed class StorageNamespaceGcStoreTests
                 RecordId = RecordId.From(Id(0x55)),
                 FieldId = 7,
                 IsTombstone = true,
-                HlcWall = 100,
-                HlcLogical = 2,
+                HlcWall = tombstoneHlcWall,
+                HlcLogical = tombstoneHlcLogical,
                 AuthorNodeId = NodeId.From(Id(authorId)),
                 Value = Array.Empty<byte>(),
                 ChangeId = BatchId.From(Id(0x56)),
