@@ -1645,6 +1645,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     await adapterA.RunMetadataGcPassAsync(gcA, trust, limit: 1);
                 Assert.Equal(0, compactedChangeIds);
                 Assert.Equal(1, compactedReceipts);
+                if (page == 0)
+                {
+                    // Restart both real FLD Hosts between receipt-GC pages. The next
+                    // page must acquire fresh Host-owned scans and resume from durable
+                    // Metadata receipts rather than process-local scan state.
+                    await RestartHostAAfterGcPageAsync();
+                    await RestartHostBAfterGcPageAsync();
+                }
             }
             (int remainingChangeIds, int remainingReceipts) =
                 await adapterA.RunMetadataGcPassAsync(gcA, trust, limit: 1);
