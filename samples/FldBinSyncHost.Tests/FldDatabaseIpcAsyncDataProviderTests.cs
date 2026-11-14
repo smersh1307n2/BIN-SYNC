@@ -388,6 +388,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         SyncSession? relayInitiator = null;
         Guid ownerA = Guid.Empty;
         Guid ownerB = Guid.Empty;
+        Guid providerClientA = Guid.NewGuid();
+        Guid providerClientB = Guid.NewGuid();
         try
         {
             hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes, enableTombstoneGc: true);
@@ -407,9 +409,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             nodeB.AttachWal(walB);
 
             providerA = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
-                hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15), authorA, () => 17);
+                hostRootA, providerClientA, TimeSpan.FromSeconds(15), authorA, () => 17);
             providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
-                hostRootB, Guid.NewGuid(), TimeSpan.FromSeconds(15), authorB, () => 18);
+                hostRootB, providerClientB, TimeSpan.FromSeconds(15), authorB, () => 18);
             remoteA = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                 hostRootA, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
             remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
@@ -442,7 +444,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 ownerA = (await WaitForHostEndpointAsync(
                     hostRootA, hostA, TimeSpan.FromSeconds(45), previousOwner)).OwnerId;
                 providerA = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
-                    hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15), authorA, () => 17);
+                    hostRootA, providerClientA, TimeSpan.FromSeconds(15), authorA, () => 17);
                 remoteA = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                     hostRootA, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
                 await providerA.EnableMetadataStoreOwnedPublicationAsync(0);
@@ -465,7 +467,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 ownerB = (await WaitForHostEndpointAsync(
                     hostRootB, hostB, TimeSpan.FromSeconds(45), previousOwner)).OwnerId;
                 providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
-                    hostRootB, Guid.NewGuid(), TimeSpan.FromSeconds(15), authorB, () => 18);
+                    hostRootB, providerClientB, TimeSpan.FromSeconds(15), authorB, () => 18);
                 remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                     hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
                 await providerB.EnableMetadataStoreOwnedPublicationAsync(0);
