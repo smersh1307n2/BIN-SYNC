@@ -404,6 +404,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         {
             if (provider is not null)
                 await provider.DisposeAsync();
+            gcCancellation?.Dispose();
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
@@ -432,6 +433,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         FldDatabaseIpcAsyncDataProvider? provider = null;
         FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
         FldDatabaseIpcClient? writerClient = null;
+        CancellationTokenSource? gcCancellation = null;
         byte[] recordId = FldDatabase.NewRecordId();
         byte[] changeId = Id(0x76);
         byte[] batchId = Id(0x73);
@@ -681,17 +683,17 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // Metadata deletion, dispose the immutable scan, and release the Host
             // lease. A competing IPC writer stays blocked until that cleanup finishes.
             var cancelledScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
-            using var gcCancellation = new CancellationTokenSource();
+            gcCancellation = new CancellationTokenSource();
             Task<int> cancelledGc = coordinator.CompactChangeLedgerAsync(
                 cancelledScanner, limit: 1, cancellationToken: gcCancellation.Token);
             await cancelledScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
             Console.WriteLine("GC-CANCEL: Host reference query returned; scan is blocked in test wrapper.");
 
-            // Use an empty idempotent write request: it still traverses the Host's
-            // writer admission/commit path, but it must not create a new unpublished
-            // provider draft that would correctly veto the subsequent ChangeId-GC retry.
-            Task<FldDatabaseIpcWriteResult> blockedWriter = writerClient!.WriteBatchAsync(
-                Guid.NewGuid(), clientSequence: 1, Array.Empty<FldDatabaseIpcMutation>());
+            // A valid acknowledgement for an untracked writer-client receipt traverses
+            // Host write admission without creating a new local provider draft.
+            Console.WriteLine("GC-CANCEL: submitting valid receipt acknowledgement behind the Host lease.");
+            Task<bool> blockedWriter = writerClient!.AcknowledgeThroughAsync(1);
+            Console.WriteLine("GC-CANCEL: receipt acknowledgement request submitted.");
             await Task.Delay(100);
             Assert.False(blockedWriter.IsCompleted,
                 "A competing IPC writer must remain blocked while the cancelled GC scan still owns the Host lease.");
@@ -702,11 +704,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
                 await cancelledGc.WaitAsync(TimeSpan.FromSeconds(15)));
             Console.WriteLine("GC-CANCEL: cancelled GC finished and scan disposal returned.");
-            FldDatabaseIpcWriteResult writerResult =
-                await blockedWriter.WaitAsync(TimeSpan.FromSeconds(15));
+            bool writerAcknowledged = await blockedWriter.WaitAsync(TimeSpan.FromSeconds(15));
             Console.WriteLine("GC-CANCEL: competing writer completed after lease release.");
-            Assert.False(writerResult.IsDuplicate);
-            Assert.Equal(0, writerResult.MutationCount);
+            Assert.False(writerAcknowledged,
+                "The independent writer has no local operation receipts to acknowledge.");
             Assert.True(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _),
@@ -727,6 +728,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
         finally
         {
+            // Always release the test-only blocking scanner before disposing its owner.
+            // Otherwise an earlier assertion can strand the provider's scan gate and
+            // turn the real failure into an unbounded cleanup hang.
+            gcCancellation?.Cancel();
             if (writerClient is not null)
                 await writerClient.DisposeAsync();
             if (remoteApply is not null)
