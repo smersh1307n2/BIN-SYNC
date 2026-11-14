@@ -139,6 +139,90 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
+    public async Task Async_provider_fails_closed_when_host_rejects_gc_lease_renewal()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "fld-ipc-provider-gc-renew-fail-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x765;
+        byte[] authorBytes = Id(0x66);
+        Guid hostOwner = Guid.NewGuid();
+        using var shutdown = new CancellationTokenSource();
+        using FldDatabase database = FldDatabase.Open(root, namespaceId, authorBytes);
+        var dispatcher = new FldDatabaseIpcDispatcher(
+            database, gcLeaseIdleTimeout: TimeSpan.FromSeconds(5));
+        var renewalRejected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int rejectNextRenewal = 1;
+        async ValueTask<ReadOnlyMemory<byte>> HandleAsync(
+            StorageIpcRequestContext context, ReadOnlyMemory<byte> payload,
+            CancellationToken cancellationToken)
+        {
+            StorageIpcOperationEnvelope envelope = StorageIpcOperationProtocol.Decode(payload);
+            if (envelope.OperationCode == FldDatabaseIpcOperationCodes.RenewGcLease &&
+                Interlocked.Exchange(ref rejectNextRenewal, 0) == 1)
+            {
+                renewalRejected.TrySetResult();
+                var rejected = new StorageIpcOperationEnvelope(
+                    envelope.OperationId, envelope.OperationCode,
+                    FldDatabaseIpcProtocol.EncodeGcLeaseToken(Guid.NewGuid()));
+                return await dispatcher.HandleAsync(
+                    context, StorageIpcOperationProtocol.Encode(rejected), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            return await dispatcher.HandleAsync(context, payload, cancellationToken).ConfigureAwait(false);
+        }
+        var server = new StorageIpcServer(
+            StorageIpcEndpoint.ComputePipeName(root, 0), HandleAsync,
+            clientDisconnected: dispatcher.OnClientDisconnected);
+        Task serverTask = server.RunAsync(shutdown.Token);
+        FldDatabaseIpcAsyncDataProvider? provider = null;
+        FldDatabaseIpcClient? competingClient = null;
+        IAsyncApplicationGcReferenceScan? scan = null;
+
+        try
+        {
+            await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+            StorageIpcEndpoint.Publish(root, StorageIpcEndpoint.Create(
+                root, 0, hostOwner, Environment.ProcessId));
+            provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                root, Guid.NewGuid(), TimeSpan.FromSeconds(10),
+                NodeId.From(authorBytes), () => 1,
+                cancellationToken: default,
+                gcLeaseRenewalInterval: TimeSpan.FromMilliseconds(200));
+            competingClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                root, Guid.NewGuid(), TimeSpan.FromSeconds(10));
+            scan = await provider.OpenScanAsync(
+                "lease-renewal-failure", NodeId.From(authorBytes), checked((int)namespaceId));
+            Task<byte[]> blockedReader = competingClient.GetLocalAuthorAsync();
+
+            await renewalRejected.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.ThrowsAsync<IOException>(async () =>
+                await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x67))));
+
+            // A rejected heartbeat makes the immutable scan unusable. Disposal still
+            // releases the snapshot and lease; the waiting Host operation then proceeds.
+            await scan.DisposeAsync();
+            scan = null;
+            Assert.Equal(authorBytes, await blockedReader.WaitAsync(TimeSpan.FromSeconds(5)));
+        }
+        finally
+        {
+            if (scan is not null)
+            {
+                try { await scan.DisposeAsync(); } catch { }
+            }
+            if (competingClient is not null)
+                await competingClient.DisposeAsync();
+            if (provider is not null)
+                await provider.DisposeAsync();
+            shutdown.Cancel();
+            try { await serverTask.WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+            StorageIpcEndpoint.DeleteIfOwned(root, 0, hostOwner);
+            dispatcher.Dispose();
+        }
+
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+
+    [Fact]
     public async Task Async_provider_renews_host_gc_lease_during_long_lived_reference_scan()
     {
         string root = Path.Combine(Path.GetTempPath(), "fld-ipc-provider-gc-renew-" + Guid.NewGuid().ToString("N"));
