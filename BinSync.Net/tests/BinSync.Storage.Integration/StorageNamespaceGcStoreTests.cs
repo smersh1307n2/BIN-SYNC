@@ -2299,3 +2299,97 @@ public sealed class StorageNamespaceGcStoreTests
 
 
 }
+
+    [Theory]
+    [InlineData("missing-roster")]
+    [InlineData("missing-frontier")]
+    [InlineData("missing-checkpoint")]
+    [InlineData("missing-install-ack")]
+    [InlineData("invalid-checkpoint-signature")]
+    public async Task Async_tombstone_gc_fails_closed_before_provider_scan_without_complete_signed_evidence(
+        string evidenceGap)
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-async-tombstone-gc-evidence-" + evidenceGap + "-" + Guid.NewGuid().ToString("N"));
+        const string scope = "async-tombstone-gc-evidence";
+        const int namespaceId = 19;
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 912);
+            using var metadata = new StorageMetadataStore(storage);
+            using var node = new NodeBuilder().WithNodeId(Id(0x99)).WithEpoch(1).Build();
+            var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+            var trust = new TrustStore();
+            trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+            var gc = new StorageNamespaceGcStore(
+                storage, scope, node.NodeId,
+                new StorageNamespaceGcFeatureOptions(EnableTombstoneGc: true));
+
+            Guid generation = Guid.Parse("32345678-1234-5678-9abc-def012345678");
+            byte[] replaceDigest = SHA256.HashData(Encoding.UTF8.GetBytes("incomplete signed GC evidence"));
+            if (evidenceGap != "missing-roster")
+            {
+                var roster = gc.AcceptNamespaceRoster(
+                    NamespaceRosterProtocol.Sign(Roster(1, new byte[32], keys), keys[0].Seed), trust);
+                var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+                AppliedOriginFrontierReport? report1 = null;
+                if (evidenceGap != "missing-frontier")
+                    report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+
+                if (report1 is not null)
+                {
+                    gc.AcceptFullReplaceInstalledAck(
+                        SignedAck(roster, 0, keys, generation, replaceDigest), roster);
+                    if (evidenceGap != "missing-install-ack")
+                        gc.AcceptFullReplaceInstalledAck(
+                            SignedAck(roster, 1, keys, generation, replaceDigest), roster);
+
+                    if (evidenceGap is "missing-install-ack" or "invalid-checkpoint-signature")
+                    {
+                        var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                            roster, 1, new byte[32], new[] { report0, report1 }, generation, replaceDigest,
+                            fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 2);
+                        byte[] signedCheckpoint =
+                            NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed);
+                        if (evidenceGap == "invalid-checkpoint-signature")
+                        {
+                            signedCheckpoint[^1] ^= 0x80;
+                            Assert.Throws<InvalidDataException>(() =>
+                                gc.AcceptRetentionCheckpoint(signedCheckpoint, roster, trust));
+                        }
+                        else
+                        {
+                            Assert.Throws<InvalidDataException>(() =>
+                                gc.AcceptRetentionCheckpoint(signedCheckpoint, roster, trust));
+                        }
+                    }
+                }
+            }
+
+            var candidate = new ProviderMutation
+            {
+                RecordId = RecordId.From(Id(0xA1)),
+                FieldId = 7,
+                IsTombstone = true,
+                HlcWall = 100,
+                HlcLogical = 2,
+                AuthorNodeId = NodeId.From(Id(2)),
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(Id(0xA2)),
+                OriginAuthorEpoch = 3,
+                OriginSequence = 90
+            };
+            var provider = new RecordingTombstoneGc(new[] { candidate });
+            var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, namespaceId);
+            coordinator.AttachNamespaceGcGuard(gc, trust);
+
+            Assert.Equal(0, await coordinator.CompactTombstonesAsync(provider, 16));
+            Assert.Equal(0, provider.ReadCalls);
+            Assert.Equal(0, provider.CompactCalls);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
