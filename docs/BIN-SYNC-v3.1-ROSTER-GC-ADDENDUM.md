@@ -1,14 +1,14 @@
 # BIN-SYNC v3.1 Addendum — Signed Namespace Roster and Safe GC
 
-**Status (2026-11-14):** mandatory v3.1 project extension. Signed namespace roster (NRS2), member origin frontiers (OFR2), retention checkpoints (RCP2), FULL_REPLACE transfer and installed acknowledgements (FRA2), durable Storage state, coordinator APIs and FLD Host reference-scan integration are implemented. Exact code HEAD `7a26828beafcb1e92198d8f997e08256070d05b5` passed BIN-SYNC CI (6/6 jobs) and FLD Storage Integration (3/3 jobs): .NET tests 686/686 on Linux and Windows, FLD Host integration 34/34 on Linux and Windows, signed v3.1 vectors, Fuzz + Lab, and durable-provider integration on Ubuntu, Windows and macOS 15. This is a validated implementation checkpoint, not release or production-GC authorization. Host transport creation/reconnect/disposal remain application-owned; release-level crash/uncertain-IPC coverage, final byte/API audit and staged operational enablement review remain open. All physical GC flags remain false.
+**Status (2026-11-14):** mandatory v3.1 project extension. Signed namespace roster (NRS2), member origin frontiers (OFR2), retention checkpoints (RCP2), FULL_REPLACE transfer and installed acknowledgements (FRA2), durable Storage state, coordinator APIs and FLD Host reference-scan integration are implemented. Exact code HEAD `93fed52445a5328ef4340916897aa190a90accf7` passed two independent BIN-SYNC CI runs (`43612231242`, `43612238417`, 6/6 jobs each) and two FLD Storage Integration runs (`43612231211`, `43612238406`, 3/3 jobs each). Linux/Windows .NET suites passed 686/686; `FldBinSyncHost.Tests` passed 35/35 on Linux and Windows; signed v3.1 vectors and Fuzz + Lab passed; Linux line coverage was 68.7%. This is a validated implementation checkpoint, not production-GC authorization. Host transport creation/reconnect/disposal remain application-owned. The crash/uncertain-completion matrix is now covered; the remaining release gate is diagnostics/readiness, final byte/API audit, independent flag configuration, operational disable/rollback, retention policy and staged canary. All physical GC flags remain false.
 
-**Last green pre-v3.1 baseline:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). This is historical, not current-head validation. The latest completed code-equivalent run on `4382c49bffe1608ebabc4a483771b83242cbc81d` built successfully: Core 672/678 (six fixture failures), Storage Integration 91/171 (80 stale provider-contract failures), Fuzz/Lab passed. Commits after that baseline have not been built/tested.
+**Historical pre-v3.1 baseline:** `c56d2e206d0c8578cbfe66158d6e6f1e0824750c` (Core 676/676, Fuzz/Lab passed, Storage Integration passed on Ubuntu/Windows/macOS). The later `4382c49...` failure snapshot is also historical and is superseded by the exact-head validation in §10.38.
 
-This addendum is the mandatory v3.1 wire/control-plane contract for signed namespace membership, applied-origin frontiers, retention checkpoints and authoritative FULL_REPLACE. Its implementation is now substantially present and tested, but it does not itself authorize physical reclamation. v3.1 frames remain explicitly negotiated; a v3.0-only session cannot contribute a GC frontier. All physical GC flags remain false until the remaining crash/uncertain-IPC matrix and staged enablement review are complete.
+This addendum is the mandatory v3.1 wire/control-plane contract for signed namespace membership, applied-origin frontiers, retention checkpoints and authoritative FULL_REPLACE. Its implementation and exact-head cross-platform tests are now complete for this scope, including the crash/uncertain-completion matrix. v3.1 frames remain explicitly negotiated; a v3.0-only session cannot contribute a GC frontier. The remaining work is operational readiness and staged opt-in review; all physical GC flags remain false.
 
 
 
-**Deterministic vectors:** `docs/BIN-SYNC-v3.1-GOLDEN-VECTORS.md` now records NRS2, OFR2, RCP2, FRA2 and FULL_REPLACE_BEGIN payload/signature vectors using a public-only test key. Exact C# encoder/decoder cross-check and negative tamper vectors remain Phase T; these vectors do not enable physical GC.
+**Deterministic vectors:** `docs/BIN-SYNC-v3.1-GOLDEN-VECTORS.md` records NRS2, OFR2, RCP2, FRA2 and FULL_REPLACE_BEGIN payload/signature vectors using a public-only test key. C# encoder/decoder conformance and negative tamper vectors pass the exact-head CI; these vectors do not enable physical GC.
 
 ## 1. Problem and invariants
 
@@ -24,7 +24,7 @@ The v3.1 implementation now contains the required signed namespace-GC control pl
 - asynchronous Host-owned immutable reference scans, cross-process lease/heartbeat and final Host revalidation;
 - independent receipt, ChangeId and tombstone compaction paths behind default-off feature flags.
 
-The implementation is not yet production-GC enabled. The remaining release gate is the complete Host-death/uncertain-IPC crash matrix, repeated exact-head CI, and operational review of independent flags, rollback, diagnostics and retention. Ghost reclamation remains disabled until its own lifecycle proof is complete.
+The implementation is not yet production-GC enabled. The Host-death/uncertain-IPC crash matrix and repeated exact-head CI are complete; the remaining release gate is operational review of readiness diagnostics, independent flags, rollback, retention and staged rollout. Ghost reclamation remains disabled until its own lifecycle proof is complete.
 
 The following remain hard rules:
 
@@ -48,7 +48,7 @@ No authority key is learned from the roster certificate itself. No automatic TOF
 
 The current HELLO payload layout remains unchanged. The v3.1 extension is explicitly negotiated through new capability bits; a peer sends no v3.1 frame unless the relevant capability is present in the peer's negotiated capability set.
 
-Proposed additions to `SessionCapabilities`:
+Implemented additions to `SessionCapabilities`:
 
 | Capability | Bit | Enables |
 |---|---:|---|
@@ -583,7 +583,7 @@ At COMMIT, the host adapter re-reads the staged Runs, reconstructs the exact can
 This implementation is a C-pass source milestone only. Required T-pass coverage includes exact cross-repository build, lifecycle/field tombstone round-trip, digest mismatch, page ordering/retry, Run v1/v2 provenance, crash cuts around every Run/state/manifest boundary, concurrent writer fencing, snapshot pin retention, namespace isolation and bounded abort/reopen. No build/test result is claimed. All physical receipt, ChangeId and tombstone/Ghost GC flags remain false.
 
 
-## 10.37. Two-Host Receipt/ChangeId/tombstone composition and exact-head validation — 2026-11-14
+## 10.37. Two-Host Receipt/ChangeId/tombstone composition and exact-head validation — 2026-11-14 (historical checkpoint; superseded by §10.38)
 
 - [x T] The real two-FLD-Host scenario `FldDatabaseIpcAsyncDataProviderTests.Async_two_host_signed_gc_waits_for_peer_acks_then_reclaims_tombstone_on_both_hosts` now composes signed B retirement/rejoin at a strictly newer transport epoch, FULL_REPLACE baseline continuity, Receipt GC, ChangeId GC, physical tombstone pages and Host restart.
 - [x T] The test distinguishes origin `SenderEpoch=17` from B's old/new authenticated `TransportPeerEpoch` (18/19). The receive cursor/digest chain continues across the transport incarnation; the new FULL_REPLACE baseline preserves A's outbound cursor through sequence 2.
@@ -592,5 +592,17 @@ This implementation is a C-pass source milestone only. Required T-pass coverage 
 - [x CI] Exact BIN-SYNC code HEAD `7a26828beafcb1e92198d8f997e08256070d05b5`: `BinSync.Net` run `43609820952` passed 6/6 jobs. Linux and Windows .NET suites passed 686/686; FLD Core/Storage/Manifest/Run/WAL/Engine passed; `FldBinSyncHost.Tests` passed 34/34 on both Linux and Windows; signed v3.1 vectors and Fuzz + Lab passed.
 - [x CI] Exact same code HEAD: FLD Storage Integration run `43609820962` passed all three durable-provider jobs on Ubuntu, Windows and macOS 15.
 - [!] Scope: the retiring-epoch receipt chain and pushed-reservation lost-ACK cut are injected at the durable Metadata boundary to isolate those state machines. The two FLD Hosts and A→B/B→relay SyncSession data/tombstone path are real. Separate real-Host tests cover ApplyJournal/WAL receipt references, Host scan/lease writer exclusion, heartbeat drain, cancellation and snapshot pins.
-- [ ] Remaining before production opt-in: complete Host death/uncertain-IPC cuts at scan, WAL seal, provider deletion and Metadata commit; repeat exact-head CI; review independent feature flags, operational disable/rollback, diagnostics and retention policy.
+- [!] At this earlier checkpoint, Host crash/uncertain-completion coverage and repeated exact-head validation were still open; §10.38 records their closure and the remaining operational gate.
 - [!] No wire layout changed in this validation update. `EnableReceiptGc`, `EnableChangeIdGc` and `EnableTombstoneGc` remain false by default; Ghost GC remains disabled.
+
+
+## 10.38. Crash matrix closure and exact-head validation — 2026-11-14
+
+- [x T] Host A is killed while its GC reference scan/lease is active and a second IPC session is blocked. The blocked request fails; after restart on the same FLD database, startup recovery and a fresh non-owner request succeed, and Receipt-GC pages resume.
+- [x T] WAL-seal-before-delete cut: the committed tombstone and Outbox acknowledgement are checkpointed; the database is closed/reopened before physical deletion. The tombstone remains, the unsealed-WAL Receipt barrier is cleared, and a later bounded tombstone-GC page reclaims it.
+- [x T] Metadata uncertain completion: a bounded ChangeId-GC page commits, then the caller-visible result is replaced by an injected IOException. The persisted cursor and deletion survive reopen; compaction resumes without repeating or resurrecting the page.
+- [x T] Existing Host-death cuts before candidate enumeration and after durable provider deletion, plus cancellation, heartbeat, snapshot pin, lease expiry and writer-exclusion tests, remain green.
+- [x CI] Exact BIN-SYNC HEAD `93fed52445a5328ef4340916897aa190a90accf7`: BinSync.Net runs `43612231242` and `43612238417` passed all six jobs; Linux/Windows .NET suites passed 686/686, FLD Host tests passed 35/35 on both platforms, signed v3.1 vectors and Fuzz + Lab passed.
+- [x CI] Exact same HEAD: FLD Storage Integration runs `43612231211` and `43612238406` passed all three durable-provider jobs on Ubuntu, Windows and macOS 15.
+- [!] The WAL-seal cut closes/reopens after a completed durable checkpoint and before deletion; lower-level torn-WAL/checkpoint recovery remains covered by the FLD WAL/Engine crash tests. No wire-format change was made.
+- [ ] Remaining release gate: read-only readiness diagnostics, operator-visible blocked reasons, independent feature-flag configuration, disable/rollback procedure, retention policy and staged canary. `EnableReceiptGc`, `EnableChangeIdGc` and `EnableTombstoneGc` remain false by default; Ghost GC remains disabled.
