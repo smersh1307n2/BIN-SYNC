@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 // Wire payloads for session bootstrap: HELLO, HELLO_ACK, ALIAS_MAP (§12.7+, §4.3–4.4).
 namespace BinSync;
 
@@ -9,8 +10,16 @@ public enum SessionCapabilities : uint
     None = 0,
     /// <summary>§12.24.4 — FieldWrite carries full 16-byte author instead of origin u16.</summary>
     FullAuthorId = 1 << 0,
-    /// <summary>§3.6.2 — peer will honor WINDOW_UPDATE on this transport.</summary>
+    /// <summary>§3.6.3 — peer will honor WINDOW_UPDATE on this transport.</summary>
     FlowControl = 1 << 1,
+    /// <summary>§4.3/§12.7 — peer supports correlated live ALIAS_MAP updates after HELLO.</summary>
+    IncrementalAliasMap = 1 << 2,
+    /// <summary>v3.1 — signed namespace roster certificate exchange.</summary>
+    NamespaceRosterV31 = 1 << 3,
+    /// <summary>v3.1 — signed applied-origin frontiers and retention checkpoints.</summary>
+    OriginFrontierV31 = 1 << 4,
+    /// <summary>v3.1 — authoritative FULL_REPLACE transfer and installed ACK.</summary>
+    FullReplaceV31 = 1 << 5,
 }
 
 /// <summary>struct: struct.</summary>
@@ -23,10 +32,12 @@ public readonly record struct AliasMapEntry(
 
 /// <summary>
 /// Encode / decode session-control payloads. Frame types: HELLO=0x01, HELLO_ACK=0x02,
-/// ALIAS_MAP=0x03, ERROR=0x0D. Control plane uses <c>streamId = 0</c> (§3.7).
+/// ALIAS_MAP=0x03, ERROR=0x0D, WINDOW_UPDATE=0x0E. Control plane uses <c>streamId = 0</c> (§3.7).
 /// </summary>
 public static class SessionWire
 {
+    /// <summary>The only accepted BIN-SYNC protocol major for this v3 clean cut.</summary>
+    public const ushort ProtocolMajor = 3;
     /// <summary>Control message type: HELLO.</summary>
     public const byte TypeHello = 0x01;
     /// <summary>Constant type hello ack.</summary>
@@ -38,14 +49,36 @@ public static class SessionWire
     /// <summary>Stream id reserved for session control messages (0).</summary>
     public const uint ControlStreamId = 0;
 
+    /// <summary>Encode a positive WINDOW_UPDATE credit amount as one LE u32.</summary>
+    public static byte[] EncodeWindowUpdate(uint credits)
+    {
+        if (credits == 0) throw new ArgumentOutOfRangeException(nameof(credits));
+        byte[] payload = new byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32LittleEndian(payload, credits);
+        return payload;
+    }
+
+    /// <summary>Decode the canonical four-byte positive WINDOW_UPDATE payload.</summary>
+    public static bool TryDecodeWindowUpdate(ReadOnlySpan<byte> payload, out uint credits)
+    {
+        if (payload.Length != sizeof(uint))
+        {
+            credits = 0;
+            return false;
+        }
+        credits = BinaryPrimitives.ReadUInt32LittleEndian(payload);
+        return credits != 0;
+    }
+
     /// <summary>Encode hello into canonical wire bytes.</summary>
     public static byte[] EncodeHello(HelloPayload h)
     {
+        ValidateCapabilitiesForEncoding(h.Capabilities);
         var rented = ArrayPool<byte>.Shared.Rent(48);
         try
         {
             var w = new Writer(rented);
-            w.B128(h.NodeId).U32((uint)h.Epoch).U32((uint)h.Capabilities);
+            w.B128(h.NodeId).U32((uint)h.Epoch).U16(ProtocolMajor).U32((uint)h.Capabilities);
             return FrameCodec.BuildFrame(TypeHello, ControlStreamId, 1, w.WrittenSpan);
         }
         finally
@@ -55,23 +88,71 @@ public static class SessionWire
     }
 
     /// <summary>Decode hello from canonical wire bytes.</summary>
-    public static HelloPayload DecodeHello(byte[] frameBytes)
+    public static HelloPayload DecodeHello(byte[] frameBytes) => DecodeHelloPayload(frameBytes, TypeHello);
+
+    /// <summary>Decode HELLO_ACK; HELLO and HELLO_ACK are not interchangeable.</summary>
+    public static HelloPayload DecodeHelloAck(byte[] frameBytes) => DecodeHelloPayload(frameBytes, TypeHelloAck);
+
+    private static HelloPayload DecodeHelloPayload(byte[] frameBytes, byte expectedType)
     {
-        var (frame, _) = FrameCodec.ParseFrame(frameBytes);
-        if (frame.FrameType is not TypeHello and not TypeHelloAck)
+        var frame = ParseControlFrame(frameBytes, expectedType);
+        if (frame.Payload.Length != 26)
             throw new FrameException("FRAME_REJECTED");
         var r = new Reader(frame.Payload);
-        return new HelloPayload(NodeId.From(r.B128()), (int)r.U32(), (SessionCapabilities)r.U32());
+        var nodeId = NodeId.From(r.B128());
+        uint epoch = r.U32();
+        ushort protocolMajor = r.U16();
+        uint capabilities = r.U32();
+        if (protocolMajor != ProtocolMajor)
+            throw new FrameException("FRAME_REJECTED");
+        if (epoch > int.MaxValue)
+            throw new FrameException("FRAME_REJECTED");
+        var decodedCapabilities = (SessionCapabilities)capabilities;
+        ValidateCapabilitiesFromWire(decodedCapabilities);
+        return new HelloPayload(nodeId, (int)epoch, decodedCapabilities);
+    }
+
+    private static void ValidateCapabilitiesForEncoding(SessionCapabilities capabilities)
+    {
+        SessionCapabilities rosterDependent =
+            SessionCapabilities.OriginFrontierV31 | SessionCapabilities.FullReplaceV31;
+        if ((capabilities & rosterDependent) != 0 &&
+            (capabilities & SessionCapabilities.NamespaceRosterV31) == 0)
+            throw new ArgumentException(
+                "OFR2/RCP2 and FULL_REPLACE capabilities require NamespaceRosterV31.",
+                nameof(capabilities));
+    }
+
+    private static void ValidateCapabilitiesFromWire(SessionCapabilities capabilities)
+    {
+        SessionCapabilities rosterDependent =
+            SessionCapabilities.OriginFrontierV31 | SessionCapabilities.FullReplaceV31;
+        if ((capabilities & rosterDependent) != 0 &&
+            (capabilities & SessionCapabilities.NamespaceRosterV31) == 0)
+            throw new FrameException("FRAME_REJECTED");
+    }
+
+    private static Frame ParseControlFrame(byte[] frameBytes, byte expectedType)
+    {
+        if (frameBytes is null || frameBytes.Length < Frames.HEADER_SIZE ||
+            frameBytes[2] != Frames.VERSION)
+            throw new FrameException("FRAME_REJECTED");
+        var (frame, consumed) = FrameCodec.ParseFrame(frameBytes);
+        if (consumed != frameBytes.Length || frame.FrameType != expectedType ||
+            frame.StreamId != ControlStreamId || frame.Flags != 0)
+            throw new FrameException("FRAME_REJECTED");
+        return frame;
     }
 
     /// <summary>Encode hello ack into canonical wire bytes.</summary>
     public static byte[] EncodeHelloAck(HelloPayload h)
     {
+        ValidateCapabilitiesForEncoding(h.Capabilities);
         var rented = ArrayPool<byte>.Shared.Rent(48);
         try
         {
             var w = new Writer(rented);
-            w.B128(h.NodeId).U32((uint)h.Epoch).U32((uint)h.Capabilities);
+            w.B128(h.NodeId).U32((uint)h.Epoch).U16(ProtocolMajor).U32((uint)h.Capabilities);
             return FrameCodec.BuildFrame(TypeHelloAck, ControlStreamId, 2, w.WrittenSpan);
         }
         finally
@@ -102,15 +183,120 @@ public static class SessionWire
     /// <summary>Decode alias map from canonical wire bytes.</summary>
     public static List<AliasMapEntry> DecodeAliasMap(byte[] frameBytes)
     {
-        var (frame, _) = FrameCodec.ParseFrame(frameBytes);
-        if (frame.FrameType != TypeAliasMap)
-            throw new FrameException("FRAME_REJECTED");
+        var frame = ParseControlFrame(frameBytes, TypeAliasMap);
         var r = new Reader(frame.Payload);
-        int n = (int)r.Varint();
+        ulong count = r.Varint();
+        // Each entry is exactly 22 bytes: alias u16, nodeId b128, epoch u32.
+        if (count > ushort.MaxValue || count > (ulong)(r.Remaining / 22))
+            throw new FrameException("FRAME_REJECTED");
+        int n = (int)count;
         var list = new List<AliasMapEntry>(n);
+        var aliases = new HashSet<ushort>();
+        var nodes = new HashSet<NodeId>();
         for (int i = 0; i < n; i++)
-            list.Add(new AliasMapEntry(r.U16(), NodeId.From(r.B128()), (int)r.U32()));
+        {
+            ushort alias = r.U16();
+            var nodeId = NodeId.From(r.B128());
+            uint epoch = r.U32();
+            if (alias == 0 || epoch > int.MaxValue ||
+                !aliases.Add(alias) || !nodes.Add(nodeId))
+                throw new FrameException("FRAME_REJECTED");
+            list.Add(new AliasMapEntry(alias, nodeId, (int)epoch));
+        }
+        if (r.Remaining != 0)
+            throw new FrameException("FRAME_REJECTED");
         return list;
+    }
+
+    private const byte AliasMapUpdateMagic = 0xA7;
+    private const byte AliasMapUpdateRequest = 1;
+    private const byte AliasMapUpdateResponse = 2;
+
+    internal readonly record struct AliasMapUpdate(
+        uint RequestId, bool IsResponse, bool Accepted, AliasMapEntry Entry);
+
+    /// <summary>
+    /// Encode one established-session ALIAS_MAP proposal. The receiver applies the
+    /// entry atomically and replies with the same request id and negotiated entry.
+    /// </summary>
+    internal static byte[] EncodeAliasMapUpdateRequest(uint requestId, AliasMapEntry entry)
+        => EncodeAliasMapUpdate(requestId, AliasMapUpdateRequest, accepted: true, entry);
+
+    internal static byte[] EncodeAliasMapUpdateResponse(
+        uint requestId, bool accepted, AliasMapEntry entry = default)
+        => EncodeAliasMapUpdate(requestId, AliasMapUpdateResponse, accepted, entry);
+
+    private static byte[] EncodeAliasMapUpdate(
+        uint requestId, byte kind, bool accepted, AliasMapEntry entry)
+    {
+        if (requestId == 0) throw new ArgumentOutOfRangeException(nameof(requestId));
+        bool hasEntry = kind == AliasMapUpdateRequest || accepted;
+        if (hasEntry && (entry.Alias == 0 || entry.NodeId.IsZero || entry.Epoch < 0))
+            throw new ArgumentException("Invalid incremental alias binding.", nameof(entry));
+
+        byte[] payload = new byte[6 + (kind == AliasMapUpdateResponse ? 1 : 0) + 1 + (hasEntry ? 22 : 0)];
+        payload[0] = AliasMapUpdateMagic;
+        payload[1] = kind;
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(2), requestId);
+        int offset = 6;
+        if (kind == AliasMapUpdateResponse)
+            payload[offset++] = accepted ? (byte)0 : (byte)1;
+        payload[offset++] = hasEntry ? (byte)1 : (byte)0;
+        if (hasEntry)
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(offset), entry.Alias);
+            offset += 2;
+            entry.NodeId.WriteTo(payload.AsSpan(offset));
+            offset += 16;
+            BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(offset), checked((uint)entry.Epoch));
+            offset += 4;
+        }
+        return FrameCodec.BuildFrame(TypeAliasMap, ControlStreamId, 3, payload);
+    }
+
+    /// <summary>Decode an established-session incremental ALIAS_MAP request or response.</summary>
+    internal static AliasMapUpdate DecodeAliasMapUpdate(byte[] frameBytes)
+    {
+        var frame = ParseControlFrame(frameBytes, TypeAliasMap);
+        ReadOnlySpan<byte> payload = frame.Payload;
+        if (payload.Length < 8 || payload[0] != AliasMapUpdateMagic ||
+            payload[1] is not (AliasMapUpdateRequest or AliasMapUpdateResponse))
+            throw new FrameException("FRAME_REJECTED");
+
+        byte kind = payload[1];
+        uint requestId = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(2, 4));
+        if (requestId == 0) throw new FrameException("FRAME_REJECTED");
+        int offset = 6;
+        bool accepted = true;
+        if (kind == AliasMapUpdateResponse)
+        {
+            if (offset >= payload.Length || payload[offset] > 1)
+                throw new FrameException("FRAME_REJECTED");
+            accepted = payload[offset++] == 0;
+        }
+
+        if (offset >= payload.Length) throw new FrameException("FRAME_REJECTED");
+        byte count = payload[offset++];
+        if (count > 1 || (kind == AliasMapUpdateRequest && count != 1) ||
+            (kind == AliasMapUpdateResponse && accepted != (count == 1)))
+            throw new FrameException("FRAME_REJECTED");
+
+        AliasMapEntry entry = default;
+        if (count == 1)
+        {
+            if (payload.Length - offset != 22) throw new FrameException("FRAME_REJECTED");
+            ushort alias = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(offset, 2));
+            offset += 2;
+            NodeId nodeId = NodeId.From(payload.Slice(offset, 16));
+            offset += 16;
+            uint epoch = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(offset, 4));
+            offset += 4;
+            if (alias == 0 || nodeId.IsZero || epoch > int.MaxValue)
+                throw new FrameException("FRAME_REJECTED");
+            entry = new AliasMapEntry(alias, nodeId, (int)epoch);
+        }
+        if (offset != payload.Length) throw new FrameException("FRAME_REJECTED");
+        return new AliasMapUpdate(requestId, kind == AliasMapUpdateResponse, accepted, entry);
     }
 
     /// <summary>Encode error into canonical wire bytes.</summary>
@@ -138,8 +324,7 @@ public static class SessionWire
     /// </summary>
     public static void ApplyAliasMap(Node local, NodeId peerNodeId, IReadOnlyList<AliasMapEntry> entries)
     {
-        foreach (var e in entries)
-            local.RegisterAlias(peerNodeId, e.Alias, e.NodeId, e.Epoch);
+        local.ApplyAliasMapAtomic(peerNodeId, entries);
     }
 
     /// <summary>
@@ -154,7 +339,7 @@ public static class SessionWire
             [local.NodeId] = local.Epoch,
             [peerNodeId] = peerEpoch,
         };
-        foreach (var (nid, ep) in local.DurableAuthors)
+        foreach (var (nid, ep) in local.DurableAuthorsSnapshot())
             if (!authors.ContainsKey(nid)) authors[nid] = ep;
 
         var ordered = authors.OrderBy(kv => kv.Key.ToString()).ToList();
@@ -180,10 +365,8 @@ public static class SessionWire
     }
 
     /// <summary>
-    /// Two-node in-process handshake over <see cref="ISyncTransport"/> pairs:
-    /// HELLO ↔ HELLO_ACK, then mutual ALIAS_MAP, then register session epochs.
-    /// Does not replace <see cref="Transport.MakeSession"/> for unit tests; this is the
-    /// byte-level path production hosts should use.
+    /// Two-node in-process handshake helper for loopback/test setups. Production
+    /// transport hosts should use <see cref="SyncSession.EstablishAsync"/>.
     /// </summary>
     public static async Task HandshakeAsync(
         Node local, ISyncTransport toPeer,
@@ -191,35 +374,60 @@ public static class SessionWire
         SessionCapabilities caps = SessionCapabilities.None,
         CancellationToken ct = default)
     {
-        await toPeer.SendAsync(EncodeHello(new HelloPayload(local.NodeId, local.Epoch, caps)), ct)
-            .ConfigureAwait(false);
-        var helloAb = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("peer closed during HELLO");
-        var remoteHello = DecodeHello(helloAb);
-        remote.RegisterSessionEpoch(local.NodeId, local.Epoch);
-        local.RegisterSessionEpoch(remote.NodeId, remoteHello.Epoch);
+        ArgumentNullException.ThrowIfNull(local);
+        ArgumentNullException.ThrowIfNull(remote);
+        ArgumentNullException.ThrowIfNull(toPeer);
+        ArgumentNullException.ThrowIfNull(toLocal);
+        local.ValidateSessionEpoch(remote.NodeId, remote.Epoch);
+        remote.ValidateSessionEpoch(local.NodeId, local.Epoch);
+        SyncSession.EnsureHandshakeRole(local.NodeId, remote.NodeId, initiator: true);
 
-        await toLocal.SendAsync(EncodeHelloAck(new HelloPayload(remote.NodeId, remote.Epoch, caps)), ct)
-            .ConfigureAwait(false);
-        var ackBa = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("peer closed during HELLO_ACK");
-        _ = DecodeHello(ackBa);
+        IDisposable? localLease = null;
+        IDisposable? remoteLease = null;
+        try
+        {
+            // Acquire in protocol-role order (lower NodeId first) to match the
+            // transport-independent session path and prevent lock-order inversion.
+            localLease = await PeerSessionLease.AcquireAsync(local, remote.NodeId, ct).ConfigureAwait(false);
+            remoteLease = await PeerSessionLease.AcquireAsync(remote, local.NodeId, ct).ConfigureAwait(false);
 
-        var table = BuildAliasMapTable(local, remote.NodeId, remote.Epoch);
-        var mapFrame = EncodeAliasMap(table);
-        await toPeer.SendAsync(mapFrame, ct).ConfigureAwait(false);
-        await toLocal.SendAsync(mapFrame, ct).ConfigureAwait(false);
+            await toPeer.SendAsync(EncodeHello(new HelloPayload(local.NodeId, local.Epoch, caps)), ct)
+                .ConfigureAwait(false);
+            var helloBytes = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during HELLO");
+            var remoteHello = DecodeHello(helloBytes);
+            if (remoteHello.NodeId != local.NodeId || remoteHello.Epoch != local.Epoch)
+                throw new FrameException("FRAME_REJECTED");
 
-        var mapOnLocal = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("peer closed during ALIAS_MAP");
-        var mapOnRemote = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
-            ?? throw new InvalidOperationException("peer closed during ALIAS_MAP");
-        ApplyAliasMap(local, remote.NodeId, DecodeAliasMap(mapOnLocal));
-        ApplyAliasMap(remote, local.NodeId, DecodeAliasMap(mapOnRemote));
+            await toLocal.SendAsync(EncodeHelloAck(new HelloPayload(remote.NodeId, remote.Epoch, caps)), ct)
+                .ConfigureAwait(false);
+            var ackBytes = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during HELLO_ACK");
+            var ack = DecodeHelloAck(ackBytes);
+            if (ack.NodeId != remote.NodeId || ack.Epoch != remote.Epoch)
+                throw new FrameException("FRAME_REJECTED");
 
-        local.PeersByNid ??= new Dictionary<NodeId, Node>();
-        remote.PeersByNid ??= new Dictionary<NodeId, Node>();
-        local.PeersByNid[remote.NodeId] = remote;
-        remote.PeersByNid[local.NodeId] = local;
+            var proposal = BuildAliasMapTable(local, remote.NodeId, remote.Epoch);
+            await toPeer.SendAsync(EncodeAliasMap(proposal), ct).ConfigureAwait(false);
+            var proposalBytes = await toLocal.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during ALIAS_MAP");
+            var remoteProposal = DecodeAliasMap(proposalBytes);
+            var negotiated = SyncSession.MergeAliasMap(remote, local.NodeId, local.Epoch, remoteProposal);
+
+            await toLocal.SendAsync(EncodeAliasMap(negotiated), ct).ConfigureAwait(false);
+            var negotiatedBytes = await toPeer.ReceiveAsync(ct).ConfigureAwait(false)
+                ?? throw new IOException("peer closed during negotiated ALIAS_MAP");
+            var localMap = DecodeAliasMap(negotiatedBytes);
+
+            local.CommitSession(remote.NodeId, remoteHello.Epoch, localMap);
+            remote.CommitSession(local.NodeId, local.Epoch, negotiated);
+            local.RegisterLoopbackPeer(remote);
+            remote.RegisterLoopbackPeer(local);
+        }
+        finally
+        {
+            remoteLease?.Dispose();
+            localLease?.Dispose();
+        }
     }
 }

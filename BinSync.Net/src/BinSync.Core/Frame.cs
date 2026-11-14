@@ -1,5 +1,6 @@
 // Frame format (§12.2): 25-byte header, magic 0x4253, CRC32C, hard limits; flow control (§3.6).
 using System.Buffers.Binary;
+using System.Collections.ObjectModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics.X86;
 using System.Runtime.Intrinsics.Arm;
@@ -13,6 +14,8 @@ public static class Frames
     public const ushort MAGIC = 0x4253;
     /// <summary>Frame format version byte (currently 0x00).</summary>
     public const byte VERSION = 0x00;
+    /// <summary>Established-session WINDOW_UPDATE frame type (§3.6).</summary>
+    public const byte TYPE_WINDOW_UPDATE = 0x0E;
     /// <summary>Fixed frame header size in bytes (25).</summary>
     public const int HEADER_SIZE = 25;
     /// <summary>Absolute maximum frame size including header (§12.3).</summary>
@@ -34,7 +37,7 @@ public static class Frames
     public const byte FLAG_ENCRYPTED = 0x08;
 
     /// <summary>Map of frame type byte to symbolic name (DELTA_BATCH, ACK, …).</summary>
-    public static readonly Dictionary<int, string> FrameTypes = new()
+    private static readonly Dictionary<int, string> FrameTypeMap = new()
     {
         [0x01] = "HELLO",
         [0x02] = "HELLO_ACK",
@@ -55,11 +58,23 @@ public static class Frames
         [0x11] = "KEY_ROTATION",
         [0x12] = "IBLT_REQUEST",
         [0x13] = "IBLT_RESPONSE",
+        [0x14] = "NAMESPACE_ROSTER",
+        [0x15] = "ORIGIN_FRONTIER",
+        [0x16] = "RETENTION_CHECKPOINT",
+        [0x17] = "FULL_REPLACE_BEGIN",
+        [0x18] = "FULL_REPLACE_CHUNK",
+        [0x19] = "FULL_REPLACE_COMMIT",
+        [0x1A] = "FULL_REPLACE_ACK",
+        [0x1B] = "FULL_REPLACE_ABORT",
+        [0x1C] = "FULL_REPLACE_READY",
     };
 
+    /// <summary>Read-only map of frame type byte to symbolic name.</summary>
+    public static IReadOnlyDictionary<int, string> FrameTypes { get; } =
+        new ReadOnlyDictionary<int, string>(FrameTypeMap);
+
     // §12.23 error codes (canonical numeric values)
-    /// <summary>Map of symbolic error names to numeric wire codes.</summary>
-    public static readonly Dictionary<string, ushort> ErrorCodes = new()
+    private static readonly Dictionary<string, ushort> ErrorCodeMap = new()
     {
         ["UNKNOWN_ALIAS"] = 0x0001,
         ["EPOCH_REGRESSION"] = 0x0002,
@@ -84,7 +99,12 @@ public static class Frames
         ["CORRUPTED_FRAME"] = 0x0015,
         ["FRAME_REJECTED"] = 0x0016,
         ["BATCH_CHAIN_BROKEN"] = 0x0017,
+        ["ACK_OUT_OF_RANGE"] = 0x0018,
     };
+
+    /// <summary>Read-only map of symbolic error names to numeric wire codes.</summary>
+    public static IReadOnlyDictionary<string, ushort> ErrorCodes { get; } =
+        new ReadOnlyDictionary<string, ushort>(ErrorCodeMap);
 
     private static readonly uint[] CrcTable = BuildTable();
     private static uint[] BuildTable()
@@ -328,36 +348,192 @@ public static class FrameCodec
     }
 }
 
-/// <summary>Per-stream send-window accounting for flow control.</summary>
-public class FlowControl
+/// <summary>Per-stream byte-window accounting shared by send and receive paths.</summary>
+public sealed class FlowControl
 {
-    /// <summary>Configured initial flow-control window.</summary>
-    public int Initial;
-    /// <summary>Configured maximum flow-control window.</summary>
-    public int MaxWindow;
+    private readonly object _gate = new();
     private readonly Dictionary<uint, long> _credit = new();
+    private readonly Dictionary<uint, long> _inFlight = new();
+    private sealed class CreditWaiter
+    {
+        public readonly TaskCompletionSource Signal =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int WaiterCount;
+    }
 
-    /// <summary>Per-stream flow-control windows for send credit accounting.</summary>
+    private readonly Dictionary<uint, CreditWaiter> _waiters = new();
+    private Exception? _failure;
+    private ulong _lastUpdateSequence;
+
+    /// <summary>Configured initial flow-control window.</summary>
+    public int Initial { get; }
+
+    /// <summary>Configured maximum flow-control window.</summary>
+    public int MaxWindow { get; }
+
     public FlowControl(int initial = Frames.INITIAL_WINDOW, int maxWindow = Frames.MAX_WINDOW_SIZE)
-    { Initial = initial; MaxWindow = maxWindow; }
+    {
+        if (initial < 0) throw new ArgumentOutOfRangeException(nameof(initial));
+        if (maxWindow <= 0) throw new ArgumentOutOfRangeException(nameof(maxWindow));
+        if (initial > maxWindow) throw new ArgumentException("Initial window cannot exceed maximum window.", nameof(initial));
+        Initial = initial;
+        MaxWindow = maxWindow;
+    }
+
+    private long BalanceInternal(uint streamId) =>
+        _credit.TryGetValue(streamId, out var value) ? value : (_credit[streamId] = Initial);
 
     /// <summary>Remaining credit on a stream window (bytes that may still be sent).</summary>
-    public long Balance(uint streamId) => _credit.TryGetValue(streamId, out var v) ? v : (_credit[streamId] = Initial);
+    public long Balance(uint streamId)
+    {
+        lock (_gate) return BalanceInternal(streamId);
+    }
 
     /// <summary>Attempt to consume payloadBytes from the stream window; false if insufficient credit.</summary>
     public bool TryConsume(uint streamId, long payloadBytes)
     {
-        var bal = Balance(streamId);
-        if (bal < payloadBytes) return false;   // [УП2]
-        _credit[streamId] = bal - payloadBytes;
-        return true;
+        if (payloadBytes < 0) throw new ArgumentOutOfRangeException(nameof(payloadBytes));
+        if (payloadBytes > MaxWindow) return false;
+        lock (_gate)
+        {
+            if (_failure is not null) throw new IOException("Flow-control session has failed.", _failure);
+            if (payloadBytes == 0) return true;
+            var balance = BalanceInternal(streamId);
+            if (balance < payloadBytes) return false;
+            _credit[streamId] = balance - payloadBytes;
+            _inFlight.TryGetValue(streamId, out long inFlight);
+            _inFlight[streamId] = checked(inFlight + payloadBytes);
+            return true;
+        }
     }
 
-    /// <summary>Apply a window update (positive or negative) and return the new balance.</summary>
+    /// <summary>Wait until payload credit is available, then reserve it atomically.</summary>
+    public ValueTask WaitForCreditAsync(uint streamId, long payloadBytes, CancellationToken ct = default)
+    {
+        if (payloadBytes < 0 || payloadBytes > MaxWindow)
+            throw new ArgumentOutOfRangeException(nameof(payloadBytes));
+        if (TryConsume(streamId, payloadBytes)) return ValueTask.CompletedTask;
+        return new ValueTask(WaitSlowAsync(streamId, payloadBytes, ct));
+    }
+
+    private async Task WaitSlowAsync(uint streamId, long payloadBytes, CancellationToken ct)
+    {
+        while (true)
+        {
+            CreditWaiter waiter;
+            lock (_gate)
+            {
+                if (_failure is not null) throw new IOException("Flow-control session has failed.", _failure);
+                long balance = BalanceInternal(streamId);
+                if (balance >= payloadBytes)
+                {
+                    _credit[streamId] = balance - payloadBytes;
+                    _inFlight.TryGetValue(streamId, out long inFlight);
+                    _inFlight[streamId] = checked(inFlight + payloadBytes);
+                    return;
+                }
+                if (!_waiters.TryGetValue(streamId, out waiter!))
+                {
+                    waiter = new CreditWaiter();
+                    _waiters.Add(streamId, waiter);
+                }
+                waiter.WaiterCount++;
+            }
+
+            try
+            {
+                await waiter.Signal.Task.WaitAsync(ct).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    waiter.WaiterCount--;
+                    if (waiter.WaiterCount == 0 &&
+                        _waiters.TryGetValue(streamId, out var current) &&
+                        ReferenceEquals(current, waiter))
+                        _waiters.Remove(streamId);
+                }
+            }
+        }
+    }
+
+    private void RemoveIdleStream(uint streamId, long balance, long inFlight)
+    {
+        if (balance == Initial && inFlight == 0 && !_waiters.ContainsKey(streamId))
+        {
+            _credit.Remove(streamId);
+            _inFlight.Remove(streamId);
+        }
+    }
+
+    /// <summary>Apply positive additive credits, capped at the configured maximum.</summary>
     public long ApplyUpdate(uint streamId, long credits)
     {
-        long nv = Math.Min(Balance(streamId) + credits, MaxWindow);
-        _credit[streamId] = nv;
-        return nv;
+        if (credits <= 0) throw new ArgumentOutOfRangeException(nameof(credits));
+        CreditWaiter? waiter;
+        long next;
+        lock (_gate)
+        {
+            long balance = BalanceInternal(streamId);
+            long room = MaxWindow - balance;
+            next = credits >= room ? MaxWindow : balance + credits;
+            _credit[streamId] = next;
+            _inFlight.TryGetValue(streamId, out long inFlight);
+            long remaining = credits >= inFlight ? 0 : inFlight - credits;
+            _inFlight[streamId] = remaining;
+            _waiters.Remove(streamId, out waiter);
+            RemoveIdleStream(streamId, next, remaining);
+        }
+        waiter?.Signal.TrySetResult();
+        return next;
+    }
+
+    /// <summary>Fail all current and future credit waiters when the session can no longer progress.</summary>
+    public void Fail(Exception failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        CreditWaiter[] waiters;
+        lock (_gate)
+        {
+            if (_failure is not null) return;
+            _failure = failure;
+            waiters = _waiters.Values.ToArray();
+            _waiters.Clear();
+        }
+        foreach (var waiter in waiters) waiter.Signal.TrySetResult();
+    }
+
+    /// <summary>Apply a peer update only when it is strictly within the negotiated window.</summary>
+    public bool TryApplyUpdate(uint streamId, long credits) =>
+        TryApplyUpdate(streamId, credits, sequence: null);
+
+    /// <summary>Apply a peer credit update only once and in increasing wire sequence order.</summary>
+    public bool TryApplyUpdate(uint streamId, long credits, ulong sequence) =>
+        TryApplyUpdate(streamId, credits, (ulong?)sequence);
+
+    private bool TryApplyUpdate(uint streamId, long credits, ulong? sequence)
+    {
+        if (credits <= 0 || (sequence.HasValue && sequence.Value == 0)) return false;
+        CreditWaiter? waiter;
+        lock (_gate)
+        {
+            if (_failure is not null ||
+                (sequence.HasValue && sequence.Value <= _lastUpdateSequence))
+                return false;
+            long balance = BalanceInternal(streamId);
+            if (credits > MaxWindow - balance) return false;
+            if (!_inFlight.TryGetValue(streamId, out long inFlight) || credits > inFlight)
+                return false;
+            long next = balance + credits;
+            long remaining = inFlight - credits;
+            _credit[streamId] = next;
+            _inFlight[streamId] = remaining;
+            _waiters.Remove(streamId, out waiter);
+            RemoveIdleStream(streamId, next, remaining);
+            if (sequence.HasValue) _lastUpdateSequence = sequence.Value;
+        }
+        waiter?.Signal.TrySetResult();
+        return true;
     }
 }

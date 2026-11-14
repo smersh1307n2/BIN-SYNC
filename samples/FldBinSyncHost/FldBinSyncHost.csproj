@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Optimize>true</Optimize>
+    <Deterministic>true</Deterministic>
+    <RootNamespace>BinSync.FldHost</RootNamespace>
+    <AssemblyName>BinSync.FldHost.Sample</AssemblyName>
+    <OutputType>Library</OutputType>
+    <Description>Optional host-side FLD to BIN-SYNC composition sample; not a database runtime assembly.</Description>
+  </PropertyGroup>
+  <PropertyGroup>
+    <Fld1RepositoryRoot Condition="'$(Fld1RepositoryRoot)' == ''">$(MSBuildThisFileDirectory)../../../FLD-DB</Fld1RepositoryRoot>
+    <Fld1DatabaseProject Condition="'$(Fld1DatabaseProject)' == ''">$(Fld1RepositoryRoot)/src/Fld1.Database/Fld1.Database.csproj</Fld1DatabaseProject>
+    <Fld1StorageProject Condition="'$(Fld1StorageProject)' == ''">$(Fld1RepositoryRoot)/src/Fld1.Storage/Fld1.Storage.csproj</Fld1StorageProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../BinSync.Net/src/BinSync.Storage/BinSync.Storage.csproj" />
+    <ProjectReference Include="$(Fld1DatabaseProject)" />
+  </ItemGroup>
+</Project>

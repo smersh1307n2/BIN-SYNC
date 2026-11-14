@@ -35,7 +35,7 @@ public sealed class StateDigestMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
     public int NamespaceId;
-    /// <summary>Outbox cursor included in a state-digest message.</summary>
+    /// <summary>Reserved legacy wire field. Canonical STATE_DIGEST messages set it to zero.</summary>
     public ulong OutboxCursor;
     /// <summary>Number of prefix bits used when partitioning buckets.</summary>
     public int RadixBits = 8;
@@ -70,20 +70,76 @@ public static partial class Reconcile
 {
     /// <summary>Constant default radix bits.</summary>
     public const int DefaultRadixBits = 8;
+    /// <summary>Hard upper bound for bucket rows accepted in one STATE_DIGEST.</summary>
+    public const int MaxStateDigestBuckets = 100_000;
+
+    /// <summary>Hard upper bound for record IDs accepted in one NEED_KEYS message.</summary>
+    public const int MaxNeedKeysRecordIds = 100_000;
+
+    private static int PrefixLengthForRadix(int radixBits)
+    {
+        if (radixBits < 8 || radixBits > 256 || (radixBits & 7) != 0)
+            throw new FormatException("STATE_DIGEST RadixBits must be byte-aligned from 8 through 256");
+        return radixBits / 8;
+    }
+
+    private static int ComparePrefix(byte[] left, byte[] right)
+    {
+        int length = Math.Min(left.Length, right.Length);
+        for (int i = 0; i < length; i++)
+        {
+            int diff = left[i].CompareTo(right[i]);
+            if (diff != 0) return diff;
+        }
+        return left.Length.CompareTo(right.Length);
+    }
+
+    private static void ValidateStateDigest(StateDigestMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        int prefixLength = PrefixLengthForRadix(message.RadixBits);
+        if (message.NamespaceId < 0 || message.NamespaceId > ushort.MaxValue)
+            throw new FormatException("STATE_DIGEST namespace is outside u16 range");
+        if (message.RootDigest is null || message.RootDigest.Length != 32)
+            throw new FormatException("STATE_DIGEST root digest must be 32 bytes");
+        if (message.Buckets is null || message.Buckets.Count > MaxStateDigestBuckets)
+            throw new FormatException("STATE_DIGEST bucket count exceeds limit");
+
+        byte[]? previous = null;
+        foreach (var bucket in message.Buckets)
+        {
+            if (bucket is null || bucket.Prefix is null || bucket.Prefix.Length != prefixLength)
+                throw new FormatException("STATE_DIGEST bucket prefix length does not match RadixBits");
+            if (bucket.Count <= 0)
+                throw new FormatException("STATE_DIGEST bucket count must be positive");
+            if (bucket.Xor16 is null || bucket.Xor16.Length != 16 ||
+                bucket.Sum16 is null || bucket.Sum16.Length != 16 ||
+                bucket.Rollup32 is null || bucket.Rollup32.Length != 32)
+                throw new FormatException("STATE_DIGEST bucket accumulator has an invalid length");
+            if (previous is not null && ComparePrefix(previous, bucket.Prefix) >= 0)
+                throw new FormatException("STATE_DIGEST bucket prefixes must be strictly increasing");
+            previous = bucket.Prefix;
+        }
+    }
 
     /// <summary>Compute a STATE_DIGEST view of <paramref name="node"/> for one namespace.</summary>
     public static StateDigestMessage BuildStateDigest(Node node, int namespaceId, int radixBits = DefaultRadixBits)
     {
+        _ = PrefixLengthForRadix(radixBits);
+        if (namespaceId < 0 || namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        // Build the bucket digest from one atomic storage view. The legacy cursor field
+        // is reserved and is deliberately excluded from replicated state.
+        using var gates = node.EnterAllGates();
         if (!node.Storage.TryGetValue(namespaceId, out var records))
             records = new Dictionary<RecordId, Record>();
 
-        var dict = new Dictionary<RecordId, Record>();
-        foreach (var (rid, rec) in records)
-            dict[rid] = rec;
-
-        var buckets = StateHash.BuildBuckets(dict, radixBits);
-        ulong cursor = OutboxHighWater(node, namespaceId);
-        var root = StateHash.StateRootDigest((ushort)namespaceId, cursor, buckets);
+        var buckets = StateHash.BuildBuckets(records, radixBits);
+        // Outbox sequence numbers are independent per author stream. A scalar maximum
+        // is neither a globally comparable cursor nor replicated state; delta/ACK
+        // synchronization tracks each author stream separately.
+        const ulong cursor = 0;
+        var root = StateHash.StateRootDigest((ushort)namespaceId, buckets);
 
         var msg = new StateDigestMessage
         {
@@ -120,7 +176,7 @@ public static partial class Reconcile
     {
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
-        w.U64(m.OutboxCursor);
+        w.U64(0); // Reserved legacy field; never serialize a misleading aggregate cursor.
         w.U8((byte)m.RadixBits);
         w.Raw(m.RootDigest.Length == 32 ? m.RootDigest : Pad32(m.RootDigest));
         w.Varint((ulong)m.Buckets.Count);
@@ -139,34 +195,64 @@ public static partial class Reconcile
     /// <summary>Decode state digest from canonical wire bytes.</summary>
     public static StateDigestMessage DecodeStateDigest(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
+        int namespaceId = r.U16();
+        _ = r.U64(); // Consume the reserved legacy cursor field.
+        int radixBits = r.U8();
+        int expectedPrefixLength = PrefixLengthForRadix(radixBits);
+        var rootDigest = r.Raw(32);
+        ulong bucketCount = r.Varint();
+        if (bucketCount > MaxStateDigestBuckets)
+            throw new FormatException("STATE_DIGEST bucket count exceeds limit");
+
+        // Each row has a one-byte prefix length, prefix bytes, and 68 fixed bytes.
+        int minimumRowLength = 1 + expectedPrefixLength + 4 + 16 + 16 + 32;
+        if (bucketCount > (ulong)(r.Remaining / minimumRowLength))
+            throw new FormatException("STATE_DIGEST bucket count exceeds remaining payload");
+
         var m = new StateDigestMessage
         {
-            NamespaceId = r.U16(),
-            OutboxCursor = r.U64(),
-            RadixBits = r.U8(),
-            RootDigest = r.Raw(32),
+            NamespaceId = namespaceId,
+            OutboxCursor = 0,
+            RadixBits = radixBits,
+            RootDigest = rootDigest,
         };
-        int n = (int)r.Varint();
-        for (int i = 0; i < n; i++)
+        byte[]? previousPrefix = null;
+        for (ulong i = 0; i < bucketCount; i++)
         {
-            int plen = r.U8();
-            var bucket = new DigestBucket
+            int prefixLength = r.U8();
+            if (prefixLength != expectedPrefixLength)
+                throw new FormatException("STATE_DIGEST bucket prefix length does not match RadixBits");
+            var prefix = r.Raw(prefixLength);
+            if (previousPrefix is not null && ComparePrefix(previousPrefix, prefix) >= 0)
+                throw new FormatException("STATE_DIGEST bucket prefixes must be strictly increasing");
+            uint count = r.U32();
+            if (count == 0)
+                throw new FormatException("STATE_DIGEST bucket count must be positive");
+            m.Buckets.Add(new DigestBucket
             {
-                Prefix = r.Raw(plen),
-                Count = r.U32(),
+                Prefix = prefix,
+                Count = count,
                 Xor16 = r.Raw(16),
                 Sum16 = r.Raw(16),
                 Rollup32 = r.Raw(32),
-            };
-            m.Buckets.Add(bucket);
+            });
+            previousPrefix = prefix;
         }
+        if (!r.Eof())
+            throw new FormatException("STATE_DIGEST contains trailing bytes");
         return m;
     }
 
     /// <summary>Encode need range into canonical wire bytes.</summary>
     public static byte[] EncodeNeedRange(NeedRangeMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        if (m.NamespaceId < 0 || m.NamespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(m.NamespaceId));
+        if (m.Prefix is null || m.Prefix.Length > 32)
+            throw new FormatException("NEED_RANGE prefix must contain at most 32 bytes");
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.U8((byte)m.Prefix.Length);
@@ -177,42 +263,74 @@ public static partial class Reconcile
     /// <summary>Decode need range from canonical wire bytes.</summary>
     public static NeedRangeMessage DecodeNeedRange(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         int ns = r.U16();
         int plen = r.U8();
-        return new NeedRangeMessage { NamespaceId = ns, Prefix = r.Raw(plen) };
+        if (plen > 32)
+            throw new FormatException("NEED_RANGE prefix must contain at most 32 bytes");
+        var prefix = r.Raw(plen);
+        if (!r.Eof())
+            throw new FormatException("NEED_RANGE contains trailing bytes");
+        return new NeedRangeMessage { NamespaceId = ns, Prefix = prefix };
     }
 
     /// <summary>Encode need keys into canonical wire bytes.</summary>
     public static byte[] EncodeNeedKeys(NeedKeysMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        if (m.NamespaceId < 0 || m.NamespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(m.NamespaceId));
+        if (m.RecordIds is null || m.RecordIds.Count > MaxNeedKeysRecordIds)
+            throw new FormatException("NEED_KEYS record count exceeds limit");
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.Varint((ulong)m.RecordIds.Count);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var id in m.RecordIds)
-            w.B128(Codec.CanonicalB128(id));
+        {
+            if (id is null)
+                throw new FormatException("NEED_KEYS record ID cannot be null");
+            var canonical = Codec.CanonicalB128(id);
+            if (!seen.Add(Convert.ToHexString(canonical)))
+                throw new FormatException("NEED_KEYS contains a duplicate record ID");
+            w.B128(canonical);
+        }
         return w.Value();
     }
 
     /// <summary>Decode need keys from canonical wire bytes.</summary>
     public static NeedKeysMessage DecodeNeedKeys(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         var m = new NeedKeysMessage { NamespaceId = r.U16() };
-        int n = (int)r.Varint();
-        for (int i = 0; i < n; i++)
-            m.RecordIds.Add(r.B128());
+        ulong count = r.Varint();
+        if (count > MaxNeedKeysRecordIds)
+            throw new FormatException("NEED_KEYS record count exceeds limit");
+        if (count > (ulong)(r.Remaining / 16))
+            throw new FormatException("NEED_KEYS record count exceeds remaining payload");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (ulong i = 0; i < count; i++)
+        {
+            var id = r.B128();
+            if (!seen.Add(Convert.ToHexString(id)))
+                throw new FormatException("NEED_KEYS contains a duplicate record ID");
+            m.RecordIds.Add(id);
+        }
+        if (!r.Eof())
+            throw new FormatException("NEED_KEYS contains trailing bytes");
         return m;
     }
 
     /// <summary>Compute bucket prefixes that differ between local and remote state digests.</summary>
     public static List<byte[]> DivergentPrefixes(StateDigestMessage local, StateDigestMessage remote)
     {
+        ValidateStateDigest(local);
+        ValidateStateDigest(remote);
+        if (local.NamespaceId != remote.NamespaceId || local.RadixBits != remote.RadixBits)
+            throw new FormatException("STATE_DIGEST namespace or RadixBits mismatch");
         var result = new List<byte[]>();
-        if (local.RootDigest.AsSpan().SequenceEqual(remote.RootDigest) &&
-            local.NamespaceId == remote.NamespaceId)
-            return result;
-
         var remoteBy = remote.Buckets.ToDictionary(
             b => Convert.ToHexString(b.Prefix), b => b, StringComparer.Ordinal);
         var localKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -252,16 +370,6 @@ public static partial class Reconcile
         a.Xor16.AsSpan().SequenceEqual(b.Xor16) &&
         a.Sum16.AsSpan().SequenceEqual(b.Sum16) &&
         a.Rollup32.AsSpan().SequenceEqual(b.Rollup32);
-
-    private static ulong OutboxHighWater(Node node, int namespaceId)
-    {
-        long max = 0;
-        foreach (var ((author, ns), seq) in node.OutboxSeqRef)
-        {
-            if (ns == namespaceId && seq > max) max = seq;
-        }
-        return unchecked((ulong)max);
-    }
 
     private static byte[] Pad16(byte[] b)
     {

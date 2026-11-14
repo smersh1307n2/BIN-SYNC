@@ -1,4 +1,93 @@
+## Unreleased
+
+## Unreleased — v3.1 C-pass
+
+- Added the typed, scope/local-replica/namespace/GC-store/trust-bound `IFullReplaceCommitLease` contract and made `StorageFullReplaceReceiver` reject ordinary `IDisposable` guards or a lease for another namespace. `StorageSyncCoordinator.AcquireFullReplaceCommitGuard` composes the Metadata Store PendingApply/reservation proof with the Node, host FLD/WAL and provider gates; the sample FLD host exposes the required factory.
+- Added the RPM3 durable relay provenance map in `BinSync.Storage`: atomic JournalSeq↔OutboxSeq mapping (ChangeId remains in the global ledger), per-author scan/ACK cursor, SHA-256/XOR mapping-set checksum, OutboxSeq-ordered recovery and O(log N) safe-ACK translation. Mapping pruning remains strictly after durable FLD relay ACK.
+- Added `StorageSyncCoordinator.AppendRelayProvenancePage` to resolve transient FLD ChangeIds through the global Node ledger before persisting only JournalSeq↔OutboxSeq pairs. Added a persisted-row golden sample and source-derived metadata byte inventory for Outbox, ApplyJournal, Micro-WAL, Manifest, Run and Fld1.Storage.
+- Added explicit broadcast of one accepted retention checkpoint to multiple members without minting a checkpoint sequence per destination; authority verification and durable checkpoint revalidation are serialized under the coordinator gate.
+- Added v3.1 host orchestration and FLD integration sequencing guidance. No background scheduler or premature direct Node↔FldDatabase bridge is introduced.
+- Validation remains pending on the current C-pass head. This entry does not claim test/build success; physical ChangeId and tombstone/Ghost GC remain disabled.
+
+
+- Made the Metadata Store reference adapter's outbound freeze operation idempotent for exact full-batch retries: a retry returns the original sequence assignments without appending duplicate entries.
+- Conflicting payload/author reuse and partially overlapping retries fail closed without advancing the outbound high watermark.
+- Added conformance coverage for exact retry, stable sequence reuse, and partial-overlap rejection. This is a semantic reference-model improvement; durable adapter and PendingLocal/source-feed atomic handoff remain separate implementation gates.
+
 # Changelog — BinSync.Core
+
+## Unreleased — 2026-11-07
+
+- Normative protocol specification advanced to BIN-SYNC CORE v2.4.19 FINAL. E-24 defines route-independent ChangeId identity/equivocation rejection; E-25 keeps tombstone/ghost GC fail-closed until a durable membership/safe-frontier and stale-peer recovery proof exists. No frame layout change is introduced by these errata.
+- Added provider-independent Metadata Store semantic conformance contract and volatile reference fixture (20 semantic tests plus a durability-profile assertion).
+- Added Data Provider semantic contract and volatile reference conformance fixture (six semantic tests plus a durability-profile assertion).
+- Added cross-repository storage documentation map and clarified the two-DLL FLD boundary. This documentation/test-only work does not ship a production Metadata Store/Data Provider API.
+- Optimized `ChangeIdentity.Fingerprint`: write canonical FULL_AUTHOR operation bytes directly into one writer, hash its written span, and handle zero/one causal dependencies without intermediate operation buffers or a dependency set. Multi-dependency normalization now uses one array with in-place sort/dedup instead of `HashSet` + LINQ + `ToArray`. Added parity coverage for field write/tombstone/record tombstone. Allocation/throughput benchmark remains a validation gate; no measured speedup is claimed.
+
+
+## 3.0.0 — 2026-11-06
+
+- Apply causal timeout only while parents remain missing; a batch requeued after a normal stream-gate failure stays retryable once its dependencies are already known.
+
+- Continue causal draining after successful applies so batches unlocked by a parent within the same drain call are retried immediately; stop when a pass makes no progress.
+
+- Reject zero ChangeIds and causal dependency IDs at CausalTracker public entry points, preventing invalid identities from entering known/lost/pending state outside the batch API.
+
+- Validate non-zero, unique ChangeIds before the causal gate; malformed batches can no longer poison the pending graph before normal apply validation.
+
+- Raise `SchemaRegistered` only when a new schema version is published; idempotent republication no longer emits a false change event.
+
+- Make schema versions immutable in the local Register API as well as SCHEMA_MAP learning; identical republication is idempotent, while policy/field-set changes require a new version.
+
+- Validate the first CRDT field payload when no local value exists; malformed initial CounterG/CounterPn/SetOr/SeqFractional/BlobRef data can no longer bypass merge-codec validation.
+
+- Reject SET_OR merges when the same add dot identifies different elements across replicas; classify the conflict as invalid remote data before canonical encoding.
+
+- Define SEQ_FRACTIONAL `orderKey` ordering as unsigned UTF-8 scalar order and use the same allocation-free comparison in the engine; add a supplementary-Unicode regression test.
+
+**Public API hardening and cleanup.**
+
+- Reject peer HELLO incarnation epochs below the stored peer-wide watermark before alias-map exchange; preserve the in-process stale-epoch path used to test data-plane rejection.
+- Reject malformed lifecycle field operations (empty/multi-byte/invalid values, nonzero key epoch, and lifecycle tombstones) before batch state or WAL publication; generic local field mutation cannot target the lifecycle field.
+- ApplyBatch clock-drift checks compare the full unsigned HLC wall value against the sampled unsigned skew limit.
+
+- Keep HLC send ticks monotonic when restored wall values exceed Int64 and validate non-negative wall-clock sources.
+- Bound length-prefixed reader allocations by remaining input and reject malformed UTF-8 instead of silently substituting replacement characters.
+- Return receive-window credit independently of caller cancellation once a frame has been dequeued; validate WINDOW_UPDATE sequence monotonicity atomically with credit application.
+
+- Negotiated per-stream Flow Control: additive payload credits, canonical four-byte LE WINDOW_UPDATE, inline update dispatch, and strict over-credit rejection.
+- Oversized flow-controlled frames are automatically fragmented and reassembled by typed receive paths; fragment memory and queued receive memory have explicit bounds.
+- Flow-control send waiters are awakened on peer/session failure; the send fast path reserves credit without allocating wait state when the window is available.
+
+- Removed standalone `NextOutboxSeq`; sequence allocation is committed only with its Outbox mutation.
+- Removed untyped public `SeenState`; internal merge logic uses the gated internal accessor.
+- Replaced `PushOutbox(object, ...)` and the legacy `byte[]` author overload with typed operation overloads (`OpFieldWrite`, `OpFieldTomb`, `OpRecordTombstone`); the Node supplies its own author identity.
+- Public read methods return detached snapshots; `PushOutbox` returns a detached entry and does not mutate the caller's operation DTO.
+- `Ops.TryCloneWithOrigin` always returns an owned payload; the engine uses a separate internal zero-copy path for its own Outbox buffers.
+- Loopback routing dictionaries are no longer public mutable state.
+- Package version advanced to `3.0.0` for the breaking API cleanup.
+- Relay alias propagation is post-commit and best-effort; disposed peers cannot turn an accepted batch into an apparent failure, and duplicate alias work is deduplicated per batch.
+- Snapshot apply validates namespace and `MaxRecords` before publication; decoder-owned receive transfers avoid a redundant deep clone.
+- Snapshot chunk packing runs after the consistent storage copy releases Node gates; STATE_DIGEST hashes the storage dictionary directly without a temporary record-map copy.
+- WAL replay marks a Node unusable if semantic replay fails after mutation, preventing accidental use of partially restored state.
+- Observer exceptions are isolated per subscriber and traced; event callbacks run outside engine gates and cannot change committed operation results.
+- HLC logical overflow is checked before increment in both send and receive paths.
+- Field tombstones participate in per-field version ordering; stale writes cannot resurrect a newer tombstone, and stale tombstones cannot erase newer values.
+- Record digests use BIN-SYNC/RECORD/v2 with an explicit live/tombstone kind byte; empty values no longer collide with tombstones.
+- CanonicalB128 now always returns exactly 16 bytes, including long-input domain-hash normalization.
+- ApplyBatch rejects merge policies not supported by the runtime; legacy policy 0 normalizes to LWW_FIELD for schema gating.
+- All three public samples were aligned to the current session API and are built/executed in CI.
+- Canonicalize and harden CRDT payload decoding: reject duplicate/unsorted author components, duplicate SET_OR dots, impossible counts and trailing bytes; detect arithmetic overflow.
+- Reject conflicting immutable SEQ_FRACTIONAL/BLOB_REF identities rather than making merge results operand-order dependent.
+- Harden SCHEMA_MAP against duplicate versions/field IDs, noncanonical field order, active/retired overlap and malformed learned descriptors.
+- Normative protocol specification advanced to v2.4.17; §§8.4–8.8 and §18.4 now define the canonical CRDT and schema-map payload contracts.
+- Causal tracking now remembers lost IDs and transitively drops dependent pending changes; CCD1 trailers use footer-length framing, canonical dependency order and atomic validation without scanning user payload bytes.
+- Causal batches now resolve dependencies on earlier members atomically, reject forward references/duplicate ChangeIds, and reject attempts to reapply a permanently lost ChangeId.
+- Causal apply now preserves the durable Inbox duplicate fast path: duplicate batches are ACKed before optional dependency evaluation, and replay payloads cannot inject ChangeIds into process-local causal state.
+- PN-counter value calculation now accumulates unsigned components before narrowing, allowing large positive/negative totals to cancel while still rejecting an out-of-range final Int64 value.
+
+---
+
 
 ## 2.6.5 — 2026-11-04
 

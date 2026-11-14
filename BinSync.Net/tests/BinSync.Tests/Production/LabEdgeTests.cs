@@ -40,6 +40,48 @@ public class LabEdgeTests
     }
 
     [Fact]
+    public void S4_NewPeerTailCursor_DoesNotRenumberExistingPeerOutbox()
+    {
+        var donor = Fix.MakeNode(805);
+        var oldPeer = Fix.MakeNode(806);
+        var newPeer = Fix.MakeNode(807);
+        Transport.MakeSession(donor, oldPeer);
+
+        donor.WriteField(NS, Fix.Rid(1), 0x100, Val("one"));
+        donor.WriteField(NS, Fix.Rid(2), 0x100, Val("two"));
+        var oldBatch = donor.CreateDeltaBatch(oldPeer.NodeId, NS);
+        Assert.NotNull(oldBatch);
+        var oldState = donor.PeerStates[(oldPeer.NodeId, NS)];
+        oldState.SetStreamPushed(donor.NodeId, 2);
+        oldState.SetStreamAcked(donor.NodeId, 2);
+        oldState.LastPushedSeq = 2;
+        oldState.LastAckedSeq = 2;
+
+        // Simulate a successfully compacted prefix [1,2]. The durable sequence
+        // allocator remains at 2; only the old entries have been collected.
+        donor.Outbox[NS].Clear();
+        Transport.MakeSession(donor, newPeer);
+        var snapshot = Reconcile.BuildSnapshot(donor, NS);
+        Assert.True(Reconcile.ApplySnapshot(newPeer, snapshot) >= 2);
+        donor.MarkInitialSyncComplete(newPeer.NodeId, NS);
+
+        donor.WriteField(NS, Fix.Rid(3), 0x100, Val("tail"));
+        Assert.Equal(3L, donor.Outbox[NS].Single().Seq);
+
+        var newPeerBatch = donor.CreateDeltaBatch(newPeer.NodeId, NS);
+        Assert.NotNull(newPeerBatch);
+        Assert.Equal(1L, newPeerBatch!.CursorStart);
+        Assert.Equal(1L, newPeerBatch.CursorEnd);
+        Assert.Equal(3L, donor.Outbox[NS].Single().Seq);
+
+        var oldPeerBatch = donor.CreateDeltaBatch(oldPeer.NodeId, NS);
+        Assert.NotNull(oldPeerBatch);
+        Assert.Equal(3L, oldPeerBatch!.CursorStart);
+        Assert.Equal(3L, oldPeerBatch.CursorEnd);
+        Assert.Equal(3L, donor.Outbox[NS].Single().Seq);
+    }
+
+    [Fact]
     public void S4_Multi_chunk_snapshot_indices()
     {
         var n = Fix.MakeNode(803);
@@ -110,7 +152,9 @@ public class LabEdgeTests
     [Fact]
     public void S12_Fragment_rejects_index_out_of_range()
     {
-        var bad = FragmentCodec.EncodeOne(Fix.Nid(1), index: 5, count: 3, body: new byte[] { 1 });
+        var bad = FragmentCodec.EncodeOne(Fix.Nid(1), index: 0, count: 3, body: new byte[] { 1 });
+        bad[16] = 5;
+        bad[17] = 0;
         var re = new FragmentReassembler();
         Assert.ThrowsAny<FrameException>(() => re.Accept(bad));
     }
@@ -146,17 +190,17 @@ public class LabEdgeTests
     }
 
     [Fact]
-    public void S13_PurgeBelowCutoff_removes_stale_fields()
+    public void S13_PurgeBelowCutoff_preserves_live_fields_until_safe_watermark_gate()
     {
         var n = Fix.MakeNode(831);
         var rid = Fix.Rid(50);
-        // Write with known low wall via ApplyRemoteField
+        // Old live values are still current state; age alone cannot authorize deletion.
         n.ApplyRemoteField(NS, rid, 0x100, Val("old"), new Hlc(100, 0), n.NodeId);
         n.ApplyRemoteField(NS, rid, 0x200, Val("new"), new Hlc(5_000_000, 0), n.NodeId);
 
         int removed = GcNotice.PurgeBelowCutoff(n, NS, cutoffWall: 1_000);
-        Assert.True(removed >= 1);
-        Assert.False(n.Storage[NS][rid].State.ContainsKey(0x100));
+        Assert.Equal(0, removed);
+        Assert.True(n.Storage[NS][rid].State.ContainsKey(0x100));
         Assert.True(n.Storage[NS][rid].State.ContainsKey(0x200));
     }
 

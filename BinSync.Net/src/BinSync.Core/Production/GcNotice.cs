@@ -5,14 +5,14 @@ namespace BinSync;
 public static partial class ReconcileFrames
 {
     /// <summary>GC notice messages and purge helpers for outdated records.</summary>
-    public const byte GcNotice = 0x0B;
+    public const byte GcNotice = 0x0C;
 }
 
 /// <summary>One quarantined author advertised in GC_NOTICE.</summary>
 public sealed class GcQuarantineEntry
 {
     /// <summary>Stable 16-byte node identity; set only in the constructor.</summary>
-    public byte[] NodeId { get; set; } = Array.Empty<byte>();
+    public NodeId NodeId { get; set; }
     /// <summary>Session/epoch counter; advanced on load and explicit epoch bumps.</summary>
     public int Epoch { get; set; }
 }
@@ -21,11 +21,11 @@ public sealed class GcQuarantineEntry
 public sealed class GcNoticeMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
-    public int NamespaceId;
-    /// <summary>Fields/records with wall strictly below this may be GC'd locally (advisory).</summary>
-    public ulong TombstoneCutoffWall;
+    public int NamespaceId { get; set; }
+    /// <summary>Advisory wall cutoff only; it never authorizes tombstone or ghost deletion by itself.</summary>
+    public ulong TombstoneCutoffWall { get; set; }
     /// <summary>Peers currently quarantined from sync.</summary>
-    public List<GcQuarantineEntry> Quarantined = new();
+    public List<GcQuarantineEntry> Quarantined { get; set; } = new();
 }
 
 /// <summary>GC notice messages and purge helpers for outdated records.</summary>
@@ -34,6 +34,9 @@ public static class GcNotice
     /// <summary>Build  from current state.</summary>
     public static GcNoticeMessage Build(Node node, int namespaceId, ulong tombstoneCutoffWall = 0)
     {
+        ArgumentNullException.ThrowIfNull(node);
+        Node.ValidateNamespaceId(namespaceId);
+        using var gates = node.EnterAllGates();
         var msg = new GcNoticeMessage
         {
             NamespaceId = namespaceId,
@@ -44,26 +47,31 @@ public static class GcNotice
             int ep = node.DurableAuthors.TryGetValue(nid, out var e) ? e : 0;
             msg.Quarantined.Add(new GcQuarantineEntry
             {
-                NodeId = Codec.CanonicalB128(nid.ToArray()),
+                NodeId = nid,
                 Epoch = ep,
             });
         }
         msg.Quarantined.Sort((a, b) =>
-            a.NodeId.AsSpan().SequenceCompareTo(b.NodeId.AsSpan()));
+            a.NodeId.ToArray().AsSpan().SequenceCompareTo(b.NodeId.ToArray().AsSpan()));
         return msg;
     }
 
     /// <summary>Encode  into canonical wire bytes.</summary>
     public static byte[] Encode(GcNoticeMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        Node.ValidateNamespaceId(m.NamespaceId);
+        ArgumentNullException.ThrowIfNull(m.Quarantined);
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.U64(m.TombstoneCutoffWall);
         w.Varint((ulong)m.Quarantined.Count);
         foreach (var e in m.Quarantined)
         {
-            w.B128(Codec.CanonicalB128(e.NodeId));
-            w.U32(unchecked((uint)e.Epoch));
+            if (e.Epoch < 0 || e.NodeId.IsZero)
+                throw new ArgumentException("GC entries require a non-zero node id and non-negative epoch.", nameof(m));
+            w.B128(e.NodeId);
+            w.U32((uint)e.Epoch);
         }
         return w.Value();
     }
@@ -71,70 +79,92 @@ public static class GcNotice
     /// <summary>Decode  from canonical wire bytes.</summary>
     public static GcNoticeMessage Decode(byte[] payload)
     {
+        ArgumentNullException.ThrowIfNull(payload);
         var r = new Reader(payload);
         var m = new GcNoticeMessage
         {
             NamespaceId = r.U16(),
             TombstoneCutoffWall = r.U64(),
         };
-        int n = (int)r.Varint();
-        for (int i = 0; i < n; i++)
+        ulong count = r.Varint();
+        if (count > (ulong)(payload.Length / 20))
+            throw new InvalidDataException("GC quarantine count exceeds the available payload.");
+        for (int i = 0; i < (int)count; i++)
         {
+            var nodeId = r.ReadNodeId();
+            uint rawEpoch = r.U32();
+            if (nodeId.IsZero || rawEpoch > int.MaxValue)
+                throw new InvalidDataException("Invalid GC quarantine identity or epoch.");
             m.Quarantined.Add(new GcQuarantineEntry
             {
-                NodeId = r.B128(),
-                Epoch = unchecked((int)r.U32()),
+                NodeId = nodeId,
+                Epoch = (int)rawEpoch,
             });
         }
+        if (!r.Eof())
+            throw new InvalidDataException("GC notice payload contains trailing bytes.");
         return m;
     }
 
     /// <summary>Apply  to local state.</summary>
     public static int Apply(Node node, GcNoticeMessage remote)
     {
-        int added = 0;
-        foreach (var e in remote.Quarantined)
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(remote);
+        Node.ValidateNamespaceId(remote.NamespaceId);
+        var entries = remote.Quarantined?.Select(entry => entry is null ? null! : new GcQuarantineEntry
         {
-            var id = Codec.CanonicalB128(e.NodeId);
-            if (id.AsSpan().SequenceEqual(node.NodeId)) continue;
-            if (!node.Quarantined.Contains(id))
+            NodeId = entry.NodeId,
+            Epoch = entry.Epoch,
+        }).ToArray() ?? throw new FormatException("GC quarantine entries are missing");
+        if (entries.Any(entry => entry is null || entry.NodeId.IsZero || entry.Epoch < 0))
+            throw new FormatException("GC notice contains an invalid quarantine entry");
+
+        var ownedNotice = new GcNoticeMessage
+        {
+            NamespaceId = remote.NamespaceId,
+            TombstoneCutoffWall = remote.TombstoneCutoffWall,
+            Quarantined = entries.ToList(),
+        };
+        int added = 0;
+        using (node.EnterAllGates())
+        {
+            foreach (var e in entries)
             {
-                node.Quarantined.Add(id);
-                added++;
-            }
-            if (e.Epoch > 0)
-            {
-                int prev = node.DurableAuthors.TryGetValue(id, out var cur) ? cur : 0;
-                if (e.Epoch > prev)
+                var id = e.NodeId;
+                if (id == node.NodeId) continue;
+                if (!node.Quarantined.Contains(id))
                 {
-                    node.DurableAuthors[id] = e.Epoch;
-                    node.LearnAuthorEpoch(id, e.Epoch);
+                    node.Quarantined.Add(id);
+                    added++;
+                }
+                if (e.Epoch > 0)
+                {
+                    int prev = node.DurableAuthors.TryGetValue(id, out var cur) ? cur : 0;
+                    if (e.Epoch > prev)
+                    {
+                        node.DurableAuthors[id] = e.Epoch;
+                        node.LearnAuthorEpoch(id, e.Epoch);
+                    }
                 }
             }
         }
+        node.RaiseGcNoticeApplied(ownedNotice, added);
         return added;
     }
 
-    /// <summary>Purge records whose lifecycle wall is strictly below the cutoff; returns how many were removed.</summary>
+    /// <summary>
+    /// Tombstone reclamation is deliberately disabled until the namespace cutoff is
+    /// durably enforced against stale DELTA_BATCH and snapshot peers. The previous
+    /// implementation deleted ordinary live fields solely by age, which is unsafe.
+    /// </summary>
     public static int PurgeBelowCutoff(Node node, int namespaceId, ulong cutoffWall)
     {
-        if (cutoffWall == 0) return 0;
-        if (!node.Storage.TryGetValue(namespaceId, out var map)) return 0;
-        int removed = 0;
-        foreach (var rec in map.Values)
-        {
-            var dead = new List<ushort>();
-            foreach (var (fid, fs) in rec.State)
-            {
-                if (fs.Timestamp.Wall < cutoffWall)
-                    dead.Add(fid);
-            }
-            foreach (var fid in dead)
-            {
-                rec.State.Remove(fid);
-                removed++;
-            }
-        }
-        return removed;
+        ArgumentNullException.ThrowIfNull(node);
+        Node.ValidateNamespaceId(namespaceId);
+        // A time cutoff by itself is not proof that any peer can no longer replay
+        // pre-cutoff state. Keep live values and tombstones until the watermark/resync
+        // protocol gate and tombstone-specific reclamation rules are implemented.
+        return 0;
     }
 }

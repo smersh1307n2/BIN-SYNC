@@ -28,7 +28,7 @@ public static class AsyncTransport
     /// </summary>
     public static Task<BatchResult?> DeliverBatchAsync(
         Node sender, Node receiver, int namespaceId,
-        byte[]? filterAuthor = null, int schemaVersion = 1, bool dropAck = false,
+        NodeId? filterAuthor = null, int schemaVersion = 1, bool dropAck = false,
         CancellationToken ct = default)
     {
         return Task.Run(() =>

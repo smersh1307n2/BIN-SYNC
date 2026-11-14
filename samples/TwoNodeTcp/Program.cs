@@ -1,4 +1,4 @@
-// Two-node TCP loopback: server accepts, client connects, push/receive deltas.
+// Two-node TCP loopback: generic sessions over a TCP-backed StreamSyncTransport.
 using System.Text;
 using BinSync;
 
@@ -30,9 +30,9 @@ await using var listener = TcpSyncListener.Start();
 Console.WriteLine($"[INFO] listening on 127.0.0.1:{listener.Port}");
 
 var acceptTask = listener.AcceptAsync(serverNode);
-await using var clientSession = await TcpSyncSession.ConnectAsync(clientNode, "127.0.0.1", listener.Port);
+await using var clientSession = await TcpSync.ConnectAsync(clientNode, "127.0.0.1", listener.Port);
 await using var serverSession = await acceptTask;
-Console.WriteLine($"[INFO] sessions up tls={clientSession.IsTls}");
+Console.WriteLine("[INFO] generic BIN-SYNC sessions established over TCP");
 
 var recvServer = serverSession.ReceiveBatchAsync(serverNode);
 bool pushedClient = await clientSession.PushBatchAsync(clientNode, Ns);
