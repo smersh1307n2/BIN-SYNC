@@ -404,7 +404,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         {
             if (provider is not null)
                 await provider.DisposeAsync();
-            gcCancellation?.Dispose();
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
@@ -738,6 +737,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 await remoteApply.DisposeAsync();
             if (provider is not null)
                 await provider.DisposeAsync();
+            gcCancellation?.Dispose();
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
