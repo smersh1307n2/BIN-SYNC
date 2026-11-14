@@ -3690,3 +3690,14 @@ BIN-SYNC commits: `9d33cddbbcf2af5281fe580d6fdd5885f3efe9b1`, `60489796218cdd39a
 - [x T] Each rejected candidate is observed after provider candidate enumeration but before provider compaction: one read call, zero compact calls, and no approved candidates.
 - [!] These tests cover candidate-level provenance and HLC boundaries. They do not by themselves prove crash consistency for every provider implementation or authorize enabling physical GC by default.
 - [ ] Next: consolidate remaining receipt/ChangeId/tombstone lifecycle negative cases into end-to-end restart scenarios, including stale replay after receipt collection, replacement transport epoch preservation, malformed/missing signed evidence, and durable state after interrupted compaction. Keep physical GC disabled by default until the full safety gate is independently demonstrated.
+
+
+## 1.98. Windows process-kill/reopen regression: exact-head green — 2026-11-14
+
+- [x T] Replaced the nested testhost's indefinite sleep/process-tree-kill timing with a deliberate hard process termination immediately after the durable FLD APPLY commit and before Metadata receipt finalization. The parent waits for the nested `dotnet test` CLI to exit non-zero, confirms the exact WAL-owner PID has exited, and only then reopens the durable database.
+- [x CI] Exact BIN-SYNC HEAD `7db6b19a6d498ef9a658f1fb65cec19163b569fb`: `BinSync.Net` run `43569307392` passed all six jobs; independent repeat `43569301483` also passed all six jobs. This includes Linux/Windows .NET tests, signed v3.1 golden vectors, Fuzz + Lab, and Ubuntu/Windows FLD host-adapter builds.
+- [x CI] Exact same HEAD: `FLD Storage Integration` run `43569307407` passed all three durable-provider integration jobs on Ubuntu, macOS 15 and Windows.
+- [x T] The Windows process-kill/reopen regression is green in both independent BIN-SYNC runs; the complete FLD provider platform matrix is green. No production WAL writer-fence behavior was changed by this test-harness correction.
+- [!] This validates the specific hard-termination cut after durable APPLY and before Metadata finalization. It does not prove every possible OS power-loss/fsync boundary or every writer-fence interleaving. Keep the owner-exit assertion and do not weaken the test to a timing delay.
+- [ ] Next: continue the combined durable GC lifecycle proof across signed roster retirement, strictly newer-epoch rejoin, fresh FULL_REPLACE/MBR1 baseline, lost ACK and pushed-reservation recovery, receipt/ChangeId/tombstone references, bounded page compaction, restart between pages, and stale old-epoch replay rejection. Add deterministic concurrency cuts around reservation/ACK and the final Host reference snapshot.
+- [!] Physical receipt, ChangeId, tombstone and Ghost GC remain disabled by default. This CI checkpoint does not authorize production reclamation or merge to main.
