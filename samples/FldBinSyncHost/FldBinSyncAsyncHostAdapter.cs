@@ -3,6 +3,41 @@ using BinSync.Storage;
 
 namespace BinSync.FldHost;
 
+/// <summary>Read-only readiness of one independent physical-GC domain.</summary>
+public sealed record FldBinSyncGcDomainReadiness(
+    string Domain,
+    bool Enabled,
+    bool PrerequisitesSatisfied,
+    IReadOnlyList<string> BlockedReasons)
+{
+    public bool ReadyForAttempt => Enabled && PrerequisitesSatisfied;
+}
+
+/// <summary>
+/// Read-only GC readiness snapshot. It reports global prerequisites only; every
+/// candidate is still independently proof-checked by the bounded compactor.
+/// This report never enables a feature switch or authorizes deletion.
+/// </summary>
+public sealed record FldBinSyncAsyncGcReadinessReport(
+    int NamespaceId,
+    NodeId LocalReplica,
+    bool HasAcceptedRoster,
+    bool HasRetentionCheckpoint,
+    bool HasInstalledFullReplaceBaseline,
+    ulong? RosterGeneration,
+    Guid? FullReplaceGeneration,
+    int UnpublishedDraftCount,
+    FldBinSyncGcDomainReadiness Receipts,
+    FldBinSyncGcDomainReadiness ChangeIds,
+    FldBinSyncGcDomainReadiness Tombstones);
+
+/// <summary>Result of one bounded async Host-owned maintenance round.</summary>
+public sealed record FldBinSyncAsyncGcPassResult(
+    FldBinSyncAsyncGcReadinessReport Readiness,
+    int ReceiptsReclaimed,
+    int ChangeIdsReclaimed,
+    int TombstonesReclaimed);
+
 /// <summary>
 /// Async host composition for one FLD/BIN-SYNC namespace. The caller owns the
 /// process-lifetime Node, Metadata Store, IPC providers and transport sessions.
@@ -44,6 +79,185 @@ public sealed class FldBinSyncAsyncHostAdapter
     public Task<int> PublishLocalChangesAsync(CancellationToken cancellationToken = default)
         => _coordinator.PublishLocalChangesAsync(
             _provider, _persistNode, _publicationLimit, cancellationToken);
+
+    /// <summary>
+    /// Inspect the global prerequisites for each GC domain without deleting rows or
+    /// changing feature switches. The temporary Host reference scan is disposed before
+    /// returning. Candidate-level proofs, reservations and exact-version checks remain
+    /// the responsibility of the compaction transaction.
+    /// </summary>
+    public async Task<FldBinSyncAsyncGcReadinessReport> GetGcReadinessAsync(
+        StorageNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(gcStore);
+        ArgumentNullException.ThrowIfNull(trustStore);
+
+        var common = new List<string>();
+        if (!_coordinator.IsNamespaceGcGuardAttached(gcStore, trustStore))
+        {
+            try
+            {
+                _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
+            }
+            catch (Exception exception) when (exception is InvalidOperationException or
+                NotSupportedException or ArgumentException)
+            {
+                common.Add("Exact Metadata/namespace-GC/TrustStore binding is unavailable: " +
+                    exception.GetType().Name + ": " + exception.Message);
+            }
+        }
+
+        int namespaceId = _coordinator.NamespaceId;
+        NodeId localReplica = _coordinator.LocalReplicaId;
+        NamespaceRosterCertificate? roster = null;
+        NamespaceRetentionCheckpoint? checkpoint = null;
+        bool hasRoster = false;
+        bool hasCheckpoint = false;
+        bool fullReplaceInstalled = false;
+
+        try
+        {
+            hasRoster = gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out roster) &&
+                roster is not null;
+            if (!hasRoster)
+            {
+                common.Add("No accepted, verifiable namespace roster is available.");
+            }
+            else
+            {
+                hasCheckpoint = gcStore.TryReadRetentionCheckpoint(
+                    roster!, trustStore, out checkpoint) && checkpoint is not null;
+                if (!hasCheckpoint)
+                    common.Add("No accepted, verifiable retention checkpoint is available.");
+                else if (checkpoint!.FullReplaceGeneration is Guid generation &&
+                    checkpoint.FullReplaceDigest is { Length: NamespaceRosterProtocol.DigestSize } digest)
+                {
+                    fullReplaceInstalled = gcStore.AreAllActiveMembersInstalled(roster!, generation, digest);
+                }
+            }
+        }
+        catch (InvalidDataException exception)
+        {
+            common.Add("Signed namespace retention state is invalid: " + exception.Message);
+        }
+
+        int unpublishedDraftCount = 0;
+        IAsyncApplicationGcReferenceScanner? referenceScanner =
+            _provider as IAsyncApplicationGcReferenceScanner;
+        if (referenceScanner is null)
+        {
+            common.Add("Provider does not expose the Host-owned asynchronous GC reference scanner.");
+        }
+        else
+        {
+            try
+            {
+                await using IAsyncApplicationGcReferenceScan scan =
+                    await referenceScanner.OpenScanAsync(
+                        _coordinator.MetadataScopeId, localReplica, namespaceId,
+                        cancellationToken).ConfigureAwait(false);
+                ApplicationDraftHorizon drafts =
+                    await scan.GetUnpublishedLocalDraftHorizonAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                unpublishedDraftCount = drafts.Count;
+                if (drafts.Count != 0 || drafts.MaxHlcWall != 0 || drafts.MaxHlcLogical != 0)
+                    common.Add($"Host reports an unpublished local draft horizon (count={drafts.Count}).");
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException or
+                NotSupportedException or TimeoutException)
+            {
+                common.Add("Host reference scan could not be opened: " +
+                    exception.GetType().Name + ": " + exception.Message);
+            }
+        }
+
+        var receiptReasons = new List<string>(common);
+        var changeIdReasons = new List<string>(common);
+        var tombstoneReasons = new List<string>(common);
+        if (_provider is not IAsyncApplicationGcReferenceScanner)
+        {
+            // The common scanner blocker already explains this for every domain.
+        }
+        if (_provider is not IAsyncProviderTombstoneGc)
+            tombstoneReasons.Add("Provider does not expose process-isolated tombstone candidate/delete operations.");
+        if (!hasCheckpoint || checkpoint is null ||
+            checkpoint.FullReplaceGeneration is not Guid fullReplaceGeneration ||
+            checkpoint.FullReplaceDigest is not { Length: NamespaceRosterProtocol.DigestSize } fullReplaceDigest)
+        {
+            tombstoneReasons.Add("No authoritative FULL_REPLACE generation/digest is covered by the accepted checkpoint.");
+        }
+        else if (!fullReplaceInstalled)
+        {
+            tombstoneReasons.Add("At least one Active roster member has not durably installed the exact FULL_REPLACE baseline.");
+        }
+
+        return new FldBinSyncAsyncGcReadinessReport(
+            namespaceId,
+            localReplica,
+            hasRoster,
+            hasCheckpoint,
+            fullReplaceInstalled,
+            roster?.RosterGeneration,
+            checkpoint?.FullReplaceGeneration,
+            unpublishedDraftCount,
+            new FldBinSyncGcDomainReadiness(
+                "Receipt", gcStore.IsReceiptGcProofEnabled, receiptReasons.Count == 0, receiptReasons),
+            new FldBinSyncGcDomainReadiness(
+                "ChangeId", gcStore.IsChangeIdGcProofEnabled, changeIdReasons.Count == 0, changeIdReasons),
+            new FldBinSyncGcDomainReadiness(
+                "Record/Field Tombstone", gcStore.IsTombstoneGcProofEnabled,
+                tombstoneReasons.Count == 0, tombstoneReasons));
+    }
+
+    /// <summary>
+    /// Execute one bounded page for each independently enabled and globally ready GC
+    /// domain. Domains are sequential and cancellation is observed between them.
+    /// Repeated calls resume from each store's durable compaction cursor.
+    /// </summary>
+    public async Task<FldBinSyncAsyncGcPassResult> RunGcMaintenanceAsync(
+        StorageNamespaceGcStore gcStore,
+        TrustStore trustStore,
+        int limit = 256,
+        CancellationToken cancellationToken = default)
+    {
+        if (limit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+
+        FldBinSyncAsyncGcReadinessReport readiness =
+            await GetGcReadinessAsync(gcStore, trustStore, cancellationToken).ConfigureAwait(false);
+
+        int receipts = 0;
+        int changeIds = 0;
+        int tombstones = 0;
+        if (_provider is IAsyncApplicationGcReferenceScanner referenceScanner)
+        {
+            if (readiness.Receipts.ReadyForAttempt)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                receipts = await _coordinator.CompactReceiptsAsync(
+                    referenceScanner, limit, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (readiness.ChangeIds.ReadyForAttempt)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                changeIds = await _coordinator.CompactChangeLedgerAsync(
+                    referenceScanner, limit, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        if (readiness.Tombstones.ReadyForAttempt &&
+            _provider is IAsyncProviderTombstoneGc tombstoneGc)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            tombstones = await _coordinator.CompactTombstonesAsync(
+                tombstoneGc, limit, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new FldBinSyncAsyncGcPassResult(readiness, receipts, changeIds, tombstones);
+    }
 
     /// <summary>
     /// Run one bounded process-isolated FLD tombstone-GC pass. Candidate discovery is
