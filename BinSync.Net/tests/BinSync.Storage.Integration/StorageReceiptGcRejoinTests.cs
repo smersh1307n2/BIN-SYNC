@@ -418,7 +418,11 @@ public sealed class StorageReceiptGcRejoinTests
                     Assert.Throws<InvalidDataException>(() =>
                         reopenedMetadata.AcceptIncomingBatch(oldBatch));
                 Assert.NotNull(replacementBatch);
-                Assert.True(reopenedMetadata.AcceptIncomingBatch(replacementBatch!).IsDuplicate);
+                // The active-epoch batch receipt is not a ChangeId replay proof:
+                // after FULL_REPLACE and the signed frontier, a missing ChangeId
+                // identity makes even an exact pre-checkpoint batch stale.
+                Assert.Throws<InvalidDataException>(() =>
+                    reopenedMetadata.AcceptIncomingBatch(replacementBatch!));
                 Assert.Equal(0, reopenedMetadata.CompactReceipts(
                     scope, local, 19, 1, () => new MemoryStream(), Scanner(false)));
             }
