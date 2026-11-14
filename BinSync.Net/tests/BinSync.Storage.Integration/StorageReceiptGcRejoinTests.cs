@@ -155,7 +155,7 @@ public sealed class StorageReceiptGcRejoinTests
                 (_, _) => false));
 
     [Fact]
-    public void Receipt_gc_retires_old_epoch_rejoins_new_epoch_and_keeps_replay_fence_after_restart()
+    public async Task Receipt_gc_retires_old_epoch_rejoins_new_epoch_and_keeps_replay_fence_after_restart()
     {
         string directory = Path.Combine(
             Path.GetTempPath(), "binsync-receipt-rejoin-gc-" + Guid.NewGuid().ToString("N"));
@@ -400,9 +400,8 @@ public sealed class StorageReceiptGcRejoinTests
                 Assert.Equal(3, changeIds.Count(id =>
                     reopenedMetadata.TryGetChangeIdentity(scope, local, 19, id, out _, out _, out _)));
 
-                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
-                    scope, local, 19, reopenedProvider, 1,
-                    () => new MemoryStream(), Scanner(false, false, changeIds)));
+                Assert.Equal(1, await reopenedMetadata.CompactChangeLedgerAsync(
+                    scope, local, 19, 1, new TestAsyncGcReferenceScanner()));
                 Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
                     scope, local, 19, reopenedProvider, 1,
                     () => new MemoryStream(), Scanner(false, false, changeIds)));

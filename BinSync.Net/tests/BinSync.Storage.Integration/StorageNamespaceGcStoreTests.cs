@@ -163,7 +163,7 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Fact]
-    public void Receipt_gc_preserves_new_transport_epoch_across_restart_and_reclaims_only_retired_epoch()
+    public async Task Receipt_gc_preserves_new_transport_epoch_across_restart_and_reclaims_only_retired_epoch()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-receipt-gc-proof-" + Guid.NewGuid().ToString("N"));
         var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
@@ -324,13 +324,15 @@ public sealed class StorageNamespaceGcStoreTests
 
                 // Even with both signed proof domains satisfied, a host-side
                 // reference snapshot must veto receipt deletion.
-                Assert.Equal(0, metadata.CompactReceipts(
-                    scope, local, namespaceId, 16, () => new MemoryStream(), Scanner(true)));
+                Assert.Equal(0, await metadata.CompactReceiptsAsync(
+                    scope, local, namespaceId, 16,
+                    new TestAsyncGcReferenceScanner(hasReceiptReference: true)));
 
                 // Commit only the first bounded page, then close the entire Storage
                 // process scope below. Remaining receipts must be reclaimable after reopen.
-                Assert.Equal(1, metadata.CompactReceipts(
-                    scope, local, namespaceId, 1, () => new MemoryStream(), Scanner(false)));
+                Assert.Equal(1, await metadata.CompactReceiptsAsync(
+                    scope, local, namespaceId, 1,
+                    new TestAsyncGcReferenceScanner()));
             }
 
             // The receipt deletion is durable. Reopening the same Storage database
