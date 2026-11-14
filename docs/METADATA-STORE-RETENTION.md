@@ -1,6 +1,6 @@
 # BIN-SYNC Metadata Store retention and GC contract
 
-**Status (2026-11-14):** Receipt, ChangeId and record-tombstone compaction are implemented with independent proof gates and independent feature flags. The signed v3.1 roster/frontier/checkpoint/FULL_REPLACE control plane and FLD Host reference-scan boundary are implemented and validated. All physical GC flags remain **false by default**; this document does not authorize production reclamation. The crash/uncertain-completion matrix and exact-head cross-platform CI are complete; one release gate remains for operator diagnostics, rollback, retention policy and staged canary.
+**Status (2026-11-14):** Receipt, ChangeId and field/record-tombstone compaction paths are implemented with independent proof gates and independent feature flags. The signed v3.1 roster/frontier/checkpoint/FULL_REPLACE control plane and process-isolated FLD IPC reference-scan/GC lease are implemented. All physical GC flags remain **false by default**; this document does not authorize production reclamation. The Host crash/uncertain-completion matrix is substantially covered, but multiple release gates remain: Metadata writer-bypass closure, exact-head validation of async readiness/orchestration, remaining provider crash/replay matrices, large-namespace performance/retention measurements, operator rollback and staged canary.
 
 Normative detail: [METADATA-STORE-GC-DESIGN.md](METADATA-STORE-GC-DESIGN.md), [BIN-SYNC-ROADMAP-v3.md](BIN-SYNC-ROADMAP-v3.md), and [BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md](BIN-SYNC-v3.1-ROSTER-GC-ADDENDUM.md).
 
@@ -18,7 +18,7 @@ ACK, snapshot completion, peer disconnection, HLC age or one generic safe cursor
 | ChangeId identity/provenance ledger | ChangeId GC is implemented behind the signed safe-origin frontier and internal + Host reference scans. Default off. | (namespace, ChangeId) remains route-independent dedup/equivocation evidence; the immutable origin tuple and signed replay fence survive row deletion. |
 | PendingApply | Delete atomically when provider application is finalized; retain and replay after interrupted provider application. | It is a durable cross-store recovery intent, not a historical receipt archive. |
 | CompletedPendingApply | Retain as the idempotency mapping from provider apply token to finalized digest/receipt; no independent GC horizon is authorized here. | It makes repeated finalization with the same token idempotent and rejects token reuse with different input. |
-| Field/record tombstones | Record-tombstone GC is implemented behind signed frontier + installed FULL_REPLACE generation proof, Host reference scan and final exact-candidate revalidation. Default off. | A stale or offline peer must not resurrect deleted data. |
+| Field/record tombstones | FLD exposes separate field-tombstone and record-tombstone candidates. Both require signed origin-frontier + installed FULL_REPLACE proof, Host reference scan and final exact-candidate revalidation. Field tombstones are retained while an unproven record deletion could expose an older value. Default off. | A stale or offline peer must not resurrect deleted data or reveal a superseded field value. |
 | Ghost lifecycle facts | Retain; Ghost GC is not implemented/enabled. | Ghost reclamation requires its own lifecycle and anti-resurrection proof. |
 
 ## 2. Payload compaction rules
@@ -61,15 +61,17 @@ A ChangeId row is eligible only when:
 
 A pushed outbound reservation survives Metadata Storage reopen after a lost ACK. Retry returns the same immutable reservation and only the matching ACK releases it. A transport ACK, sender cursor, relay cursor, WAL sequence, FLD JournalSeq or OutboxSeq alone never authorizes ChangeId deletion.
 
-## 5. Record tombstone GC and Ghost retention
+## 5. Field/record tombstone GC and Ghost retention
 
-Record-tombstone reclamation additionally requires:
+Field/record tombstone reclamation additionally requires:
 
 - every Active signed-roster member has installed the exact authoritative FULL_REPLACE generation/digest (or a later proven generation);
 - the tombstone's origin is covered by the signed safe frontier;
 - no PendingApply, provider intent, relay payload, immutable reservation, snapshot/apply pin or other Metadata reference can require the tombstone;
 - the Host has sealed the committed WAL prefix, opened one immutable reference scan, and revalidated exact candidate versions under the FLD commit monitor immediately before deletion;
 - bounded deletion is durable and restart-safe.
+
+Field and record tombstones are distinct exact candidate kinds. Each field tombstone must pass its own origin/frontier proof and reference checks; a record tombstone proof does not automatically authorize every field tombstone. If a record-level Dead tombstone is present but not safe to reclaim, FLD retains all field tombstones for that record so a later undelete cannot reveal older values. Once the record deletion is safe, FLD drops older fields and preserves only fields newer than the record deletion.
 
 The Host scanner treats an unsealed WAL prefix conservatively as a non-zero draft/reference horizon. The cross-process lease/heartbeat excludes competing IPC writers during the final scan/commit window. Cancellation, Host death and restart must release process-local leases and preserve durable progress.
 
