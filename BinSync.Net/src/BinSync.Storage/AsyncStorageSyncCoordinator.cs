@@ -67,6 +67,14 @@ public sealed class AsyncStorageSyncCoordinator
     /// <summary>Stable Metadata partition scope used by the embedding Host's GC diagnostics.</summary>
     public string MetadataScopeId => _scopeId;
 
+    /// <summary>Read-only durable Metadata reservation counts for Host GC readiness.</summary>
+    public MetadataGcReservationDiagnostics GetGcReservationDiagnostics()
+    {
+        if (_metadataStore is not StorageMetadataStore storageMetadata)
+            throw new NotSupportedException("GC reservation diagnostics require the durable StorageMetadataStore.");
+        return storageMetadata.GetGcReservationDiagnostics(_scopeId, _node.NodeId, _namespaceId);
+    }
+
     /// <summary>True only when this coordinator is bound to these exact GC/trust instances.</summary>
     public bool IsNamespaceGcGuardAttached(
         StorageNamespaceGcStore gcStore, TrustStore trustStore)
