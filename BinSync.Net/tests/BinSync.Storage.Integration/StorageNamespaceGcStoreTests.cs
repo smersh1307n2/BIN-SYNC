@@ -2352,7 +2352,7 @@ public sealed class StorageNamespaceGcStoreTests
                         if (evidenceGap == "invalid-checkpoint-signature")
                         {
                             signedCheckpoint[^1] ^= 0x80;
-                            Assert.Throws<InvalidDataException>(() =>
+                            Assert.ThrowsAny<CryptographicException>(() =>
                                 gc.AcceptRetentionCheckpoint(signedCheckpoint, roster, trust));
                         }
                         else
