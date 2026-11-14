@@ -739,6 +739,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         private readonly Guid _leaseToken;
         private readonly Guid _scanToken;
         private readonly ApplicationDraftHorizon _draftHorizon;
+        public bool HasSnapshotPin { get; }
         private readonly CancellationTokenSource _renewalShutdown = new();
         private readonly Task _renewalTask;
         private Exception? _renewalFailure;
@@ -757,6 +758,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 throw new ArgumentException("FLD GC scan and lease tokens must be nonzero.");
             _leaseToken = leaseToken;
             _scanToken = scan.Token;
+            HasSnapshotPin = scan.HasSnapshotPin;
             _draftHorizon = new ApplicationDraftHorizon(
                 scan.UnpublishedLocalDraftHorizon.Count,
                 scan.UnpublishedLocalDraftHorizon.MaxHlcWall,
