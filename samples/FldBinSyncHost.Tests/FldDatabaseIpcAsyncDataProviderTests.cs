@@ -261,14 +261,17 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             async Task RestartHostAndReconnectAsync()
             {
+                bool hostAlreadyExited = host?.HasExited == true;
                 if (remoteApply is not null)
                 {
-                    await remoteApply.DisposeAsync();
+                    try { await remoteApply.DisposeAsync(); }
+                    catch (Exception) when (hostAlreadyExited) { /* IPC cleanup is unavailable after the injected Host death. */ }
                     remoteApply = null;
                 }
                 if (provider is not null)
                 {
-                    await provider.DisposeAsync();
+                    try { await provider.DisposeAsync(); }
+                    catch (Exception) when (hostAlreadyExited) { /* Stale snapshot/lease cleanup cannot reach a dead Host. */ }
                     provider = null;
                 }
                 if (host is not null)
@@ -331,9 +334,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         finally
         {
             if (remoteApply is not null)
-                await remoteApply.DisposeAsync();
+            {
+                try { await remoteApply.DisposeAsync(); }
+                catch (Exception) when (host?.HasExited == true) { }
+            }
             if (provider is not null)
-                await provider.DisposeAsync();
+            {
+                try { await provider.DisposeAsync(); }
+                catch (Exception) when (host?.HasExited == true) { }
+            }
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
