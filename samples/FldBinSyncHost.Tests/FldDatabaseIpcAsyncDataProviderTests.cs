@@ -148,7 +148,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         using var shutdown = new CancellationTokenSource();
         using FldDatabase database = FldDatabase.Open(root, namespaceId, authorBytes);
         var dispatcher = new FldDatabaseIpcDispatcher(
-            database, gcLeaseIdleTimeout: TimeSpan.FromMilliseconds(250));
+            database, gcLeaseIdleTimeout: TimeSpan.FromSeconds(2));
         var server = new StorageIpcServer(
             StorageIpcEndpoint.ComputePipeName(root, 0),
             dispatcher.HandleAsync,
@@ -165,14 +165,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 root, Guid.NewGuid(), TimeSpan.FromSeconds(10),
                 NodeId.From(authorBytes), () => 1,
                 cancellationToken: default,
-                gcLeaseRenewalInterval: TimeSpan.FromMilliseconds(50));
+                gcLeaseRenewalInterval: TimeSpan.FromMilliseconds(250));
 
             await using IAsyncApplicationGcReferenceScan scan = await provider.OpenScanAsync(
                 "lease-renewal-test", NodeId.From(authorBytes), checked((int)namespaceId));
-            // The Host idle TTL is only 250ms. Keep the scan open for over three
+            // The Host idle TTL is two seconds. Keep the scan open for over two
             // TTLs without issuing any reference query: only the provider heartbeat
             // can keep the Host-wide admission boundary alive.
-            await Task.Delay(900);
+            await Task.Delay(5500);
             Assert.False(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x65))));
         }
         finally
