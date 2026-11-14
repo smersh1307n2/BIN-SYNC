@@ -25,6 +25,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     private readonly Func<uint> _activeAuthorEpoch;
     private readonly Func<ReadOnlyMemory<byte>, RecordId> _recordIdResolver;
     private readonly Func<ReadOnlyMemory<byte>, ushort> _fieldIdResolver;
+    private readonly TimeSpan _gcLeaseRenewalInterval;
     private readonly SemaphoreSlim _feedGate = new(1, 1);
     private readonly SemaphoreSlim _gcScanGate = new(1, 1);
     private readonly object _gate = new();
@@ -40,7 +41,8 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         NodeId localAuthor,
         Func<uint> activeAuthorEpoch,
         Func<ReadOnlyMemory<byte>, RecordId>? recordIdResolver,
-        Func<ReadOnlyMemory<byte>, ushort>? fieldIdResolver)
+        Func<ReadOnlyMemory<byte>, ushort>? fieldIdResolver,
+        TimeSpan gcLeaseRenewalInterval)
     {
         _client = client;
         _outboxLease = outboxLease;
@@ -49,6 +51,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         _activeAuthorEpoch = activeAuthorEpoch;
         _recordIdResolver = recordIdResolver ?? ResolveDirectRecordId;
         _fieldIdResolver = fieldIdResolver ?? ResolveDirectFieldId;
+        _gcLeaseRenewalInterval = gcLeaseRenewalInterval;
     }
 
     public static async Task<FldDatabaseIpcAsyncDataProvider> ConnectAsync(
@@ -59,11 +62,16 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         Func<uint> activeAuthorEpoch,
         Func<ReadOnlyMemory<byte>, RecordId>? recordIdResolver = null,
         Func<ReadOnlyMemory<byte>, ushort>? fieldIdResolver = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TimeSpan? gcLeaseRenewalInterval = null)
     {
         if (clientId == Guid.Empty) throw new ArgumentException("Stable FLD ClientId is required.", nameof(clientId));
         if (localAuthor.IsZero) throw new ArgumentException("FLD local author must be nonzero.", nameof(localAuthor));
         ArgumentNullException.ThrowIfNull(activeAuthorEpoch);
+        TimeSpan renewalInterval = gcLeaseRenewalInterval ?? TimeSpan.FromSeconds(30);
+        if (renewalInterval <= TimeSpan.Zero || renewalInterval >= TimeSpan.FromMinutes(1))
+            throw new ArgumentOutOfRangeException(nameof(gcLeaseRenewalInterval),
+                "GC lease renewal interval must be positive and below one minute.");
         FldDatabaseIpcClient client = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
             rootDirectory, clientId, timeout, cancellationToken).ConfigureAwait(false);
         try
@@ -75,7 +83,8 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             FldDatabaseIpcOutboxLease lease = await client.AcquireOutboxLeaseAsync(cancellationToken)
                 .ConfigureAwait(false);
             return new FldDatabaseIpcAsyncDataProvider(
-                client, lease, clientId, localAuthor, activeAuthorEpoch, recordIdResolver, fieldIdResolver);
+                client, lease, clientId, localAuthor, activeAuthorEpoch,
+                recordIdResolver, fieldIdResolver, renewalInterval);
         }
         catch
         {
@@ -667,7 +676,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 throw new InvalidOperationException(
                     "The FLD Host GC reference scan belongs to a different namespace.");
             var result = new FldDatabaseIpcAsyncGcReferenceScan(
-                _client, _gcScanGate, lease, scan);
+                _client, _gcScanGate, lease, scan, _gcLeaseRenewalInterval);
             transferred = true;
             return result;
         }
@@ -730,13 +739,17 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         private readonly Guid _leaseToken;
         private readonly Guid _scanToken;
         private readonly ApplicationDraftHorizon _draftHorizon;
+        private readonly CancellationTokenSource _renewalShutdown = new();
+        private readonly Task _renewalTask;
+        private Exception? _renewalFailure;
         private int _disposed;
 
         public FldDatabaseIpcAsyncGcReferenceScan(
             FldDatabaseIpcClient client,
             SemaphoreSlim ownerGate,
             Guid leaseToken,
-            FldDatabaseIpcGcReferenceScan scan)
+            FldDatabaseIpcGcReferenceScan scan,
+            TimeSpan renewalInterval)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _ownerGate = ownerGate ?? throw new ArgumentNullException(nameof(ownerGate));
@@ -748,6 +761,25 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 scan.UnpublishedLocalDraftHorizon.Count,
                 scan.UnpublishedLocalDraftHorizon.MaxHlcWall,
                 scan.UnpublishedLocalDraftHorizon.MaxHlcLogical);
+            _renewalTask = RenewLeaseUntilDisposedAsync(renewalInterval, _renewalShutdown.Token);
+        }
+
+        private async Task RenewLeaseUntilDisposedAsync(
+            TimeSpan interval, CancellationToken cancellationToken)
+        {
+            try
+            {
+                using var timer = new PeriodicTimer(interval);
+                while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
+                    await _client.RenewGcLeaseAsync(_leaseToken, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception error)
+            {
+                Volatile.Write(ref _renewalFailure, error);
+            }
         }
 
         public ValueTask<ApplicationDraftHorizon> GetUnpublishedLocalDraftHorizonAsync(
@@ -789,6 +821,9 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
             Exception? failure = null;
+            _renewalShutdown.Cancel();
+            try { await _renewalTask.ConfigureAwait(false); }
+            catch (Exception error) { failure = error; }
             try
             {
                 await _client.ReleaseGcReferenceScanAsync(
@@ -834,6 +869,9 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
             cancellationToken.ThrowIfCancellationRequested();
+            Exception? renewalFailure = Volatile.Read(ref _renewalFailure);
+            if (renewalFailure is not null)
+                throw new IOException("FLD Host GC lease renewal failed; the reference scan is no longer safe to use.", renewalFailure);
         }
     }
 
