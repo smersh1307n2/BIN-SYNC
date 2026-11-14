@@ -268,4 +268,18 @@ jobs:
           dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
-            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --logger "console;verbosity=detailed" \
+            --logger "trx;LogFileName=fld-host-tests.trx" \
+            --results-directory "${{ runner.temp }}/fld-host-test-results" \
+            --blame-hang-timeout 2m \
+            --blame-hang-dump-type mini
+
+      - name: Upload FLD host hang diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fld-host-hang-diagnostics-${{ matrix.os }}
+          path: ${{ runner.temp }}/fld-host-test-results
+          retention-days: 14
+          if-no-files-found: ignore
