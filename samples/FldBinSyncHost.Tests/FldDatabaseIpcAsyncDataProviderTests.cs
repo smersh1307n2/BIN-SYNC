@@ -1095,10 +1095,53 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             async Task RestartHostAAfterGcPageAsync()
             {
-                await remoteA!.DisposeAsync(); remoteA = null;
-                await providerA!.DisposeAsync(); providerA = null;
+                // Crash Host A while its GC reference scan/lease is active. A second
+                // IPC session must be blocked before the crash; after process death the
+                // blocked request fails, and the reopened Host must have no stale lease.
                 Guid previousOwner = ownerA;
-                await StopDatabaseHostAsync(hostA!); hostA = null;
+                IAsyncApplicationGcReferenceScan? activeScan = null;
+                FldDatabaseIpcClient? blockedClient = null;
+                Task<byte[]>? blockedRequest = null;
+                try
+                {
+                    activeScan = await providerA!.OpenScanAsync(scope, nodeA!.NodeId, namespaceId);
+                    blockedClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                        hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15));
+                    blockedRequest = blockedClient.GetLocalAuthorAsync();
+                    await Task.Delay(100);
+                    Assert.False(blockedRequest.IsCompleted);
+
+                    await StopDatabaseHostAsync(hostA!);
+                    hostA = null;
+                    await Assert.ThrowsAnyAsync<IOException>(
+                        async () => await blockedRequest.WaitAsync(TimeSpan.FromSeconds(10)));
+                }
+                finally
+                {
+                    if (activeScan is not null)
+                    {
+                        try { await activeScan.DisposeAsync(); }
+                        catch (Exception) { /* The owning Host process has already exited. */ }
+                    }
+                    if (blockedClient is not null)
+                    {
+                        try { await blockedClient.DisposeAsync(); }
+                        catch (Exception) { /* The IPC endpoint belonged to the dead Host. */ }
+                    }
+                    if (remoteA is not null)
+                    {
+                        try { await remoteA.DisposeAsync(); }
+                        catch (Exception) { /* The IPC endpoint belonged to the dead Host. */ }
+                        remoteA = null;
+                    }
+                    if (providerA is not null)
+                    {
+                        try { await providerA.DisposeAsync(); }
+                        catch (Exception) { /* The IPC endpoint belonged to the dead Host. */ }
+                        providerA = null;
+                    }
+                }
+
                 await WaitForDatabaseWriterReleaseAsync(
                     hostRootA, namespaceId, authorABytes, TimeSpan.FromSeconds(15));
                 hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes, enableTombstoneGc: true);
@@ -1114,6 +1157,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     current => StorageNodePersistence.Save(nodeStorageA!, current));
                 Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                     await adapterA.RecoverBeforeAcceptingSessionsAsync());
+
+                await using var reopenedProbe = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                    hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15));
+                Assert.Equal(authorABytes, await reopenedProbe.GetLocalAuthorAsync());
             }
 
             async Task RestartHostBAfterGcPageAsync()
@@ -1210,6 +1257,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(2UL, secondTombstoneAtA.OriginSequence);
             Assert.Equal(2UL, secondTombstoneAtB.OriginSequence);
 
+            uint retiredTransportEpoch = checked((uint)initiator.PeerEpoch);
+            uint rejoinedTransportEpoch = checked(retiredTransportEpoch + 1);
             var keys = new[]
             {
                 BatchSignature.GenerateKeyPair(),
@@ -1238,7 +1287,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     {
                         NodeId = authorB,
                         PublicKey = keys[1].PublicKey,
-                        TransportPeerEpoch = 11,
+                        TransportPeerEpoch = retiredTransportEpoch,
                         Status = NamespaceMemberStatus.Active
                     },
                     new NamespaceRosterMember
@@ -1268,7 +1317,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         RosterGeneration = 1,
                         RosterDigest = initialDigest,
                         MemberNodeId = authorB,
-                        MemberTransportEpoch = 11,
+                        MemberTransportEpoch = retiredTransportEpoch,
                         ReportSequence = 1,
                         FinalForAuthor = true,
                         Entries =
@@ -1292,7 +1341,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         Members =
                         [
                             new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
-                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 11, Status = NamespaceMemberStatus.Retired, RetiredThroughEpoch = 11 },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = retiredTransportEpoch, Status = NamespaceMemberStatus.Retired, RetiredThroughEpoch = retiredTransportEpoch },
                             new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
                         ]
                     }, keys[0].Seed), trust);
@@ -1306,7 +1355,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         Members =
                         [
                             new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
-                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 13, Status = NamespaceMemberStatus.Joining },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = rejoinedTransportEpoch, Status = NamespaceMemberStatus.Joining },
                             new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
                         ]
                     }, keys[0].Seed), trust);
@@ -1320,7 +1369,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         Members =
                         [
                             new NamespaceRosterMember { NodeId = authorA, PublicKey = keys[0].PublicKey, TransportPeerEpoch = 10, Status = NamespaceMemberStatus.Active },
-                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = 13, Status = NamespaceMemberStatus.Active },
+                            new NamespaceRosterMember { NodeId = authorB, PublicKey = keys[1].PublicKey, TransportPeerEpoch = rejoinedTransportEpoch, Status = NamespaceMemberStatus.Active },
                             new NamespaceRosterMember { NodeId = relayMember, PublicKey = keys[2].PublicKey, TransportPeerEpoch = 12, Status = NamespaceMemberStatus.Active }
                         ]
                     }, keys[0].Seed), trust);
@@ -1366,7 +1415,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         RosterGeneration = 6,
                         RosterDigest = rosterDigest,
                         MemberNodeId = authorB,
-                        MemberTransportEpoch = 13,
+                        MemberTransportEpoch = rejoinedTransportEpoch,
                         ReportSequence = 1,
                         Entries =
                         [
@@ -1401,7 +1450,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 foreach (var item in new[]
                 {
                     (Member: authorA, Epoch: 10U, Key: keys[0]),
-                    (Member: authorB, Epoch: 13U, Key: keys[1]),
+                    (Member: authorB, Epoch: rejoinedTransportEpoch, Key: keys[1]),
                     (Member: relayMember, Epoch: 12U, Key: keys[2])
                 })
                 {
@@ -1433,11 +1482,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var gcA = new StorageNamespaceGcStore(
                 nodeStorageA, scope, authorA,
                 new StorageNamespaceGcFeatureOptions(
-                    EnableTombstoneGc: true, EnableChangeIdGc: true));
+                    EnableTombstoneGc: true, EnableChangeIdGc: true, EnableReceiptGc: true));
             var gcB = new StorageNamespaceGcStore(
                 nodeStorageB, scope, authorB,
                 new StorageNamespaceGcFeatureOptions(
-                    EnableTombstoneGc: true, EnableChangeIdGc: true));
+                    EnableTombstoneGc: true, EnableChangeIdGc: true, EnableReceiptGc: true));
             // Before C receives the tombstone there is deliberately no accepted
             // three-member frontier proof. The retained Metadata payloads independently
             // keep both physical GC passes fail-closed.
@@ -1536,6 +1585,109 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host B must independently validate all three Active members' signed applied frontiers.");
 
+            BatchId[] tombstoneChangeIds = [BatchId.From(Id(0x94)), BatchId.From(Id(0x95))];
+
+            // Compose retired-epoch receipt rollover into this same two-Host lifecycle.
+            // B's old transport incarnation forwards already-known A-origin changes back
+            // through its relay stream. The operation identity is unchanged; only the
+            // transport receipt identity/cursor belongs to B's retiring incarnation.
+            Assert.True(metadataA.TryGetChangeIdentity(
+                scope, nodeA.NodeId, namespaceId, tombstoneChangeIds[0],
+                out ReadOnlyMemory<byte> receiptFingerprint,
+                out OperationOrigin receiptOrigin, out bool receiptIsLocalOutbound));
+            Assert.True(receiptIsLocalOutbound);
+            Assert.Equal(nodeA.NodeId, receiptOrigin.AuthorNodeId);
+            Assert.Equal(17U, receiptOrigin.AuthorEpoch);
+
+            var retiredReceiptBatches = new List<MetadataIncomingBatch>(3);
+            byte[] priorReceiptDigest = new byte[16];
+            for (byte index = 0; index < 3; index++)
+            {
+                var retiredReceiptBatch = new MetadataIncomingBatch
+                {
+                    ScopeId = scope,
+                    LocalReplica = nodeA.NodeId,
+                    SenderPeer = nodeB.NodeId,
+                    SenderEpoch = receiptOrigin.AuthorEpoch,
+                    TransportPeerEpoch = retiredTransportEpoch,
+                    AuthorStreamNodeId = nodeA.NodeId,
+                    NamespaceId = namespaceId,
+                    BatchId = BatchId.From(Id((byte)(0xA1 + index))),
+                    CursorStart = (ulong)(index + 1),
+                    CursorEnd = (ulong)(index + 1),
+                    PreviousBatchDigest = priorReceiptDigest,
+                    BatchDigest = Enumerable.Repeat((byte)(0xB1 + index), 16).ToArray(),
+                    HeaderFingerprint = Enumerable.Repeat((byte)(0xC1 + index), 16).ToArray(),
+                    Operations =
+                    [
+                        new MetadataOperation
+                        {
+                            AuthorNodeId = nodeA.NodeId,
+                            ChangeId = tombstoneChangeIds[0],
+                            Fingerprint = receiptFingerprint.ToArray(),
+                            Payload = Array.Empty<byte>(),
+                            RelayEligible = false,
+                            OriginAuthorEpoch = receiptOrigin.AuthorEpoch,
+                            OriginSequence = receiptOrigin.Sequence
+                        }
+                    ]
+                };
+                Assert.False(metadataA.AcceptIncomingBatch(retiredReceiptBatch).IsDuplicate);
+                retiredReceiptBatches.Add(retiredReceiptBatch);
+                priorReceiptDigest = retiredReceiptBatch.BatchDigest;
+            }
+
+            // Complete the replacement transport baseline before retiring the old
+            // incarnation. The receive cursor/digest chain remains continuous across
+            // transport epochs and the old receipt rows remain independently collectible.
+            metadataA.RegisterInterestedPeer(
+                scope, nodeA.NodeId, nodeB.NodeId, rejoinedTransportEpoch, namespaceId);
+            metadataA.CompletePeerInitialSync(
+                scope, nodeA.NodeId, nodeB.NodeId, rejoinedTransportEpoch, namespaceId,
+                [new MetadataPeerStreamBaseline(nodeA.NodeId, 2, 17)]);
+            Assert.Equal(2UL, metadataA.GetSafePeerStreamCompactionCursor(
+                scope, nodeA.NodeId, namespaceId, nodeA.NodeId));
+            metadataA.RetireInterestedPeer(
+                scope, nodeA.NodeId, nodeB.NodeId,
+                retiredTransportEpoch, rejoinedTransportEpoch, namespaceId);
+
+            var replacementReceiptBatch = new MetadataIncomingBatch
+            {
+                ScopeId = scope,
+                LocalReplica = nodeA.NodeId,
+                SenderPeer = nodeB.NodeId,
+                SenderEpoch = receiptOrigin.AuthorEpoch,
+                TransportPeerEpoch = rejoinedTransportEpoch,
+                AuthorStreamNodeId = nodeA.NodeId,
+                NamespaceId = namespaceId,
+                BatchId = BatchId.From(Id(0xA4)),
+                CursorStart = 4,
+                CursorEnd = 4,
+                PreviousBatchDigest = priorReceiptDigest,
+                BatchDigest = Enumerable.Repeat((byte)0xB4, 16).ToArray(),
+                HeaderFingerprint = Enumerable.Repeat((byte)0xC4, 16).ToArray(),
+                Operations =
+                [
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = nodeA.NodeId,
+                        ChangeId = tombstoneChangeIds[0],
+                        Fingerprint = receiptFingerprint.ToArray(),
+                        Payload = Array.Empty<byte>(),
+                        RelayEligible = false,
+                        OriginAuthorEpoch = receiptOrigin.AuthorEpoch,
+                        OriginSequence = receiptOrigin.Sequence
+                    }
+                ]
+            };
+            Assert.False(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate);
+            metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
+
+            // FLD treats an unsealed WAL as an uncertainty barrier for every
+            // receipt identity. Receipt GC must therefore remain fail-closed until
+            // the first physical tombstone-GC admission seals the committed prefix.
+            Assert.Equal(0, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
+
             // Compact only after both the local apply consumer and every interested
             // downstream peer have acknowledged the immutable relay prefix.
             // The signed namespace proof alone never deletes payloads.
@@ -1547,7 +1699,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(metadataA.HasLiveRecordReference(scope, authorA, namespaceId, record));
             Assert.False(metadataB.HasLiveRecordReference(scope, authorB, namespaceId, record));
 
-            BatchId[] tombstoneChangeIds = [BatchId.From(Id(0x94)), BatchId.From(Id(0x95))];
             int CountTombstoneChangeIds(StorageMetadataStore metadata, NodeId local) =>
                 tombstoneChangeIds.Count(changeId => metadata.TryGetChangeIdentity(
                     scope, local, checked((int)namespaceId), changeId, out _, out _, out _));
@@ -1618,6 +1769,56 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 metadataA.MarkOutboundBatchPushed(
                     scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, reserved.BatchId);
 
+                // The batch was durably marked pushed, but its ACK is intentionally
+                // lost. Reopen the Metadata Storage database before acknowledging it;
+                // the exact immutable reservation must survive and be safely retried.
+                metadataA.Dispose();
+                metadataA = null;
+                nodeStorageA!.Dispose();
+                nodeStorageA = null;
+
+                nodeStorageA = StorageDatabase.Open(nodeRootA, nodeStorageNamespace);
+                metadataA = new StorageMetadataStore(nodeStorageA);
+                gcA = new StorageNamespaceGcStore(
+                    nodeStorageA, scope, nodeA!.NodeId,
+                    new StorageNamespaceGcFeatureOptions(
+                        EnableTombstoneGc: true,
+                        EnableChangeIdGc: true,
+                        EnableReceiptGc: true));
+                metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
+                coordinatorA = new AsyncStorageSyncCoordinator(nodeA, metadataA, scope, namespaceId);
+                adapterA = new FldBinSyncAsyncHostAdapter(
+                    coordinatorA, providerA!, remoteA!,
+                    current => StorageNodePersistence.Save(nodeStorageA!, current));
+                Assert.True(gcA.TryReadNamespaceRoster(namespaceId, trust, out _));
+                Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
+                    await adapterA.RecoverBeforeAcceptingSessionsAsync());
+
+                MetadataOutboundBatchReservation? recoveredReservation =
+                    metadataA.GetPendingOutboundBatch(
+                        scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA);
+                Assert.NotNull(recoveredReservation);
+                Assert.Equal(raceReservation.BatchId, recoveredReservation!.BatchId);
+                Assert.Equal(raceReservation.IssuerEpoch, recoveredReservation.IssuerEpoch);
+                Assert.Equal(raceReservation.StreamOffset, recoveredReservation.StreamOffset);
+                Assert.Equal(raceReservation.CursorStart, recoveredReservation.CursorStart);
+                Assert.Equal(raceReservation.CursorEnd, recoveredReservation.CursorEnd);
+                Assert.True(raceReservation.PreviousBatchDigest.AsSpan()
+                    .SequenceEqual(recoveredReservation.PreviousBatchDigest));
+                Assert.True(raceReservation.BatchDigest.AsSpan()
+                    .SequenceEqual(recoveredReservation.BatchDigest));
+                Assert.True(raceReservation.Payload.AsSpan()
+                    .SequenceEqual(recoveredReservation.Payload));
+
+                MetadataOutboundBatchReservation retriedReservation =
+                    metadataA.ReserveOutboundBatch(
+                        scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, raceReservation);
+                Assert.Equal(raceReservation.BatchId, retriedReservation.BatchId);
+                Assert.True(raceReservation.Payload.AsSpan()
+                    .SequenceEqual(retriedReservation.Payload));
+                metadataA.MarkOutboundBatchPushed(
+                    scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, retriedReservation.BatchId);
+
                 started.Reset();
                 Task ackTask;
                 using (metadataA.AcquireTombstoneGcCommitGuard(
@@ -1656,23 +1857,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
             Assert.Single(await providerA.ReadTombstoneGcCandidatesAsync(16));
             Assert.Single(await providerB.ReadTombstoneGcCandidatesAsync(16));
-            // The Host's committed prefix is now sealed and its transient
-            // ChangeId references are released. The ChangeId horizon can advance
-            // independently even though one physical tombstone remains on each Host.
-            Assert.Equal(2, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
-            Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
-            Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
-            Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
-            Assert.NotEqual(
-                await providerA.ReadCurrentAsync(record, 0x0951) is null,
-                await providerA.ReadCurrentAsync(record, 0x0952) is null);
-            Assert.NotEqual(
-                await providerB.ReadCurrentAsync(record, 0x0951) is null,
-                await providerB.ReadCurrentAsync(record, 0x0952) is null);
 
-            // Kill and reopen both real FLD Host processes after page one. The
-            // next bounded page must use the same durable signed proof and the
-            // same final Metadata reference scan, not an in-memory cache.
+            // WAL is now sealed on both Hosts. Receipt GC can advance independently
+            // from the remaining physical tombstone page. Commit one bounded receipt
+            // page, restart both real Hosts, then resume the remaining pages.
+            Assert.Equal(1, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
+
             await relayInitiator.DisposeAsync(); relayInitiator = null;
             await relayAcceptor.DisposeAsync(); relayAcceptor = null;
             relayNode.Dispose(); relayNode = null;
@@ -1680,6 +1870,34 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await acceptor.DisposeAsync(); acceptor = null;
             await RestartHostAAfterGcPageAsync();
             await RestartHostBAfterGcPageAsync();
+
+            for (int page = 1; page < retiredReceiptBatches.Count; page++)
+                Assert.Equal(1, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
+            Assert.Equal(0, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
+
+            foreach (MetadataIncomingBatch retiredReceiptBatch in retiredReceiptBatches)
+                Assert.Throws<InvalidDataException>(
+                    () => metadataA.AcceptIncomingBatch(retiredReceiptBatch));
+            Assert.True(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate,
+                "The current transport epoch's receipt must remain a durable replay proof.");
+            // The Host's committed prefix is now sealed and its transient
+            // ChangeId references are released. The ChangeId horizon can advance
+            // independently even though one physical tombstone remains on each Host.
+            Assert.Equal(2, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
+            Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
+            Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
+            Assert.Throws<InvalidDataException>(
+                () => metadataA.AcceptIncomingBatch(replacementReceiptBatch));
+            Assert.NotEqual(
+                await providerA.ReadCurrentAsync(record, 0x0951) is null,
+                await providerA.ReadCurrentAsync(record, 0x0952) is null);
+            Assert.NotEqual(
+                await providerB.ReadCurrentAsync(record, 0x0951) is null,
+                await providerB.ReadCurrentAsync(record, 0x0952) is null);
+
+            // Both Hosts were restarted between the bounded Receipt-GC pages above.
+            // The remaining physical tombstone page now resumes from those reopened Hosts.
 
             Assert.Single(await providerA!.ReadTombstoneGcCandidatesAsync(16));
             Assert.Single(await providerB!.ReadTombstoneGcCandidatesAsync(16));
