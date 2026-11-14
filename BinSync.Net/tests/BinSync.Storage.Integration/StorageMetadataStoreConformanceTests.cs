@@ -874,8 +874,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Guid token = Guid.Parse("00000000-0000-0000-0000-000000000438");
 
         store.BeginPendingApply(incoming, token);
+        Assert.Equal(1, store.GetGcReservationDiagnostics(scope, local, 7).PendingApplyCount);
         store.FinalizePendingApply(scope, local,
             new MetadataProviderApplyReceipt(token, incoming.BatchDigest.ToArray()));
+        Assert.Equal(0, store.GetGcReservationDiagnostics(scope, local, 7).PendingApplyCount);
 
         Assert.Throws<MetadataPendingApplyAlreadyFinalizedException>(
             () => store.BeginPendingApply(incoming, token));
