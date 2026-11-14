@@ -1439,13 +1439,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
-            // The signed causal horizon is already safe and every immutable Metadata
-            // payload is ACKed/compacted, but the live FLD tombstones still pin their
-            // ChangeIds. Metadata GC must not outrun physical tombstone reclamation.
-            Assert.Equal(0, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
-            Assert.Equal(0, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
-            Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
-            Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
+            // ChangeId and physical tombstone retention are independent horizons.
+            // Once the signed origin checkpoint is accepted and immutable Metadata
+            // payloads are ACKed/compacted, the ChangeId ledger can be reclaimed even
+            // while FLD still retains the tombstone rows for record-level convergence.
+            Assert.Equal(2, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
+            Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
+            Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
             // Distinguish a conservative Metadata reservation block from provider
             // candidate/proof rejection before invoking physical GC. The Host seals
@@ -1540,13 +1541,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
             Assert.Single(await providerA.ReadTombstoneGcCandidatesAsync(16));
             Assert.Single(await providerB.ReadTombstoneGcCandidatesAsync(16));
-            // One physical tombstone is gone on each Host. Exactly its ChangeId
-            // can now pass the independent Metadata horizon; the remaining live
-            // tombstone continues to veto the other ChangeId.
-            Assert.Equal(1, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
-            Assert.Equal(1, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
-            Assert.Equal(1, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
-            Assert.Equal(1, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
+            // Tombstone page one progresses independently after ChangeId-GC has
+            // already completed. The remaining FLD tombstone is still protected by
+            // its signed origin frontier and final Host reference scan.
+            Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
             Assert.NotEqual(
                 await providerA.ReadCurrentAsync(record, 0x0951) is null,
                 await providerA.ReadCurrentAsync(record, 0x0952) is null);
@@ -1576,11 +1575,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
             Assert.Null(await providerB.ReadCurrentAsync(record, 0x0952));
 
-            // After Host restart and tombstone page two, the final external
-            // ChangeId references disappear. The second independent bounded
-            // compaction page can now reclaim the remaining Metadata identity.
-            Assert.Equal(1, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
-            Assert.Equal(1, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
+            // Tombstone page two also completes after Host restart, independently
+            // of the already-reclaimed ChangeId ledger identities.
             Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
