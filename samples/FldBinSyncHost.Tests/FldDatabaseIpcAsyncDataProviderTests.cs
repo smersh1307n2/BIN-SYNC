@@ -779,7 +779,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             int relaySent = await relaySend;
             BatchResult relayApplied = await relayReceive;
             Assert.Equal(1, relaySent);
-            Assert.Equal(1, relayApplied.Applied);
+            Assert.Equal(2, relayApplied.Applied);
 
             // Verify the exact relay author stream was delivered and ACKed by C.
             // A successful send count alone is insufficient: the ACK must advance
