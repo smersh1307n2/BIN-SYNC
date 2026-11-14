@@ -269,20 +269,23 @@ public sealed class AsyncCoordinatorProcessCrashTests
 
             using var callbackStarted = new ManualResetEventSlim();
             using var callbackCompleted = new ManualResetEventSlim();
+            using var sendCts = new CancellationTokenSource();
             Task<BatchResult> receive = acceptor.ReceiveBatchAsync(
                 receiver,
                 beforeApply: null,
                 beforeApplyWithOperationDecisions: (batch, payload, peer) =>
                 {
                     callbackStarted.Set();
-                    StorageRemoteApplyPlan plan = coordinator.BeginRemoteBatchBeforeNodeApply(
+                    _ = coordinator.BeginRemoteBatchBeforeNodeApply(
                         batch, payload.ToArray(), peer, checked((uint)acceptor.PeerEpoch));
                     callbackCompleted.Set();
-                    return plan.ApplyOperations;
+                    throw new InvalidOperationException(
+                        "simulated interruption after durable PendingApply staging");
                 },
                 beforeAck: null,
+                ct: CancellationToken.None,
                 receiveStateOwnedByMetadataStore: true);
-            Task<bool> send = initiator.PushBatchAsync(sender, NamespaceId);
+            Task<bool> send = initiator.PushBatchAsync(sender, NamespaceId, ct: sendCts.Token);
 
             try
             {
@@ -295,7 +298,15 @@ public sealed class AsyncCoordinatorProcessCrashTests
                 admission.Release();
             }
 
-            await Task.WhenAll(receive, send).WaitAsync(TimeSpan.FromSeconds(30));
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await receive.WaitAsync(TimeSpan.FromSeconds(30)));
+            Assert.True(callbackCompleted.IsSet,
+                "Direct receive staging did not resume after namespace admission was released.");
+            sendCts.Cancel();
+            try { _ = await send.WaitAsync(TimeSpan.FromSeconds(10)); }
+            catch (OperationCanceledException) { }
+            catch (IOException) { }
+
             IReadOnlyList<MetadataPendingApplyIntent> pending =
                 metadata.ReadPendingApplyIntents("async-gc-admission", receiver.NodeId);
             Assert.Single(pending);
