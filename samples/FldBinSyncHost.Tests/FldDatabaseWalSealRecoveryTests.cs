@@ -67,11 +67,14 @@ public sealed class FldDatabaseWalSealRecoveryTests
             {
                 Assert.True(reopened.TryResolve(recordId, 7, out var retained));
                 Assert.True(retained.IsTombstone);
-                using FldReferenceSnapshot snapshot = reopened.OpenReferenceSnapshot();
-                Assert.Equal(0UL, snapshot.UnpublishedLocalDraftHorizon.Count);
-                Assert.False(snapshot.HasReceiptReference(
-                    Id(0x43), 17, 18, namespaceId, Id(0x44)));
+                using (FldReferenceSnapshot snapshot = reopened.OpenReferenceSnapshot())
+                {
+                    Assert.Equal(0UL, snapshot.UnpublishedLocalDraftHorizon.Count);
+                    Assert.False(snapshot.HasReceiptReference(
+                        Id(0x43), 17, 18, namespaceId, Id(0x44)));
+                }
 
+                // No reference snapshot may remain pinned during physical deletion.
                 Assert.Equal(1, reopened.CompactTombstones(
                     _ => true, limit: 1));
                 Assert.False(reopened.TryResolve(recordId, 7, out _));
