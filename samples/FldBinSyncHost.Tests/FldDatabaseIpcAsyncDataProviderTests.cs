@@ -283,7 +283,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             metadata.RegisterInterestedPeer(scope, local, authority, 2, checked((int)namespaceId));
             metadata.CompletePeerInitialSync(
                 scope, local, authority, 2, checked((int)namespaceId),
-                [new MetadataPeerStreamBaseline(authority, 0, 8)]);
+                [new MetadataPeerStreamBaseline(local, 0, 17)]);
             metadata.RetireInterestedPeer(
                 scope, local, authority, 1, 2, checked((int)namespaceId));
 
