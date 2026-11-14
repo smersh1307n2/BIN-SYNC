@@ -874,6 +874,310 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
+    /// <summary>
+    /// Async counterpart for process-isolated providers. The Host scan is opened once
+    /// and queried outside the Metadata monitor; candidates are then revalidated under
+    /// the monitor before one bounded durable deletion transaction.
+    /// </summary>
+    public async Task<int> CompactChangeLedgerAsync(
+        string scopeId, NodeId localReplica, int namespaceId, int limit,
+        IAsyncApplicationGcReferenceScanner externalReferences,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
+        ArgumentNullException.ThrowIfNull(externalReferences);
+
+        await using IAsyncApplicationGcReferenceScan externalScan =
+            await externalReferences.OpenScanAsync(scopeId, localReplica, namespaceId, cancellationToken)
+                .ConfigureAwait(false);
+        ApplicationDraftHorizon draftHorizon =
+            await externalScan.GetUnpublishedLocalDraftHorizonAsync(cancellationToken).ConfigureAwait(false);
+        if (draftHorizon.Count == 0 &&
+            (draftHorizon.MaxHlcWall != 0 || draftHorizon.MaxHlcLogical != 0))
+            throw new InvalidDataException("Async Host GC scanner returned an HLC maximum for an empty draft horizon.");
+
+        StorageNamespaceGcStore gcStore = _namespaceGcStore
+            ?? throw new InvalidOperationException("Attach the durable namespace-GC replay guard before ChangeId GC.");
+        TrustStore trustStore = _namespaceGcTrustStore
+            ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+        if (!gcStore.IsChangeIdGcProofEnabled)
+            return 0;
+
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        List<(LedgerKey Key, OperationOrigin Origin)> candidates;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!TryGetPartition(partitionKey, out PartitionState? current))
+                return 0;
+            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available for ChangeId GC.");
+            if (current.PeerStreams.Any(pair =>
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
+                return 0;
+
+            HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
+            candidates = new List<(LedgerKey, OperationOrigin)>(Math.Min(limit, current.ChangeLedger.Count));
+            foreach (var pair in current.ChangeLedger)
+            {
+                if (pair.Key.NamespaceId != namespaceId)
+                    continue;
+                OperationOrigin origin = pair.Value.Provenance;
+                if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
+                    liveChangeIds.Contains(pair.Key.ChangeId) ||
+                    !gcStore.IsOriginCoveredByRetentionCheckpoint(
+                        roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
+                    continue;
+                candidates.Add((pair.Key, origin));
+                if (candidates.Count == limit)
+                    break;
+            }
+        }
+
+        if (candidates.Count == 0)
+            return 0;
+
+        var hostUnreferenced = new HashSet<BatchId>();
+        foreach ((LedgerKey key, _) in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await externalScan.HasExternalChangeIdReferenceAsync(
+                    key.ChangeId, cancellationToken).ConfigureAwait(false))
+                hostUnreferenced.Add(key.ChangeId);
+        }
+        if (hostUnreferenced.Count == 0)
+            return 0;
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!TryGetPartition(partitionKey, out PartitionState? current))
+                return 0;
+            if (current.PeerStreams.Any(pair =>
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
+                return 0;
+            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                return 0;
+
+            HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
+            var approved = new List<(LedgerKey Key, byte[] StorageKey)>(hostUnreferenced.Count);
+            foreach ((LedgerKey key, OperationOrigin origin) in candidates)
+            {
+                if (!hostUnreferenced.Contains(key.ChangeId) ||
+                    liveChangeIds.Contains(key.ChangeId) ||
+                    !current.ChangeLedger.TryGetValue(key, out ChangeLedgerValue? currentValue) ||
+                    currentValue.Provenance != origin ||
+                    !gcStore.IsOriginCoveredByRetentionCheckpoint(
+                        roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
+                    continue;
+
+                byte[] suffix = new byte[18];
+                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
+                key.ChangeId.WriteTo(suffix.AsSpan(2));
+                approved.Add((key, StorageKey(PartitionRoot(partitionKey), 3, suffix)));
+            }
+            if (approved.Count == 0)
+                return 0;
+
+            byte[][] deletes = approved.Select(item => item.StorageKey).ToArray();
+            CommitPeerMetadataDelta(partitionKey, current,
+                Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
+                () =>
+                {
+                    foreach (var item in approved)
+                        current.ChangeLedger.Remove(item.Key);
+                });
+            return approved.Count;
+        }
+    }
+
+    private static HashSet<BatchId> BuildMetadataLiveChangeIdSet(
+        PartitionState current, int namespaceId)
+    {
+        var live = new HashSet<BatchId>();
+        foreach (var stream in current.Relay)
+            if (stream.Key.NamespaceId == namespaceId)
+                foreach (MetadataRelayItem item in stream.Value)
+                    live.Add(item.ChangeId);
+        foreach (var stream in current.Outbound)
+            if (stream.Key.NamespaceId == namespaceId)
+                foreach (MetadataOutboundItem item in stream.Value)
+                    live.Add(item.ChangeId);
+        foreach (PendingApplyValue pending in current.PendingApplies.Values)
+            if (pending.Batch.NamespaceId == namespaceId)
+                foreach (MetadataOperation operation in pending.Batch.Operations)
+                    live.Add(operation.ChangeId);
+        return live;
+    }
+
+    /// <summary>Async Host-scanner counterpart for bounded retired-epoch receipt compaction.</summary>
+    public async Task<int> CompactReceiptsAsync(
+        string scopeId, NodeId localReplica, int namespaceId, int limit,
+        IAsyncApplicationGcReferenceScanner externalReferences,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
+        ArgumentNullException.ThrowIfNull(externalReferences);
+
+        await using IAsyncApplicationGcReferenceScan externalScan =
+            await externalReferences.OpenScanAsync(scopeId, localReplica, namespaceId, cancellationToken)
+                .ConfigureAwait(false);
+        ApplicationDraftHorizon draftHorizon =
+            await externalScan.GetUnpublishedLocalDraftHorizonAsync(cancellationToken).ConfigureAwait(false);
+        if (draftHorizon.Count == 0 &&
+            (draftHorizon.MaxHlcWall != 0 || draftHorizon.MaxHlcLogical != 0))
+            throw new InvalidDataException("Async Host GC scanner returned an HLC maximum for an empty draft horizon.");
+
+        StorageNamespaceGcStore gcStore = _namespaceGcStore
+            ?? throw new InvalidOperationException("Attach the durable namespace-GC replay guard before receipt GC.");
+        TrustStore trustStore = _namespaceGcTrustStore
+            ?? throw new InvalidOperationException("Namespace-GC trust store is not attached.");
+        if (!gcStore.IsReceiptGcProofEnabled)
+            return 0;
+
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        List<(ReceiptKey Key, ReceiptValue Value)> candidates;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!TryGetPartition(partitionKey, out PartitionState? current))
+                return 0;
+            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                throw new InvalidOperationException("No accepted namespace roster is available for receipt GC.");
+            candidates = BuildReceiptGcCandidates(current, namespaceId, roster, gcStore, trustStore, limit);
+        }
+
+        if (candidates.Count == 0)
+            return 0;
+
+        var hostUnreferenced = new HashSet<ReceiptKey>();
+        foreach ((ReceiptKey key, ReceiptValue receipt) in candidates)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!await externalScan.HasExternalReceiptReferenceAsync(
+                    key.Sender, key.Epoch, receipt.TransportPeerEpoch, key.BatchId,
+                    cancellationToken).ConfigureAwait(false))
+                hostUnreferenced.Add(key);
+        }
+        if (hostUnreferenced.Count == 0)
+            return 0;
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!TryGetPartition(partitionKey, out PartitionState? current))
+                return 0;
+            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
+                roster is null)
+                return 0;
+
+            List<(ReceiptKey Key, byte[] StorageKey)> approved = new(Math.Min(limit, hostUnreferenced.Count));
+            var pendingReceiptKeys = BuildPendingReceiptKeySet(current);
+            var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
+            foreach ((ReceiptKey key, ReceiptValue observed) in candidates)
+            {
+                if (!hostUnreferenced.Contains(key) ||
+                    !current.Receipts.TryGetValue(key, out ReceiptValue? receipt) ||
+                    !ReferenceEquals(receipt, observed) ||
+                    key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
+                    key.Epoch == 0 || receipt.OriginSequence == 0 ||
+                    pendingReceiptKeys.Contains(key) ||
+                    !rosterMembers.TryGetValue(key.Sender, out NamespaceRosterMember? senderMember) ||
+                    !current.RetiredPeerEpochs.TryGetValue(
+                        (namespaceId, key.Sender), out uint retiredThrough) ||
+                    !IsReceiptTransportEpochFenced(senderMember, receipt.TransportPeerEpoch, retiredThrough))
+                    continue;
+
+                var receiveKey = new ReceiveKey(
+                    key.Sender, key.Epoch, key.NamespaceId, receipt.DurableAuthor);
+                if (!current.Receives.TryGetValue(receiveKey, out ReceiveState receive) ||
+                    receive.CursorEnd < receipt.CursorEnd ||
+                    !HasReceiveChainForAuthor(current, receiveKey) ||
+                    !gcStore.IsOriginCoveredByRetentionCheckpoint(
+                        roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
+                    continue;
+                approved.Add((key, EncodeReceiptKey(partitionKey, key)));
+                if (approved.Count == limit)
+                    break;
+            }
+
+            if (approved.Count == 0)
+                return 0;
+            byte[][] deletes = approved.Select(item => item.StorageKey).ToArray();
+            CommitPeerMetadataDelta(partitionKey, current,
+                Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
+                () =>
+                {
+                    foreach ((ReceiptKey key, _) in approved)
+                        current.Receipts.Remove(key);
+                });
+            return approved.Count;
+        }
+    }
+
+    private static List<(ReceiptKey Key, ReceiptValue Value)> BuildReceiptGcCandidates(
+        PartitionState current, int namespaceId, NamespaceRosterCertificate roster,
+        StorageNamespaceGcStore gcStore, TrustStore trustStore, int limit)
+    {
+        var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
+        HashSet<ReceiptKey> pendingReceiptKeys = BuildPendingReceiptKeySet(current);
+        var candidates = new List<(ReceiptKey, ReceiptValue)>(Math.Min(limit, current.Receipts.Count));
+        foreach (var pair in current.Receipts)
+        {
+            ReceiptKey key = pair.Key;
+            ReceiptValue receipt = pair.Value;
+            if (key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
+                key.Epoch == 0 || receipt.OriginSequence == 0 ||
+                !rosterMembers.TryGetValue(key.Sender, out NamespaceRosterMember? senderMember) ||
+                !current.RetiredPeerEpochs.TryGetValue(
+                    (namespaceId, key.Sender), out uint retiredThrough) ||
+                !IsReceiptTransportEpochFenced(senderMember, receipt.TransportPeerEpoch, retiredThrough))
+                continue;
+            var receiveKey = new ReceiveKey(
+                key.Sender, key.Epoch, key.NamespaceId, receipt.DurableAuthor);
+            if (!current.Receives.TryGetValue(receiveKey, out ReceiveState receive) ||
+                receive.CursorEnd < receipt.CursorEnd ||
+                !HasReceiveChainForAuthor(current, receiveKey) ||
+                pendingReceiptKeys.Contains(key) ||
+                !gcStore.IsOriginCoveredByRetentionCheckpoint(
+                    roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
+                continue;
+            candidates.Add((key, receipt));
+            if (candidates.Count == limit)
+                break;
+        }
+        return candidates;
+    }
+
+    private static HashSet<ReceiptKey> BuildPendingReceiptKeySet(PartitionState current)
+    {
+        var pending = new HashSet<ReceiptKey>();
+        foreach (PendingApplyValue intent in current.PendingApplies.Values)
+        {
+            MetadataIncomingBatch batch = intent.Batch;
+            pending.Add(new ReceiptKey(
+                batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId));
+        }
+        return pending;
+    }
+
     internal static bool IsReceiptTransportEpochFenced(
         NamespaceRosterMember senderMember, uint receiptTransportPeerEpoch, uint retiredThroughEpoch)
     {
