@@ -419,16 +419,62 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             var coordinatorA = new AsyncStorageSyncCoordinator(nodeA, metadataA, scope, namespaceId);
             var coordinatorB = new AsyncStorageSyncCoordinator(nodeB, metadataB, scope, namespaceId);
-            var adapterA = new FldBinSyncAsyncHostAdapter(
+            FldBinSyncAsyncHostAdapter adapterA = new(
                 coordinatorA, providerA, remoteA,
                 current => StorageNodePersistence.Save(nodeStorageA, current));
-            var adapterB = new FldBinSyncAsyncHostAdapter(
+            FldBinSyncAsyncHostAdapter adapterB = new(
                 coordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
             Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                 await adapterA.RecoverBeforeAcceptingSessionsAsync());
             Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                 await adapterB.RecoverBeforeAcceptingSessionsAsync());
+
+            async Task RestartHostAAfterGcPageAsync()
+            {
+                await remoteA!.DisposeAsync(); remoteA = null;
+                await providerA!.DisposeAsync(); providerA = null;
+                Guid previousOwner = ownerA;
+                await StopDatabaseHostAsync(hostA!); hostA = null;
+                await WaitForDatabaseWriterReleaseAsync(
+                    hostRootA, namespaceId, authorABytes, TimeSpan.FromSeconds(15));
+                hostA = StartDatabaseHost(hostRootA, namespaceId, authorABytes, enableTombstoneGc: true);
+                ownerA = (await WaitForHostEndpointAsync(
+                    hostRootA, hostA, TimeSpan.FromSeconds(45), previousOwner)).OwnerId;
+                providerA = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                    hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15), authorA, () => 17);
+                remoteA = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                    hostRootA, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+                await providerA.EnableMetadataStoreOwnedPublicationAsync(0);
+                adapterA = new FldBinSyncAsyncHostAdapter(
+                    coordinatorA, providerA, remoteA,
+                    current => StorageNodePersistence.Save(nodeStorageA!, current));
+                Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
+                    await adapterA.RecoverBeforeAcceptingSessionsAsync());
+            }
+
+            async Task RestartHostBAfterGcPageAsync()
+            {
+                await remoteB!.DisposeAsync(); remoteB = null;
+                await providerB!.DisposeAsync(); providerB = null;
+                Guid previousOwner = ownerB;
+                await StopDatabaseHostAsync(hostB!); hostB = null;
+                await WaitForDatabaseWriterReleaseAsync(
+                    hostRootB, namespaceId, authorBBytes, TimeSpan.FromSeconds(15));
+                hostB = StartDatabaseHost(hostRootB, namespaceId, authorBBytes, enableTombstoneGc: true);
+                ownerB = (await WaitForHostEndpointAsync(
+                    hostRootB, hostB, TimeSpan.FromSeconds(45), previousOwner)).OwnerId;
+                providerB = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                    hostRootB, Guid.NewGuid(), TimeSpan.FromSeconds(15), authorB, () => 18);
+                remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                    hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
+                await providerB.EnableMetadataStoreOwnedPublicationAsync(0);
+                adapterB = new FldBinSyncAsyncHostAdapter(
+                    coordinatorB, providerB, remoteB,
+                    current => StorageNodePersistence.Save(nodeStorageB!, current));
+                Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
+                    await adapterB.RecoverBeforeAcceptingSessionsAsync());
+            }
 
             await providerA.AppendLocalChangeWithReceiptAsync(new ProviderMutation
             {
@@ -869,11 +915,28 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 await providerB.ReadCurrentAsync(record, 0x0951) is null,
                 await providerB.ReadCurrentAsync(record, 0x0952) is null);
 
+            // Kill and reopen both real FLD Host processes after page one. The
+            // next bounded page must use the same durable signed proof and the
+            // same final Metadata reference scan, not an in-memory cache.
             await relayInitiator.DisposeAsync(); relayInitiator = null;
             await relayAcceptor.DisposeAsync(); relayAcceptor = null;
             relayNode.Dispose(); relayNode = null;
             await initiator.DisposeAsync(); initiator = null;
             await acceptor.DisposeAsync(); acceptor = null;
+            await RestartHostAAfterGcPageAsync();
+            await RestartHostBAfterGcPageAsync();
+
+            Assert.Single(await providerA!.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Single(await providerB!.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
+            Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
+            Assert.Empty(await providerA.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Empty(await providerB.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
+            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0952));
+            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
+            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0952));
+
             await remoteA.DisposeAsync(); remoteA = null;
             await remoteB.DisposeAsync(); remoteB = null;
             await providerA.DisposeAsync(); providerA = null;
