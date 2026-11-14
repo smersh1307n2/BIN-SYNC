@@ -5553,29 +5553,40 @@ public sealed class StorageSyncCoordinatorTests
         const int namespaceId = 1;
         using var storage = StorageDatabase.Open(
             Path.Combine(_root, "outbound-read-reservation-gc-interleave"), 593);
-        using var provider = new StorageDataProvider(storage);
         using var metadata = new StorageMetadataStore(storage);
         using var local = NewNode(93);
         using var peer = NewNode(94);
         var trust = new TrustStore();
         var gc = new StorageNamespaceGcStore(storage, scope, local.NodeId);
         metadata.AttachNamespaceGcGuard(gc, trust, scope, local.NodeId);
-        var coordinator = new StorageSyncCoordinator(local, provider, namespaceId, metadata, scope);
         RecordId record = RecordId.From(Guid.Parse("93000000-0000-0000-0000-000000000093").ToByteArray());
-
-        provider.AppendLocalChange(new ProviderMutation
+        uint peerEpoch = checked((uint)peer.Epoch);
+        uint authorEpoch = checked((uint)local.Epoch);
+        BatchId changeId = BatchId.From(Guid.Parse("93000000-0000-0000-0000-000000000095").ToByteArray());
+        byte[] payload = ProviderMutationCodec.Encode(new ProviderMutation
         {
             RecordId = record,
             FieldId = 0x0193,
             AuthorNodeId = local.NodeId,
-            OriginAuthorEpoch = checked((uint)local.Epoch),
             HlcWall = 9300,
-            Value = "read-before-reserve"u8.ToArray()
+            Value = "read-before-reserve"u8.ToArray(),
+            ChangeId = changeId,
+            OriginAuthorEpoch = authorEpoch,
+            OriginSequence = 1
         });
-        Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
-
-        uint peerEpoch = checked((uint)peer.Epoch);
-        uint authorEpoch = checked((uint)local.Epoch);
+        metadata.FreezeOutbound(scope, local.NodeId, namespaceId, local.NodeId,
+            new[]
+            {
+                new MetadataFrozenOperation
+                {
+                    ChangeId = changeId,
+                    Fingerprint = Enumerable.Repeat((byte)0x93, 16).ToArray(),
+                    Payload = payload,
+                    OriginAuthorEpoch = authorEpoch,
+                    OriginSequence = 1,
+                    HlcWall = 9300
+                }
+            });
         metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId);
         metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId,
             new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, authorEpoch) });
