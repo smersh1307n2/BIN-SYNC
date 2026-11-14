@@ -912,20 +912,22 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 BatchDigest = Enumerable.Repeat((byte)0x9A, 16).ToArray(),
                 Payload = [0x9B]
             };
-            using (var started = new ManualResetEventSlim())
             {
+                var reserveStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 Task<MetadataOutboundBatchReservation> reserveTask;
                 using (metadataA.AcquireTombstoneGcCommitGuard(
                     scope, nodeA.NodeId, namespaceId, gcA, trust, out _))
                 {
                     reserveTask = Task.Run(() =>
                     {
-                        started.Set();
+                        reserveStarted.TrySetResult();
                         return metadataA.ReserveOutboundBatch(
                             scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, raceReservation);
                     });
-                    Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
-                    Assert.False(reserveTask.Wait(TimeSpan.FromMilliseconds(100)),
+                    await reserveStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Task completed = await Task.WhenAny(reserveTask, Task.Delay(100));
+                    Assert.NotSame(reserveTask, completed,
                         "Outbound reservation must wait behind the final GC commit guard.");
                 }
                 MetadataOutboundBatchReservation reserved =
@@ -933,20 +935,22 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 metadataA.MarkOutboundBatchPushed(
                     scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, reserved.BatchId);
 
-                started.Reset();
+                var ackStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 Task ackTask;
                 using (metadataA.AcquireTombstoneGcCommitGuard(
                     scope, nodeA.NodeId, namespaceId, gcA, trust, out _))
                 {
                     ackTask = Task.Run(() =>
                     {
-                        started.Set();
+                        ackStarted.TrySetResult();
                         metadataA.AcknowledgePeerBatch(
                             scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA,
                             reserved.BatchId, reserved.CursorEnd, reserved.BatchDigest);
                     });
-                    Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
-                    Assert.False(ackTask.Wait(TimeSpan.FromMilliseconds(100)),
+                    await ackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Task completed = await Task.WhenAny(ackTask, Task.Delay(100));
+                    Assert.NotSame(ackTask, completed,
                         "Outbound ACK must wait behind the final GC commit guard.");
                 }
                 await ackTask.WaitAsync(TimeSpan.FromSeconds(5));
