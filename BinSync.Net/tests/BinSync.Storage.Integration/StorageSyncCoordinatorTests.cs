@@ -5596,30 +5596,47 @@ public sealed class StorageSyncCoordinatorTests
             Payload = item.Payload.ToArray()
         };
 
-        Task<MetadataOutboundBatchReservation> reservation;
         using var reservationStarted = new ManualResetEventSlim();
+        using var reservationCompleted = new ManualResetEventSlim();
+        MetadataOutboundBatchReservation? reserved = null;
+        Exception? reservationError = null;
+        var reservationThread = new Thread(() =>
+        {
+            reservationStarted.Set();
+            try
+            {
+                reserved = metadata.ReserveOutboundBatch(
+                    scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId, local.NodeId, candidate);
+            }
+            catch (Exception exception)
+            {
+                reservationError = exception;
+            }
+            finally
+            {
+                reservationCompleted.Set();
+            }
+        }) { IsBackground = true };
+
         using (IDisposable guard = metadata.AcquireTombstoneGcCommitGuard(
             scope, local.NodeId, namespaceId, gc, trust, out IReadOnlySet<RecordId>? liveReferences))
         {
             Assert.NotNull(liveReferences);
             Assert.Contains(record, liveReferences!);
-
-            reservation = Task.Run(() =>
-            {
-                reservationStarted.Set();
-                return metadata.ReserveOutboundBatch(
-                    scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId, local.NodeId, candidate);
-            });
+            reservationThread.Start();
 
             // Ensure the worker reached the call before asserting that the commit lease
             // blocks it; the source outbound row remains durable during this interval.
             Assert.True(reservationStarted.Wait(TimeSpan.FromSeconds(5)));
-            Assert.False(reservation.Wait(TimeSpan.FromMilliseconds(150)));
+            Assert.False(reservationCompleted.Wait(TimeSpan.FromMilliseconds(150)));
             Assert.True(metadata.HasLiveRecordReference(scope, local.NodeId, namespaceId, record));
         }
 
-        MetadataOutboundBatchReservation reserved = reservation.GetAwaiter().GetResult();
-        Assert.Equal(candidate.BatchId, reserved.BatchId);
+        Assert.True(reservationCompleted.Wait(TimeSpan.FromSeconds(5)));
+        reservationThread.Join();
+        Assert.Null(reservationError);
+        Assert.NotNull(reserved);
+        Assert.Equal(candidate.BatchId, reserved!.BatchId);
         Assert.Equal(candidate.CursorEnd, reserved.CursorEnd);
         Assert.NotNull(metadata.GetPendingOutboundBatch(
             scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId, local.NodeId));
