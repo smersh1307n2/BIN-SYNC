@@ -283,9 +283,11 @@ jobs:
             for dump in "${{ runner.temp }}"/fld-host-test-results/*/*hangdump.dmp; do
               [ -f "$dump" ] || continue
               name=$(basename "$dump")
-              dotnet-dump analyze "$dump" --command "threads" > "${{ runner.temp }}/fld-host-test-results/$name.threads.txt" 2>&1 || true
-              dotnet-dump analyze "$dump" --command "clrstack -all" > "${{ runner.temp }}/fld-host-test-results/$name.clrstack.txt" 2>&1 || true
-              dotnet-dump analyze "$dump" --command "syncblk" > "${{ runner.temp }}/fld-host-test-results/$name.syncblk.txt" 2>&1 || true
+              dotnet-dump analyze "$dump" \
+                --command "threads" \
+                --command "clrstack -all" \
+                --command "syncblk" \
+                --command "exit" > "${{ runner.temp }}/fld-host-test-results/$name.managed-analysis.txt" 2>&1 || true
             done
           fi
           exit $test_exit
