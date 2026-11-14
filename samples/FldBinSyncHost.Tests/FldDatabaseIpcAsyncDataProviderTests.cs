@@ -194,8 +194,25 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Task<byte[]> blockedReader = competingClient.GetLocalAuthorAsync();
 
             await renewalRejected.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await Assert.ThrowsAsync<IOException>(async () =>
-                await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x67))));
+            // The test hook signals when the Host rejects the heartbeat, just before
+            // the client-side renewal task observes the failed response. Poll the
+            // public scan contract until that failure has propagated; do not race it.
+            IOException? renewalFailure = null;
+            for (int attempt = 0; attempt < 100 && renewalFailure is null; attempt++)
+            {
+                try
+                {
+                    _ = await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x67)));
+                }
+                catch (IOException error)
+                {
+                    renewalFailure = error;
+                }
+
+                if (renewalFailure is null)
+                    await Task.Delay(20);
+            }
+            Assert.NotNull(renewalFailure);
 
             // A rejected heartbeat makes the immutable scan unusable. Disposal still
             // releases the snapshot and lease; the waiting Host operation then proceeds.
