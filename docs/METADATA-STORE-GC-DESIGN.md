@@ -120,7 +120,7 @@ The safe frontier is the minimum contiguous applied-origin frontier across every
 - Host seals WAL and revalidates exact candidates under its commit monitor;
 - active/persisted snapshot pins and competing IPC writers block the final Host scan/commit window;
 - two independent FLD Hosts reclaim bounded pages, restart between pages and preserve deletion after durable database reopen;
-- Ghost lifecycle has its own proof and remains disabled until separately validated.
+- Ghost GC is out of scope for this implementation and remains disabled until its own lifecycle proof is designed and validated.
 
 ### Completed crash/uncertain-completion matrix — 2026-11-14
 
