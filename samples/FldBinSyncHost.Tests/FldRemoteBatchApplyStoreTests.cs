@@ -599,12 +599,21 @@ public sealed class FldRemoteBatchApplyStoreTests : IDisposable
             int ownerPid = int.Parse(File.ReadAllText(ownerPidPath));
             using (var owner = System.Diagnostics.Process.GetProcessById(ownerPid))
             {
-                owner.Kill(entireProcessTree: true);
-                await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                // Kill the dotnet test root, not only the testhost child. On Windows
+                // the CLI may otherwise remain alive while its worker process is
+                // being torn down, making the crash/reopen cut nondeterministic.
+                if (!child.HasExited)
+                    child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+                // Confirm the exact process that held the FLD partition lease is gone
+                // before attempting recovery in this process.
+                if (!owner.HasExited)
+                {
+                    owner.Kill(entireProcessTree: true);
+                    await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                }
             }
-            if (!child.HasExited)
-                child.Kill(entireProcessTree: true);
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
 
             // Reopen every durable store after the owner process has been killed.
             using var fldA = FldDatabase.Open(Path.Combine(directory, "fld-a"), namespaceId, authorA);
