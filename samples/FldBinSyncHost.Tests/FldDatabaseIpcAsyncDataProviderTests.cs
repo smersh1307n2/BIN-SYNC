@@ -135,9 +135,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.True(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(changeId)));
             Assert.True(await scan.HasExternalRecordReferenceAsync(
                 RecordId.From(record), BatchId.From(changeId)));
-            Assert.True(await scan.HasExternalReceiptReferenceAsync(
+            Assert.False(await scan.HasExternalReceiptReferenceAsync(
                 NodeId.From(sender), authorEpoch: 8, transportPeerEpoch: 6,
-                BatchId.From(batchId)));
+                BatchId.From(batchId)),
+                "The sealed FLD ApplyJournal receipt is independent replay evidence, not a live BIN-SYNC Metadata receipt reference.");
             Assert.False(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x79))));
         }
         finally
