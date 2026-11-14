@@ -204,7 +204,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 Assert.NotEqual(0UL, database.Checkpoint());
             }
 
-            host = StartDatabaseHost(hostRoot, namespaceId, authorBytes, enableTombstoneGc: false);
+            host = StartDatabaseHost(hostRoot, namespaceId, localAuthorBytes, enableTombstoneGc: false);
             StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
                 hostRoot, host, TimeSpan.FromSeconds(45));
             ownerId = endpoint.OwnerId;
@@ -282,7 +282,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
             metadata.RegisterInterestedPeer(scope, local, authority, 2, checked((int)namespaceId));
             metadata.CompletePeerInitialSync(
-                scope, author, authority, 2, checked((int)namespaceId),
+                scope, local, authority, 2, checked((int)namespaceId),
                 [new MetadataPeerStreamBaseline(authority, 0, 8)]);
             metadata.RetireInterestedPeer(
                 scope, local, authority, 1, 2, checked((int)namespaceId));
@@ -304,6 +304,16 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             OriginAuthorEpoch = 8,
                             ContiguousAppliedOriginSequence = 9
                         }
+                    ],
+                    IssuedOrigins =
+                    [
+                        new IssuedOriginFrontierEntry
+                        {
+                            OriginAuthorEpoch = 8,
+                            IssuedOriginSequence = 9,
+                            MaxIssuedHlcWall = 100,
+                            MaxIssuedHlcLogical = 1
+                        }
                     ]
                 }, keys[0].Seed), roster);
             var report1 = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
@@ -319,7 +329,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     [
                         new AppliedOriginFrontierEntry
                         {
-                            OriginAuthorNodeId = author,
+                            OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
                             ContiguousAppliedOriginSequence = 9
                         }
