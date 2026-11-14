@@ -406,6 +406,9 @@ public sealed class StorageReceiptGcRejoinTests
                 Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
                     scope, local, 19, reopenedProvider, 1,
                     () => new MemoryStream(), Scanner(false, false, changeIds)));
+                Assert.Equal(1, reopenedMetadata.CompactChangeLedger(
+                    scope, local, 19, reopenedProvider, 1,
+                    () => new MemoryStream(), Scanner(false, false, changeIds)));
                 Assert.Equal(0, changeIds.Count(id =>
                     reopenedMetadata.TryGetChangeIdentity(scope, local, 19, id, out _, out _, out _)));
 
