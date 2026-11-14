@@ -1105,7 +1105,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 try
                 {
                     activeScan = await providerA!.OpenScanAsync(scope, nodeA!.NodeId, namespaceId);
-                    blockedClient = await FldDatabaseIpcClient.ConnectAsync(
+                    blockedClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
                         hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15));
                     blockedRequest = blockedClient.GetLocalAuthorAsync();
                     await Task.Delay(100);
@@ -1158,7 +1158,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                     await adapterA.RecoverBeforeAcceptingSessionsAsync());
 
-                await using var reopenedProbe = await FldDatabaseIpcClient.ConnectAsync(
+                await using var reopenedProbe = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
                     hostRootA, Guid.NewGuid(), TimeSpan.FromSeconds(15));
                 Assert.Equal(authorABytes, await reopenedProbe.GetLocalAuthorAsync());
             }
