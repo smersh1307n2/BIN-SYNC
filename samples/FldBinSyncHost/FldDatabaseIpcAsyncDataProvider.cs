@@ -771,7 +771,11 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             {
                 using var timer = new PeriodicTimer(interval);
                 while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-                    await _client.RenewGcLeaseAsync(_leaseToken, cancellationToken).ConfigureAwait(false);
+                    // Once an IPC request has been written, cancellation would fault
+                    // the single-request pipe and poison subsequent scan/lease release.
+                    // Cancellation stops the timer between renewals; an in-flight renewal
+                    // is allowed to finish before DisposeAsync releases the lease.
+                    await _client.RenewGcLeaseAsync(_leaseToken, CancellationToken.None).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
