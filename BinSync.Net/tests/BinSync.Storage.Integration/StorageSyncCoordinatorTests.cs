@@ -5545,4 +5545,143 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(receiver.ReadOutboxEntries(1, sender.NodeId, 0, 10));
     }
 
+
+    [Fact]
+    public void Outbound_read_before_reservation_remains_gc_live_while_reservation_waits_for_commit_guard()
+    {
+        const string scope = "outbound-read-reservation-gc-interleave";
+        const int namespaceId = 1;
+        using var storage = StorageDatabase.Open(
+            Path.Combine(_root, "outbound-read-reservation-gc-interleave"), 593);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(93);
+        using var peer = NewNode(94);
+        var trust = new TrustStore();
+        var gc = new StorageNamespaceGcStore(storage, scope, local.NodeId);
+        metadata.AttachNamespaceGcGuard(gc, trust, scope, local.NodeId);
+        var coordinator = new StorageSyncCoordinator(local, provider, namespaceId, metadata, scope);
+        RecordId record = RecordId.From(Guid.Parse("93000000-0000-0000-0000-000000000093").ToByteArray());
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record,
+            FieldId = 0x0193,
+            AuthorNodeId = local.NodeId,
+            OriginAuthorEpoch = checked((uint)local.Epoch),
+            HlcWall = 9300,
+            Value = "read-before-reserve"u8.ToArray()
+        });
+        Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
+
+        uint peerEpoch = checked((uint)peer.Epoch);
+        uint authorEpoch = checked((uint)local.Epoch);
+        metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId);
+        metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId,
+            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, authorEpoch) });
+
+        // Model PushNextBatchAsync after its durable page read and before reservation.
+        var page = metadata.ReadOutboundForPeer(
+            scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId, local.NodeId, 16);
+        var item = Assert.Single(page.Items);
+        var candidate = new MetadataOutboundBatchReservation
+        {
+            BatchId = BatchId.From(Guid.Parse("93000000-0000-0000-0000-000000000094").ToByteArray()),
+            IssuerEpoch = authorEpoch,
+            StreamOffset = 0,
+            CursorStart = item.Sequence,
+            CursorEnd = item.Sequence,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)0x93, 16).ToArray(),
+            Payload = item.Payload.ToArray()
+        };
+
+        Task<MetadataOutboundBatchReservation> reservation;
+        using (IDisposable guard = metadata.AcquireTombstoneGcCommitGuard(
+            scope, local.NodeId, namespaceId, gc, trust, out IReadOnlySet<RecordId>? liveReferences))
+        {
+            Assert.NotNull(liveReferences);
+            Assert.Contains(record, liveReferences!);
+
+            reservation = Task.Run(() => metadata.ReserveOutboundBatch(
+                scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId, local.NodeId, candidate));
+
+            // Reservation must wait behind the GC commit lease. The source outbound row
+            // remains durable and visible to the snapshot throughout this interval.
+            Assert.False(reservation.Wait(TimeSpan.FromMilliseconds(150)));
+            Assert.True(metadata.HasLiveRecordReference(scope, local.NodeId, namespaceId, record));
+        }
+
+        MetadataOutboundBatchReservation reserved = reservation.GetAwaiter().GetResult();
+        Assert.Equal(candidate.BatchId, reserved.BatchId);
+        Assert.Equal(candidate.CursorEnd, reserved.CursorEnd);
+        Assert.NotNull(metadata.GetPendingOutboundBatch(
+            scope, local.NodeId, peer.NodeId, peerEpoch, namespaceId, local.NodeId));
+    }
+
+    [Fact]
+    public void Peer_retirement_fences_candidate_read_by_old_epoch_before_it_can_be_reserved()
+    {
+        const string scope = "retirement-fences-read-candidate";
+        const int namespaceId = 1;
+        using var storage = StorageDatabase.Open(
+            Path.Combine(_root, "retirement-fences-read-candidate"), 594);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var local = NewNode(95);
+        using var peer = NewNode(96);
+        var coordinator = new StorageSyncCoordinator(local, provider, namespaceId, metadata, scope);
+        RecordId record = RecordId.From(Guid.Parse("95000000-0000-0000-0000-000000000095").ToByteArray());
+
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record,
+            FieldId = 0x0195,
+            AuthorNodeId = local.NodeId,
+            OriginAuthorEpoch = checked((uint)local.Epoch),
+            HlcWall = 9500,
+            Value = "old-epoch-candidate"u8.ToArray()
+        });
+        Assert.Equal(1, coordinator.PublishLocalChanges(_ => { }));
+
+        const uint oldPeerEpoch = 1;
+        const uint replacementPeerEpoch = 2;
+        uint authorEpoch = checked((uint)local.Epoch);
+        metadata.RegisterInterestedPeer(scope, local.NodeId, peer.NodeId, oldPeerEpoch, namespaceId);
+        metadata.CompletePeerInitialSync(scope, local.NodeId, peer.NodeId, oldPeerEpoch, namespaceId,
+            new[] { new MetadataPeerStreamBaseline(local.NodeId, 0, authorEpoch) });
+
+        var oldEpochPage = metadata.ReadOutboundForPeer(
+            scope, local.NodeId, peer.NodeId, oldPeerEpoch, namespaceId, local.NodeId, 16);
+        var item = Assert.Single(oldEpochPage.Items);
+        var staleCandidate = new MetadataOutboundBatchReservation
+        {
+            BatchId = BatchId.From(Guid.Parse("96000000-0000-0000-0000-000000000096").ToByteArray()),
+            IssuerEpoch = authorEpoch,
+            StreamOffset = 0,
+            CursorStart = item.Sequence,
+            CursorEnd = item.Sequence,
+            PreviousBatchDigest = new byte[16],
+            BatchDigest = Enumerable.Repeat((byte)0x96, 16).ToArray(),
+            Payload = item.Payload.ToArray()
+        };
+
+        metadata.RegisterInterestedPeer(
+            scope, local.NodeId, peer.NodeId, replacementPeerEpoch, namespaceId);
+        metadata.CompletePeerInitialSync(
+            scope, local.NodeId, peer.NodeId, replacementPeerEpoch, namespaceId,
+            new[] { new MetadataPeerStreamBaseline(local.NodeId, item.Sequence, authorEpoch) });
+        metadata.RetireInterestedPeer(
+            scope, local.NodeId, peer.NodeId, oldPeerEpoch, replacementPeerEpoch, namespaceId);
+
+        Assert.Equal(oldPeerEpoch, metadata.GetRetiredPeerEpoch(
+            scope, local.NodeId, peer.NodeId, namespaceId));
+        Assert.ThrowsAny<Exception>(() => metadata.ReserveOutboundBatch(
+            scope, local.NodeId, peer.NodeId, oldPeerEpoch, namespaceId, local.NodeId, staleCandidate));
+        Assert.Null(metadata.GetPendingOutboundBatch(
+            scope, local.NodeId, peer.NodeId, oldPeerEpoch, namespaceId, local.NodeId));
+        Assert.Empty(metadata.ReadOutboundForPeer(
+            scope, local.NodeId, peer.NodeId, replacementPeerEpoch, namespaceId, local.NodeId, 16).Items);
+    }
+
 }
