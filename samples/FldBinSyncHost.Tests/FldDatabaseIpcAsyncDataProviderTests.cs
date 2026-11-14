@@ -251,19 +251,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // The Metadata receipt belongs to an old transport incarnation. Its
             // durable receive chain remains the replay fence after receipt GC.
             metadata.RegisterInterestedPeer(scope, author, authority, 1, checked((int)namespaceId));
-            var providerMutation = new ProviderMutation
-            {
-                RecordId = RecordId.From(recordId),
-                FieldId = 7,
-                HlcWall = 100,
-                HlcLogical = 1,
-                AuthorNodeId = author,
-                KeyEpoch = 0,
-                Value = "metadata-gc-reference"u8.ToArray(),
-                ChangeId = BatchId.From(changeId),
-                OriginAuthorEpoch = 8,
-                OriginSequence = 9
-            };
             var incoming = new MetadataIncomingBatch
             {
                 ScopeId = scope,
@@ -288,7 +275,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         OriginAuthorEpoch = 8,
                         OriginSequence = 9,
                         Fingerprint = Id(0x79),
-                        Payload = ProviderMutationCodec.Encode(providerMutation)
+                        Payload = [0x79]
                     }
                 ]
             };
