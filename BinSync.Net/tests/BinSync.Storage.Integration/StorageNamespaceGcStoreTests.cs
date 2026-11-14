@@ -333,9 +333,8 @@ public sealed class StorageNamespaceGcStoreTests
 
                 // Commit only the first bounded page, then close the entire Storage
                 // process scope below. Remaining receipts must be reclaimable after reopen.
-                Assert.Equal(1, await metadata.CompactReceiptsAsync(
-                    scope, local, namespaceId, 1,
-                    new TestAsyncGcReferenceScanner()));
+                Assert.Equal(1, await asyncCoordinator.CompactReceiptsAsync(
+                    new TestAsyncGcReferenceScanner(), 1));
             }
 
             // The receipt deletion is durable. Reopening the same Storage database
