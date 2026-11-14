@@ -892,6 +892,68 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 Assert.NotNull(referencesA);
                 Assert.Empty(referencesA);
             }
+
+            // Deterministic lock cuts: a new outbound reservation and its ACK
+            // cannot slip between the final Host-reference snapshot and provider
+            // deletion. The operation starts on another thread while the commit
+            // lease is held and completes only after the lease is released.
+            NodeId racePeer = NodeId.From(Id(0x98));
+            metadataA.RegisterInterestedPeer(scope, nodeA.NodeId, racePeer, 1, namespaceId);
+            metadataA.CompletePeerInitialSync(scope, nodeA.NodeId, racePeer, 1, namespaceId,
+                [new MetadataPeerStreamBaseline(authorA, 0, 17)]);
+            var raceReservation = new MetadataOutboundBatchReservation
+            {
+                BatchId = BatchId.From(Id(0x99)),
+                IssuerEpoch = 17,
+                StreamOffset = 0,
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)0x9A, 16).ToArray(),
+                Payload = [0x9B]
+            };
+            using (var started = new ManualResetEventSlim())
+            {
+                Task<MetadataOutboundBatchReservation> reserveTask;
+                using (metadataA.AcquireTombstoneGcCommitGuard(
+                    scope, nodeA.NodeId, namespaceId, gcA, trust, out _))
+                {
+                    reserveTask = Task.Run(() =>
+                    {
+                        started.Set();
+                        return metadataA.ReserveOutboundBatch(
+                            scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, raceReservation);
+                    });
+                    Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+                    Assert.False(reserveTask.Wait(TimeSpan.FromMilliseconds(100)),
+                        "Outbound reservation must wait behind the final GC commit guard.");
+                }
+                MetadataOutboundBatchReservation reserved =
+                    await reserveTask.WaitAsync(TimeSpan.FromSeconds(5));
+                metadataA.MarkOutboundBatchPushed(
+                    scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA, reserved.BatchId);
+
+                started.Reset();
+                Task ackTask;
+                using (metadataA.AcquireTombstoneGcCommitGuard(
+                    scope, nodeA.NodeId, namespaceId, gcA, trust, out _))
+                {
+                    ackTask = Task.Run(() =>
+                    {
+                        started.Set();
+                        metadataA.AcknowledgePeerBatch(
+                            scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA,
+                            reserved.BatchId, reserved.CursorEnd, reserved.BatchDigest);
+                    });
+                    Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+                    Assert.False(ackTask.Wait(TimeSpan.FromMilliseconds(100)),
+                        "Outbound ACK must wait behind the final GC commit guard.");
+                }
+                await ackTask.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Null(metadataA.GetPendingOutboundBatch(
+                    scope, nodeA.NodeId, racePeer, 1, namespaceId, authorA));
+            }
+
             IReadOnlyList<ProviderMutation> candidatesA =
                 await providerA.ReadTombstoneGcCandidatesAsync(16);
             Assert.Single(candidatesA);
