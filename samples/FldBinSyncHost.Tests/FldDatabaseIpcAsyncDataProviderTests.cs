@@ -75,6 +75,69 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             throw new IOException($"Injected host death after durable tombstone delete ({deleted}) and before coordinator completion.");
         }
     }
+    private sealed class BlockingAsyncGcReferenceScanner : IAsyncApplicationGcReferenceScanner
+    {
+        private readonly IAsyncApplicationGcReferenceScanner _inner;
+        private readonly TaskCompletionSource<bool> _referenceCheckReached =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<bool> _continueReferenceCheck =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public BlockingAsyncGcReferenceScanner(IAsyncApplicationGcReferenceScanner inner)
+            => _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+
+        public Task ReferenceCheckReached => _referenceCheckReached.Task;
+        public void ContinueReferenceCheck() => _continueReferenceCheck.TrySetResult(true);
+
+        public async ValueTask<IAsyncApplicationGcReferenceScan> OpenScanAsync(
+            string scopeId, NodeId localReplica, int namespaceId,
+            CancellationToken cancellationToken = default)
+        {
+            IAsyncApplicationGcReferenceScan scan = await _inner.OpenScanAsync(
+                scopeId, localReplica, namespaceId, cancellationToken).ConfigureAwait(false);
+            return new BlockingScan(scan, _referenceCheckReached, _continueReferenceCheck);
+        }
+
+        private sealed class BlockingScan(
+            IAsyncApplicationGcReferenceScan inner,
+            TaskCompletionSource<bool> reached,
+            TaskCompletionSource<bool> proceed) : IAsyncApplicationGcReferenceScan
+        {
+            private int _blocked;
+
+            public ValueTask<ApplicationDraftHorizon> GetUnpublishedLocalDraftHorizonAsync(
+                CancellationToken cancellationToken = default)
+                => inner.GetUnpublishedLocalDraftHorizonAsync(cancellationToken);
+
+            public ValueTask<bool> HasExternalReceiptReferenceAsync(
+                NodeId senderPeer, uint authorEpoch, uint transportPeerEpoch, BatchId batchId,
+                CancellationToken cancellationToken = default)
+                => inner.HasExternalReceiptReferenceAsync(
+                    senderPeer, authorEpoch, transportPeerEpoch, batchId, cancellationToken);
+
+            public async ValueTask<bool> HasExternalChangeIdReferenceAsync(
+                BatchId changeId, CancellationToken cancellationToken = default)
+            {
+                bool referenced = await inner.HasExternalChangeIdReferenceAsync(
+                    changeId, cancellationToken).ConfigureAwait(false);
+                if (!referenced && Interlocked.Exchange(ref _blocked, 1) == 0)
+                {
+                    reached.TrySetResult(true);
+                    await proceed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+                }
+                return referenced;
+            }
+
+            public ValueTask<bool> HasExternalRecordReferenceAsync(
+                RecordId recordId, BatchId tombstoneChangeId,
+                CancellationToken cancellationToken = default)
+                => inner.HasExternalRecordReferenceAsync(
+                    recordId, tombstoneChangeId, cancellationToken);
+
+            public ValueTask DisposeAsync() => inner.DisposeAsync();
+        }
+    }
+
     [Fact]
     public async Task Async_provider_opens_one_host_owned_reference_scan_for_changeid_record_and_receipt()
     {
@@ -172,6 +235,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         Process? host = null;
         FldDatabaseIpcAsyncDataProvider? provider = null;
         FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
+        FldDatabaseIpcClient? writerClient = null;
         byte[] recordId = FldDatabase.NewRecordId();
         byte[] changeId = Id(0x76);
         byte[] batchId = Id(0x73);
@@ -210,6 +274,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             ownerId = endpoint.OwnerId;
             provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), local, () => 17);
+            // Keep a second independent IPC session ready before GC takes the Host-wide
+            // lease; it will attempt a local write during the final Metadata commit cut.
+            writerClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15));
             remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                 hostRoot, Guid.NewGuid(), checked((ushort)namespaceId), TimeSpan.FromSeconds(15));
 
@@ -399,9 +467,52 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.True(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _));
+
+            // Remove the last relay payload reference so the ChangeId becomes an
+            // otherwise eligible Metadata-GC candidate.
+            MetadataRelayPage relayPage = metadata.ReadRelay(
+                scope, local, checked((int)namespaceId), authority, 0, 16);
+            Assert.NotEmpty(relayPage.Items);
+            ulong relayThrough = relayPage.Items[^1].Sequence;
+            metadata.AcknowledgeRelay(
+                scope, local, checked((int)namespaceId), authority, relayThrough);
+            metadata.CompactRelayThrough(
+                scope, local, checked((int)namespaceId), authority, relayThrough);
+            Assert.Empty(metadata.ReadRelay(
+                scope, local, checked((int)namespaceId), authority, relayThrough, 16).Items);
+
+            // Pause after the real Host has answered "unreferenced", while its GC
+            // lease is still owned by the Metadata compaction call. A different IPC
+            // session must not be able to publish a new local mutation in this gap.
+            var blockingScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
+            Task<int> changeIdGc = coordinator.CompactChangeLedgerAsync(
+                blockingScanner, limit: 1);
+            await blockingScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
+
+            var writerMutation = new FldDatabaseIpcMutation(
+                FldDatabase.NewRecordId(), 8, 1, false,
+                "writer-during-metadata-gc"u8.ToArray());
+            Task<FldDatabaseIpcWriteResult> blockedWriter = writerClient!.WriteBatchAsync(
+                Guid.NewGuid(), clientSequence: 1, [writerMutation]);
+            await Task.Delay(100);
+            Assert.False(blockedWriter.IsCompleted,
+                "A competing IPC writer must remain blocked until the async Metadata GC transaction releases the Host lease.");
+
+            blockingScanner.ContinueReferenceCheck();
+            Assert.Equal(1, await changeIdGc.WaitAsync(TimeSpan.FromSeconds(15)));
+            FldDatabaseIpcWriteResult writerResult =
+                await blockedWriter.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.False(writerResult.IsDuplicate);
+            Assert.Equal(1, writerResult.MutationCount);
+            Assert.False(metadata.TryGetChangeIdentity(
+                scope, local, checked((int)namespaceId), BatchId.From(changeId),
+                out _, out _, out _),
+                "The ChangeId is deleted only after the Host reference answer and final Metadata commit complete under the held Host lease.");
         }
         finally
         {
+            if (writerClient is not null)
+                await writerClient.DisposeAsync();
             if (remoteApply is not null)
                 await remoteApply.DisposeAsync();
             if (provider is not null)
