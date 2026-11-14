@@ -139,6 +139,56 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
+    public async Task Async_provider_renews_host_gc_lease_during_long_lived_reference_scan()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "fld-ipc-provider-gc-renew-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x764;
+        byte[] authorBytes = Id(0x64);
+        Guid hostOwner = Guid.NewGuid();
+        using var shutdown = new CancellationTokenSource();
+        using FldDatabase database = FldDatabase.Open(root, namespaceId, authorBytes);
+        var dispatcher = new FldDatabaseIpcDispatcher(
+            database, gcLeaseIdleTimeout: TimeSpan.FromMilliseconds(250));
+        var server = new StorageIpcServer(
+            StorageIpcEndpoint.ComputePipeName(root, 0),
+            dispatcher.HandleAsync,
+            clientDisconnected: dispatcher.OnClientDisconnected);
+        Task serverTask = server.RunAsync(shutdown.Token);
+        FldDatabaseIpcAsyncDataProvider? provider = null;
+
+        try
+        {
+            await server.Ready.WaitAsync(TimeSpan.FromSeconds(10));
+            StorageIpcEndpoint.Publish(root, StorageIpcEndpoint.Create(
+                root, 0, hostOwner, Environment.ProcessId));
+            provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                root, Guid.NewGuid(), TimeSpan.FromSeconds(10),
+                NodeId.From(authorBytes), () => 1,
+                cancellationToken: default,
+                gcLeaseRenewalInterval: TimeSpan.FromMilliseconds(50));
+
+            await using IAsyncApplicationGcReferenceScan scan = await provider.OpenScanAsync(
+                "lease-renewal-test", NodeId.From(authorBytes), checked((int)namespaceId));
+            // The Host idle TTL is only 250ms. Keep the scan open for over three
+            // TTLs without issuing any reference query: only the provider heartbeat
+            // can keep the Host-wide admission boundary alive.
+            await Task.Delay(900);
+            Assert.False(await scan.HasExternalChangeIdReferenceAsync(BatchId.From(Id(0x65))));
+        }
+        finally
+        {
+            if (provider is not null)
+                await provider.DisposeAsync();
+            shutdown.Cancel();
+            try { await serverTask.WaitAsync(TimeSpan.FromSeconds(10)); } catch { }
+            StorageIpcEndpoint.DeleteIfOwned(root, 0, hostOwner);
+            dispatcher.Dispose();
+        }
+
+        try { Directory.Delete(root, recursive: true); } catch { }
+    }
+
+    [Fact]
     public async Task Async_provider_opens_one_host_owned_reference_scan_for_changeid_record_and_receipt()
     {
         string hostRoot = Path.Combine(
