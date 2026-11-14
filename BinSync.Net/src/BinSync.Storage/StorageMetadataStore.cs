@@ -6,6 +6,15 @@ using Fld1.Storage.Engine;
 
 namespace BinSync.Storage;
 
+public sealed record MetadataGcReservationDiagnostics(
+    int PendingApplyCount,
+    int OutstandingPeerReservationCount,
+    int RelayPayloadCount,
+    int OutboundPayloadCount)
+{
+    public bool HasOutstandingPeerReservation => OutstandingPeerReservationCount != 0;
+}
+
 /// <summary>
 /// Durable BIN-SYNC Metadata Store backed by Fld1.Storage.
 /// Each logical metadata entry is stored under its own key; transactions persist only diffs.
@@ -1335,6 +1344,46 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         return false;
             }
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Read-only namespace-local diagnostics for durable Metadata reservations and
+    /// retained relay/outbound payloads. These counts are advisory; compaction still
+    /// revalidates exact candidate references under the Metadata transaction gate.
+    /// </summary>
+    public MetadataGcReservationDiagnostics GetGcReservationDiagnostics(
+        string scopeId, NodeId localReplica, int namespaceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (localReplica.IsZero)
+            throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
+        if (namespaceId <= 0 || namespaceId > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(namespaceId));
+
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+                return new MetadataGcReservationDiagnostics(0, 0, 0, 0);
+
+            int pendingApplies = state.PendingApplies.Values.Count(
+                pending => pending.Batch.NamespaceId == namespaceId);
+            int outstandingPeerReservations = state.PeerStreams.Count(pair =>
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor));
+            int relayPayloads = state.Relay
+                .Where(pair => pair.Key.NamespaceId == namespaceId)
+                .Sum(pair => pair.Value.Count);
+            int outboundPayloads = state.Outbound
+                .Where(pair => pair.Key.NamespaceId == namespaceId)
+                .Sum(pair => pair.Value.Count);
+
+            return new MetadataGcReservationDiagnostics(
+                pendingApplies, outstandingPeerReservations, relayPayloads, outboundPayloads);
         }
     }
 
