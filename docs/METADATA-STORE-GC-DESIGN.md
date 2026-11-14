@@ -2,7 +2,7 @@
 
 # BIN-SYNC Metadata GC: safe horizons and implementation plan
 
-**Status (2026-11-14):** v3.1 signed roster/frontier/checkpoint, FULL_REPLACE and async Host reference-scan paths are implemented. Receipt, ChangeId and tombstone GC are implemented behind independent feature flags that default false; Ghost GC remains disabled. This is implementation/test readiness, not production authorization. No time-based deletion is authorized.
+**Status (2026-11-15):** v3.1 signed roster/frontier/checkpoint, FULL_REPLACE, async Host reference scans, read-only per-domain readiness and one bounded sequential async maintenance round are implemented and exact-head validated. Async Host scans expose active immutable provider snapshot pins; any pin blocks Receipt, ChangeId and Tombstone GC. Receipt, ChangeId and field/record-tombstone GC remain behind independent feature flags that default false; Ghost GC remains disabled. This is implementation/test readiness, not production authorization. No time-based deletion is authorized.
 
 ## 1. Retention domains must remain independent
 
@@ -189,7 +189,7 @@ The earlier 2026-11-08 audit below is superseded. Immutable Origin is now implem
 - Physical deletion must not race PendingApply, outbound/relay reservations, provider publication intents or pinned snapshot generations.
 
 
-The v3.1 roster/frontier/checkpoint and FULL_REPLACE implementation is present and covered by repeated exact-head CI. This supersedes the historical 2026-11-08 audit below wherever it says the signed roster or GC paths do not yet exist. The Host-death/uncertain-completion matrix is now covered; one release gate remains for readiness diagnostics, operator-visible blocked reasons, independent flags, disable/rollback, retention policy and staged canary. All physical GC feature flags remain false by default.
+The v3.1 roster/frontier/checkpoint and FULL_REPLACE implementation is present and covered by repeated exact-head CI. This supersedes the historical 2026-11-08 audit below wherever it says the signed roster or GC paths do not yet exist. Async readiness and bounded maintenance are implemented and validated on exact PR #16 HEAD `d00501c4a19436c07e74c945ff460576c159a430`; active Host snapshot pins block all three async domains. Multiple independent release gates remain: Metadata writer-bypass closure, provider-specific crash/replay proof, representative scale measurements, operator rollback/retention policy and staged canary. All physical GC feature flags remain false by default.
 
 
 ## 9. Current implementation and composed integration evidence — 2026-11-14
