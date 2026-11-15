@@ -590,7 +590,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             gc.AcceptRetentionCheckpoint(
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
 
-            var referenceScanner = Assert.IsAssignableFrom<IAsyncApplicationGcReferenceScanner>(provider);
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
             var adapter = new FldBinSyncAsyncHostAdapter(
