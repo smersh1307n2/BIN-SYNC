@@ -150,3 +150,22 @@ This is a correctness and work-shaping improvement. **No separate before/after l
 **Limitations:** only three measured iterations were collected, with one invocation per iteration. BenchmarkDotNet reported a 382 µs minimum iteration and recommended at least 100 ms; its 99.9% confidence interval is consequently very wide. This is a smoke/scaling datapoint, not a stable latency estimate or production SLA. It does not measure bytes written, p50/p95, reopen time, concurrent peer fan-out, full provider retry scan or deployment hardware. Keep the broader mutation-cost gate open until batched/long-duration 1m-row measurements cover those dimensions.
 
 **Raw artifact:** `metadata-benchmarks` artifact from run `42458064591` contains CSV, Markdown and HTML reports.
+
+## 2026-11-15 — bounded ChangeId GC cardinality benchmark
+
+The new `MetadataChangeIdGcBench` uses a real temporary `StorageDatabase`, `StorageMetadataStore` and `StorageDataProvider`, seeds a signed v3.1 roster/frontier/checkpoint, then measures one bounded `CompactChangeLedger` pass (page limit 4,096). The Host reference scanner is deliberately a no-reference stub; this isolates the Metadata GC core and is not an end-to-end FLD Host benchmark.
+
+| Existing ChangeId rows | Safe/eligible ChangeIds | Mean compaction time |
+|---:|---:|---:|
+| 1,000 | 16 | 1.72 ms |
+| 1,000 | 1,000 | 6.16 ms |
+| 10,000 | 16 | 1.44 ms |
+| 10,000 | 4,096 | 16.62 ms |
+| 50,000 | 16 | 1.87 ms |
+| 50,000 | 4,096 | 16.96 ms |
+
+The pre-optimization baseline for the 1,000-row/1,000-eligible case was 600.9 ms. The post-optimization result is approximately 97.5× faster. The principal change was to verify the signed Retention Checkpoint once per compaction pass and use an in-memory safe-origin-frontier map, rather than re-reading and re-verifying the signed checkpoint for every ChangeId candidate. Tombstone GC similarly reuses one immutable proof snapshot per pass.
+
+**Allocation measurement caveat:** the first MemoryDiagnoser run included fixture-seeding allocations from the per-iteration 1k/10k/50k namespace setup, so its allocated-byte column is not valid for the compaction method itself. The benchmark now measures `GC.GetAllocatedBytesForCurrentThread()` immediately around the compaction call and emits a separate `CHANGEID_GC_ALLOCATED_BYTES` record. That isolated allocation run is pending.
+
+**Scope and limitations:** the benchmark uses a disposable temporary store and a no-reference scanner; it does not include FLD Host IPC, a real provider reference scan, concurrent peer fan-out, restart/reopen cost, p50/p95 or production hardware. It is a core Metadata scaling datapoint, not a production SLA. The benchmark-only fixture enables ChangeId GC in its isolated temporary namespace; production GC flags remain default-off.
