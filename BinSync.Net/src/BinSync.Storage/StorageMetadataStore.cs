@@ -48,6 +48,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
         _gate = StorageDatabaseTransactionGate.For(_storage);
+        _writerAdmission = StorageMetadataWriterAdmission.For(_storage);
     }
 
     /// <summary>
