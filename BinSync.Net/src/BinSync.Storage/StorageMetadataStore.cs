@@ -836,7 +836,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     out NamespaceRetentionCheckpoint? retentionCheckpoint) ||
                 retentionCheckpoint is null)
                 return 0;
-            safeOriginFrontier = BuildSafeOriginFrontier(retentionCheckpoint);
+            Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier =
+                BuildSafeOriginFrontier(retentionCheckpoint);
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
 
@@ -952,8 +953,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     out NamespaceRetentionCheckpoint? retentionCheckpoint) ||
                 retentionCheckpoint is null)
                 return 0;
-            Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier =
-                BuildSafeOriginFrontier(retentionCheckpoint);
+            safeOriginFrontier = BuildSafeOriginFrontier(retentionCheckpoint);
             if (current.PeerStreams.Any(pair =>
                 pair.Key.NamespaceId == namespaceId &&
                 IsPeerStreamGcReservationOutstanding(
