@@ -23,7 +23,7 @@ public sealed class StorageMetadataWriterAdmissionTests
                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1
             });
 
-            using IDisposable gcLease = await first.AcquireGcWriterAdmissionAsync(
+            IDisposable gcLease = await first.AcquireGcWriterAdmissionAsync(
                 CancellationToken.None);
 
             var firstStarted = new TaskCompletionSource(
@@ -100,25 +100,36 @@ public sealed class StorageMetadataWriterAdmissionTests
                 releaseGuard.Task.GetAwaiter().GetResult();
             });
 
-            IReadOnlySet<RecordId>? liveReferences =
-                await guardAcquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.NotNull(liveReferences);
+            Task? writer = null;
+            try
+            {
+                IReadOnlySet<RecordId>? liveReferences =
+                    await guardAcquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.NotNull(liveReferences);
 
-            var writerStarted = new TaskCompletionSource(
+                var writerStarted = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            Task writer = Task.Run(() =>
+                writer = Task.Run(() =>
             {
                 writerStarted.SetResult();
                 metadata.EnableProviderPublicationCutover(scope, local, namespaceId, 0);
             });
-            await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.False(writer.IsCompleted);
+                await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(writer.IsCompleted);
 
-            releaseGuard.SetResult();
-            await Task.WhenAll(guardOwner, writer).WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.True(metadata.TryGetProviderPublicationCutover(
-                scope, local, namespaceId, out ulong watermark));
-            Assert.Equal(0UL, watermark);
+                releaseGuard.SetResult();
+                await Task.WhenAll(guardOwner, writer).WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.True(metadata.TryGetProviderPublicationCutover(
+                    scope, local, namespaceId, out ulong watermark));
+                Assert.Equal(0UL, watermark);
+            }
+            finally
+            {
+                releaseGuard.TrySetResult();
+                await guardOwner.WaitAsync(TimeSpan.FromSeconds(5));
+                if (writer is not null)
+                    await writer.WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
         finally
         {
