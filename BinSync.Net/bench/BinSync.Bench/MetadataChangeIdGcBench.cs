@@ -115,13 +115,16 @@ public class MetadataChangeIdGcBench
                 MemberNodeId = Author,
                 MemberTransportEpoch = 1,
                 ReportSequence = 1,
+                // An author must report its own issued stream as fully applied.
+                // The all-member checkpoint still takes the minimum with the
+                // authority's lower frontier, which is the sparse-GC test case.
                 Entries = new[]
                 {
                     new AppliedOriginFrontierEntry
                     {
                         OriginAuthorNodeId = Author,
                         OriginAuthorEpoch = 1,
-                        ContiguousAppliedOriginSequence = safeFrontier
+                        ContiguousAppliedOriginSequence = (ulong)ExistingChangeIds
                     }
                 },
                 IssuedOrigins = new[]
