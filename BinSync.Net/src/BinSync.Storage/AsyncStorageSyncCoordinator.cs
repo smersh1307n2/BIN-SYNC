@@ -132,6 +132,8 @@ public sealed class AsyncStorageSyncCoordinator
         await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            using IDisposable writerAdmission = await storageMetadata
+                .AcquireGcWriterAdmissionAsync(ct).ConfigureAwait(false);
             HashSet<RecordId> liveRecordReferences;
             lock (_metadataGate)
             {
