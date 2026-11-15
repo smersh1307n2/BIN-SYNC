@@ -1578,6 +1578,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         ArgumentNullException.ThrowIfNull(gcStore);
         ArgumentNullException.ThrowIfNull(trustStore);
 
+        IDisposable writerAdmission = _writerAdmission.Enter();
         Monitor.Enter(_gate);
         try
         {
@@ -1594,11 +1595,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 scopeId, localReplica, namespaceId, out HashSet<RecordId> liveRecords)
                 ? liveRecords
                 : null;
-            return new FullReplaceCommitLease(_gate);
+            return new FullReplaceCommitLease(_gate, writerAdmission);
         }
         catch
         {
             Monitor.Exit(_gate);
+            writerAdmission.Dispose();
             throw;
         }
     }
@@ -1618,6 +1620,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if ((uint)namespaceId > ushort.MaxValue)
             throw new ArgumentOutOfRangeException(nameof(namespaceId));
 
+        IDisposable writerAdmission = _writerAdmission.Enter();
         Monitor.Enter(_gate);
         try
         {
@@ -1646,11 +1649,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         $"FULL_REPLACE is blocked by {pendingReservations} unresolved outbound/relay reservation(s) in the target namespace.");
             }
 
-            return new FullReplaceCommitLease(_gate);
+            return new FullReplaceCommitLease(_gate, writerAdmission);
         }
         catch
         {
             Monitor.Exit(_gate);
+            writerAdmission.Dispose();
             throw;
         }
     }
@@ -6577,11 +6581,20 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
     private sealed class FullReplaceCommitLease : IDisposable
     {
         private object? _gate;
-        public FullReplaceCommitLease(object gate) => _gate = gate;
+        private IDisposable? _writerAdmission;
+
+        public FullReplaceCommitLease(object gate, IDisposable writerAdmission)
+        {
+            _gate = gate;
+            _writerAdmission = writerAdmission;
+        }
+
         public void Dispose()
         {
             object? gate = Interlocked.Exchange(ref _gate, null);
-            if (gate is not null) Monitor.Exit(gate);
+            if (gate is null) return;
+            Monitor.Exit(gate);
+            Interlocked.Exchange(ref _writerAdmission, null)?.Dispose();
         }
     }
 
