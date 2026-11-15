@@ -655,11 +655,16 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             string? stepSummary = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
             if (!string.IsNullOrWhiteSpace(stepSummary))
             {
-                string summaryRow =
-                    $"| {candidateCount:N0} | {pages} | {stopwatch.Elapsed.TotalMilliseconds:F3} | " +
-                    $"{allocatedBytes:N0} | {peakWorkingSet:N0} | {hostPeakWorkingSet:N0} |" +
+                string summaryLine =
+                    $"- **{candidateCount:N0} candidates**: {pages} pages; " +
+                    $"{stopwatch.Elapsed.TotalMilliseconds:F3} ms; " +
+                    $"{allocatedBytes:N0} allocated bytes; " +
+                    $"test-process peak WS {peakWorkingSet:N0} bytes " +
+                    $"(before {peakWorkingSetBefore:N0}); " +
+                    $"Host-process peak WS {hostPeakWorkingSet:N0} bytes " +
+                    $"(before {hostPeakWorkingSetBefore:N0})." +
                     Environment.NewLine;
-                File.AppendAllText(stepSummary, summaryRow);
+                File.AppendAllText(stepSummary, summaryLine);
             }
         }
         finally
