@@ -603,6 +603,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             long allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
             using Process process = Process.GetCurrentProcess();
             long peakWorkingSetBefore = process.PeakWorkingSet64;
+            host.Refresh();
+            long hostPeakWorkingSetBefore = host.PeakWorkingSet64;
             var stopwatch = Stopwatch.StartNew();
             int totalReclaimed = 0;
             int pages = 0;
@@ -622,6 +624,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             long allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
             process.Refresh();
             long peakWorkingSet = process.PeakWorkingSet64;
+            host.Refresh();
+            long hostPeakWorkingSet = host.PeakWorkingSet64;
 
             Assert.Equal(candidateCount, totalReclaimed);
             Assert.Equal((candidateCount + gcPageLimit - 1) / gcPageLimit, pages);
@@ -631,8 +635,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Console.WriteLine(
                 $"COMPOSED_HOST_METADATA_GC_SCALE Candidates={candidateCount} Pages={pages} " +
                 $"ElapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3} " +
-                $"AllocatedBytes={allocatedBytes} PeakWorkingSetBytes={peakWorkingSet} " +
-                $"PeakWorkingSetBeforeBytes={peakWorkingSetBefore}");
+                $"AllocatedBytes={allocatedBytes} TestProcessPeakWorkingSetBytes={peakWorkingSet} " +
+                $"TestProcessPeakBeforeBytes={peakWorkingSetBefore} " +
+                $"HostProcessPeakWorkingSetBytes={hostPeakWorkingSet} " +
+                $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore}");
         }
         finally
         {
