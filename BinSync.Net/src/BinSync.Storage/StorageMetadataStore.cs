@@ -1056,8 +1056,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private static bool IsOriginCoveredBySafeFrontier(
         IReadOnlyDictionary<(NodeId Author, uint Epoch), ulong> frontier,
         OperationOrigin origin)
-        => frontier.TryGetValue((origin.AuthorNodeId, origin.AuthorEpoch), out ulong safeSequence) &&
-           origin.Sequence <= safeSequence;
+        => IsOriginCoveredBySafeFrontier(
+            frontier, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence);
+
+    private static bool IsOriginCoveredBySafeFrontier(
+        IReadOnlyDictionary<(NodeId Author, uint Epoch), ulong> frontier,
+        NodeId author, uint epoch, ulong sequence)
+        => frontier.TryGetValue((author, epoch), out ulong safeSequence) &&
+           sequence <= safeSequence;
 
     private static HashSet<BatchId> BuildMetadataLiveChangeIdSet(
         PartitionState current, int namespaceId)
@@ -1111,16 +1117,25 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             return 0;
 
         var partitionKey = new PartitionKey(scopeId, localReplica);
+        NamespaceRosterCertificate roster;
+        Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier;
         List<(ReceiptKey Key, ReceiptValue Value)> candidates;
         lock (_gate)
         {
             ThrowIfDisposed();
             if (!TryGetPartition(partitionKey, out PartitionState? current))
                 return 0;
-            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
-                roster is null)
+            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? acceptedRoster) ||
+                acceptedRoster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for receipt GC.");
-            candidates = BuildReceiptGcCandidates(current, namespaceId, roster, gcStore, trustStore, limit);
+            roster = acceptedRoster;
+            if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore,
+                    out NamespaceRetentionCheckpoint? retentionCheckpoint) ||
+                retentionCheckpoint is null)
+                return 0;
+            safeOriginFrontier = BuildSafeOriginFrontier(retentionCheckpoint);
+            candidates = BuildReceiptGcCandidates(
+                current, namespaceId, roster, safeOriginFrontier, limit);
         }
 
         if (candidates.Count == 0)
@@ -1143,10 +1158,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             ThrowIfDisposed();
             if (!TryGetPartition(partitionKey, out PartitionState? current))
                 return 0;
-            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
-                roster is null)
-                return 0;
-
             List<(ReceiptKey Key, byte[] StorageKey)> approved = new(Math.Min(limit, hostUnreferenced.Count));
             var pendingReceiptKeys = BuildPendingReceiptKeySet(current);
             var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
@@ -1169,8 +1180,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (!current.Receives.TryGetValue(receiveKey, out ReceiveState receive) ||
                     receive.CursorEnd < receipt.CursorEnd ||
                     !HasReceiveChainForAuthor(current, receiveKey) ||
-                    !gcStore.IsOriginCoveredByRetentionCheckpoint(
-                        roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
+                    !IsOriginCoveredBySafeFrontier(
+                        safeOriginFrontier, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
                     continue;
                 approved.Add((key, EncodeReceiptKey(partitionKey, key)));
                 if (approved.Count == limit)
@@ -1193,7 +1204,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     private static List<(ReceiptKey Key, ReceiptValue Value)> BuildReceiptGcCandidates(
         PartitionState current, int namespaceId, NamespaceRosterCertificate roster,
-        StorageNamespaceGcStore gcStore, TrustStore trustStore, int limit)
+        IReadOnlyDictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier, int limit)
     {
         var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
         HashSet<ReceiptKey> pendingReceiptKeys = BuildPendingReceiptKeySet(current);
@@ -1215,8 +1226,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 receive.CursorEnd < receipt.CursorEnd ||
                 !HasReceiveChainForAuthor(current, receiveKey) ||
                 pendingReceiptKeys.Contains(key) ||
-                !gcStore.IsOriginCoveredByRetentionCheckpoint(
-                    roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
+                !IsOriginCoveredBySafeFrontier(
+                    safeOriginFrontier, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
                 continue;
             candidates.Add((key, receipt));
             if (candidates.Count == limit)
@@ -1285,6 +1296,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
                 roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for receipt GC.");
+            if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore,
+                    out NamespaceRetentionCheckpoint? retentionCheckpoint) ||
+                retentionCheckpoint is null)
+                return 0;
+            Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier =
+                BuildSafeOriginFrontier(retentionCheckpoint);
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
             var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
@@ -1321,8 +1338,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (externalScan.HasExternalReceiptReference(
                     key.Sender, key.Epoch, receipt.TransportPeerEpoch, key.BatchId))
                     continue;
-                if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
-                        roster, trustStore, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
+                if (!IsOriginCoveredBySafeFrontier(
+                        safeOriginFrontier, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
                     continue;
                 candidates.Add(key);
                 if (candidates.Count == limit)
