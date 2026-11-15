@@ -836,8 +836,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     out NamespaceRetentionCheckpoint? retentionCheckpoint) ||
                 retentionCheckpoint is null)
                 return 0;
-            Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier =
-                BuildSafeOriginFrontier(retentionCheckpoint);
+            safeOriginFrontier = BuildSafeOriginFrontier(retentionCheckpoint);
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
 
@@ -940,6 +939,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var partitionKey = new PartitionKey(scopeId, localReplica);
         List<(LedgerKey Key, OperationOrigin Origin)> candidates;
+        Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier;
         lock (_gate)
         {
             ThrowIfDisposed();
