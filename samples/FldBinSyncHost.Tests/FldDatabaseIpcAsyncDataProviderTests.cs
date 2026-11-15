@@ -436,6 +436,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         trust.Allow(authority, keys[0].PublicKey, TrustMode.PreShared);
         Guid ownerId = Guid.Empty;
         Process? host = null;
+        Process? hostWorker = null;
         FldDatabaseIpcAsyncDataProvider? provider = null;
         FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
 
@@ -448,6 +449,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
                 hostRoot, host, TimeSpan.FromSeconds(45));
             ownerId = endpoint.OwnerId;
+            hostWorker = Process.GetProcessById(endpoint.ProcessId);
             provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), local, () => 17);
             remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
@@ -603,8 +605,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             long allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
             using Process process = Process.GetCurrentProcess();
             long peakWorkingSetBefore = process.PeakWorkingSet64;
-            host.Refresh();
-            long hostPeakWorkingSetBefore = host.PeakWorkingSet64;
+            hostWorker!.Refresh();
+            long hostPeakWorkingSetBefore = hostWorker.PeakWorkingSet64;
             var stopwatch = Stopwatch.StartNew();
             int totalReclaimed = 0;
             int pages = 0;
@@ -624,8 +626,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             long allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
             process.Refresh();
             long peakWorkingSet = process.PeakWorkingSet64;
-            host.Refresh();
-            long hostPeakWorkingSet = host.PeakWorkingSet64;
+            hostWorker!.Refresh();
+            long hostPeakWorkingSet = hostWorker.PeakWorkingSet64;
 
             Assert.Equal(candidateCount, totalReclaimed);
             Assert.Equal((candidateCount + gcPageLimit - 1) / gcPageLimit, pages);
@@ -648,6 +650,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 await provider.DisposeAsync();
             if (host is not null)
                 await StopDatabaseHostAsync(host);
+            hostWorker?.Dispose();
             if (ownerId != Guid.Empty)
                 StorageIpcEndpoint.DeleteIfOwned(hostRoot, 0, ownerId);
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
