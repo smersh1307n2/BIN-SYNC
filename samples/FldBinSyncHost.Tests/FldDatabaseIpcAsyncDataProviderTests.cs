@@ -414,6 +414,241 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
     }
 
+    [Theory]
+    [InlineData(1_000)]
+    [InlineData(10_000)]
+    [InlineData(50_000)]
+    public async Task Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan(int candidateCount)
+    {
+        string hostRoot = Path.Combine(
+            Path.GetTempPath(), "fld-binsync-host-gc-scale-" + Guid.NewGuid().ToString("N"));
+        string nodeRoot = Path.Combine(
+            Path.GetTempPath(), "binsync-host-gc-scale-" + Guid.NewGuid().ToString("N"));
+        const uint namespaceId = 0x53A;
+        const string scope = "fld-host-async-gc-scale";
+        const int seedBatchSize = 256;
+        const int gcPageLimit = 4096;
+        byte[] localAuthorBytes = Id(0x65);
+        NodeId local = NodeId.From(localAuthorBytes);
+        NodeId authority = NodeId.From(Id(0x11));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(authority, keys[0].PublicKey, TrustMode.PreShared);
+        Guid ownerId = Guid.Empty;
+        Process? host = null;
+        FldDatabaseIpcAsyncDataProvider? provider = null;
+        FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
+
+        try
+        {
+            using (var database = FldDatabase.Open(hostRoot, namespaceId, localAuthorBytes))
+                Assert.NotEqual(0UL, database.Checkpoint());
+
+            host = StartDatabaseHost(hostRoot, namespaceId, localAuthorBytes, enableTombstoneGc: false);
+            StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
+                hostRoot, host, TimeSpan.FromSeconds(45));
+            ownerId = endpoint.OwnerId;
+            provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
+                hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), local, () => 17);
+            remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
+                hostRoot, Guid.NewGuid(), checked((ushort)namespaceId), TimeSpan.FromSeconds(15));
+
+            using var nodeStorage = StorageDatabase.Open(nodeRoot, 904);
+            using var metadata = new StorageMetadataStore(nodeStorage);
+            using var node = new NodeBuilder().WithNodeId(local).WithEpoch(17).Build();
+            var gc = new StorageNamespaceGcStore(
+                nodeStorage, scope, local,
+                new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
+
+            var roster = new NamespaceRosterCertificate
+            {
+                NamespaceId = checked((int)namespaceId),
+                RosterGeneration = 1,
+                PreviousRosterDigest = new byte[32],
+                AuthorityNodeId = authority,
+                Members =
+                [
+                    new NamespaceRosterMember
+                    {
+                        NodeId = authority,
+                        PublicKey = keys[0].PublicKey,
+                        TransportPeerEpoch = 10,
+                        Status = NamespaceMemberStatus.Active
+                    },
+                    new NamespaceRosterMember
+                    {
+                        NodeId = local,
+                        PublicKey = keys[1].PublicKey,
+                        TransportPeerEpoch = 11,
+                        Status = NamespaceMemberStatus.Active
+                    }
+                ]
+            };
+            roster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(roster, keys[0].Seed), trust);
+            metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
+            metadata.RegisterInterestedPeer(scope, local, authority, 1, checked((int)namespaceId));
+
+            // Seed real durable Metadata ChangeId rows in bounded incoming batches.
+            // RelayEligible=false means the test does not leave an artificial outbound
+            // payload reference that would correctly veto ChangeId reclamation.
+            byte[] previousDigest = new byte[16];
+            for (int start = 0; start < candidateCount; start += seedBatchSize)
+            {
+                int count = Math.Min(seedBatchSize, candidateCount - start);
+                var operations = new MetadataOperation[count];
+                for (int i = 0; i < count; i++)
+                {
+                    int sequence = start + i + 1;
+                    operations[i] = new MetadataOperation
+                    {
+                        AuthorNodeId = authority,
+                        ChangeId = BatchId.From(Id(100_000 + sequence)),
+                        OriginAuthorEpoch = 8,
+                        OriginSequence = (ulong)sequence,
+                        Fingerprint = Id(200_000 + sequence),
+                        Payload = BitConverter.GetBytes(sequence),
+                        RelayEligible = false
+                    };
+                }
+
+                byte[] batchId = Id(300_000 + start / seedBatchSize);
+                byte[] digest = Id(400_000 + start / seedBatchSize);
+                var incoming = new MetadataIncomingBatch
+                {
+                    ScopeId = scope,
+                    LocalReplica = local,
+                    SenderPeer = authority,
+                    SenderEpoch = 8,
+                    TransportPeerEpoch = 1,
+                    AuthorStreamNodeId = authority,
+                    NamespaceId = checked((int)namespaceId),
+                    BatchId = BatchId.From(batchId),
+                    CursorStart = (ulong)start + 1,
+                    CursorEnd = (ulong)(start + count),
+                    PreviousBatchDigest = previousDigest,
+                    BatchDigest = digest,
+                    HeaderFingerprint = Id(500_000 + start / seedBatchSize),
+                    Operations = operations
+                };
+                Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
+                previousDigest = digest;
+            }
+
+            var authorityReport = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                new AppliedOriginFrontierReport
+                {
+                    NamespaceId = checked((int)namespaceId),
+                    RosterGeneration = 1,
+                    RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                    MemberNodeId = authority,
+                    MemberTransportEpoch = 10,
+                    ReportSequence = 1,
+                    Entries =
+                    [
+                        new AppliedOriginFrontierEntry
+                        {
+                            OriginAuthorNodeId = authority,
+                            OriginAuthorEpoch = 8,
+                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                        }
+                    ],
+                    IssuedOrigins =
+                    [
+                        new IssuedOriginFrontierEntry
+                        {
+                            OriginAuthorEpoch = 8,
+                            IssuedOriginSequence = (ulong)candidateCount,
+                            MaxIssuedHlcWall = 100,
+                            MaxIssuedHlcLogical = 1
+                        }
+                    ]
+                }, keys[0].Seed), roster);
+            var localReport = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
+                new AppliedOriginFrontierReport
+                {
+                    NamespaceId = checked((int)namespaceId),
+                    RosterGeneration = 1,
+                    RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
+                    MemberNodeId = local,
+                    MemberTransportEpoch = 11,
+                    ReportSequence = 1,
+                    Entries =
+                    [
+                        new AppliedOriginFrontierEntry
+                        {
+                            OriginAuthorNodeId = authority,
+                            OriginAuthorEpoch = 8,
+                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                        }
+                    ]
+                }, keys[1].Seed), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { authorityReport, localReport });
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+            var referenceScanner = Assert.IsAssignableFrom<IAsyncApplicationGcReferenceScanner>(provider);
+            var coordinator = new AsyncStorageSyncCoordinator(
+                node, metadata, scope, checked((int)namespaceId));
+            var adapter = new FldBinSyncAsyncHostAdapter(
+                coordinator, provider, remoteApply, _ => { });
+
+            // Exclude setup allocations from the managed-allocation interval. Peak
+            // Working Set is an OS high-water mark for this dedicated test process;
+            // it includes setup and is reported as an absolute value, not a delta.
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            long allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
+            using Process process = Process.GetCurrentProcess();
+            long peakWorkingSetBefore = process.PeakWorkingSet64;
+            var stopwatch = Stopwatch.StartNew();
+            int totalReclaimed = 0;
+            int pages = 0;
+            while (true)
+            {
+                FldBinSyncAsyncGcPassResult pass = await adapter.RunGcMaintenanceAsync(
+                    gc, trust, limit: gcPageLimit).WaitAsync(TimeSpan.FromMinutes(3));
+                int reclaimed = pass.ChangeIdsReclaimed;
+                if (reclaimed == 0)
+                    break;
+                totalReclaimed = checked(totalReclaimed + reclaimed);
+                pages++;
+                if (pages > (candidateCount + gcPageLimit - 1) / gcPageLimit + 1)
+                    throw new InvalidOperationException("GC did not converge within the expected bounded page count.");
+            }
+            stopwatch.Stop();
+            long allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
+            process.Refresh();
+            long peakWorkingSet = process.PeakWorkingSet64;
+
+            Assert.Equal(candidateCount, totalReclaimed);
+            Assert.Equal((candidateCount + gcPageLimit - 1) / gcPageLimit, pages);
+            Assert.False(metadata.TryGetChangeIdentity(
+                scope, local, checked((int)namespaceId), BatchId.From(Id(100_001)),
+                out _, out _, out _));
+            Console.WriteLine(
+                $"COMPOSED_HOST_METADATA_GC_SCALE Candidates={candidateCount} Pages={pages} " +
+                $"ElapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3} " +
+                $"AllocatedBytes={allocatedBytes} PeakWorkingSetBytes={peakWorkingSet} " +
+                $"PeakWorkingSetBeforeBytes={peakWorkingSetBefore}");
+        }
+        finally
+        {
+            if (remoteApply is not null)
+                await remoteApply.DisposeAsync();
+            if (provider is not null)
+                await provider.DisposeAsync();
+            if (host is not null)
+                await StopDatabaseHostAsync(host);
+            if (ownerId != Guid.Empty)
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, 0, ownerId);
+            try { Directory.Delete(hostRoot, recursive: true); } catch { }
+            try { Directory.Delete(nodeRoot, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public async Task Async_host_adapter_compacts_receipt_but_preserves_relay_referenced_changeid()
     {
