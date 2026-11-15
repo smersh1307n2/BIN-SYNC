@@ -6579,7 +6579,6 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public FullReplaceCommitLease(object gate) => _gate = gate;
         public void Dispose()
         {
-        using IDisposable writerAdmission = _writerAdmission.Enter();
             object? gate = Interlocked.Exchange(ref _gate, null);
             if (gate is not null) Monitor.Exit(gate);
         }
