@@ -28,6 +28,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     private const byte BaselineReportKind = 6;
     private const int RootLength = 49;
     private readonly StorageDatabase _storage;
+    private readonly StorageMetadataWriterAdmission _writerAdmission;
     private readonly object _gate;
     private readonly byte[] _root;
     private readonly byte[] _identityKey;
@@ -39,6 +40,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         StorageNamespaceGcFeatureOptions? featureOptions = null)
     {
         _storage = storage ?? throw new ArgumentNullException(nameof(storage));
+        _writerAdmission = StorageMetadataWriterAdmission.For(_storage);
         _featureOptions = featureOptions ?? new StorageNamespaceGcFeatureOptions();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
@@ -91,6 +93,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
 
     public NamespaceRosterCertificate AcceptNamespaceRoster(ReadOnlySpan<byte> encoded, TrustStore trustStore)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentNullException.ThrowIfNull(trustStore);
         byte[] owned = encoded.ToArray();
         NamespaceRosterCertificate candidate = NamespaceRosterProtocol.DecodeAndVerify(owned, trustStore);
@@ -139,6 +142,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     public AppliedOriginFrontierReport AcceptOriginFrontier(
         ReadOnlySpan<byte> encoded, NamespaceRosterCertificate acceptedRoster)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         byte[] owned = encoded.ToArray();
         AppliedOriginFrontierReport report = OriginFrontierProtocol.DecodeAndVerify(owned, acceptedRoster);
         lock (_gate)
@@ -205,6 +209,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     public NamespaceRetentionCheckpoint AcceptRetentionCheckpoint(
         ReadOnlySpan<byte> encoded, NamespaceRosterCertificate acceptedRoster, TrustStore trustStore)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         byte[] owned = encoded.ToArray();
         NamespaceRetentionCheckpoint checkpoint =
             NamespaceRetentionCheckpointProtocol.DecodeAndVerify(owned, acceptedRoster, trustStore);
@@ -272,6 +277,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
     public FullReplaceInstalledAck AcceptFullReplaceInstalledAck(
         ReadOnlySpan<byte> encoded, NamespaceRosterCertificate acceptedRoster)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         byte[] owned = encoded.ToArray();
         FullReplaceInstalledAck acknowledgement =
             FullReplaceInstalledAckProtocol.DecodeAndVerify(owned, acceptedRoster);
@@ -296,6 +302,7 @@ public sealed class StorageNamespaceGcStore : IMetadataNamespaceGcStore
         ReadOnlySpan<byte> encoded, NamespaceRosterCertificate acceptedRoster,
         Guid expectedGeneration, ReadOnlySpan<byte> expectedSnapshotDigest)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         byte[] owned = encoded.ToArray();
         MetadataBaselineReport report = MetadataBaselineReportProtocol.DecodeAndVerify(
             owned, acceptedRoster, expectedGeneration, expectedSnapshotDigest);
