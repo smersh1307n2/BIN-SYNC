@@ -25,36 +25,43 @@ public sealed class StorageMetadataWriterAdmissionTests
 
             IDisposable gcLease = await first.AcquireGcWriterAdmissionAsync(
                 CancellationToken.None);
-
-            var firstStarted = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            var secondStarted = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-
-            Task firstWriter = Task.Run(() =>
+            Task? firstWriter = null;
+            Task? secondWriter = null;
+            try
             {
-                firstStarted.SetResult();
-                first.EnableProviderPublicationCutover(
-                    "writer-admission-test", local, 7, 0);
-            });
-            Task secondWriter = Task.Run(() =>
+                var firstStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                var secondStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+
+                firstWriter = Task.Run(() =>
+                {
+                    firstStarted.SetResult();
+                    first.EnableProviderPublicationCutover(
+                        "writer-admission-test", local, 7, 0);
+                });
+                secondWriter = Task.Run(() =>
+                {
+                    secondStarted.SetResult();
+                    second.EnableProviderPublicationCutover(
+                        "writer-admission-test", local, 8, 0);
+                });
+
+                await Task.WhenAll(
+                    firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)),
+                    secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+
+                Assert.False(firstWriter.IsCompleted);
+                Assert.False(secondWriter.IsCompleted);
+            }
+            finally
             {
-                secondStarted.SetResult();
-                second.EnableProviderPublicationCutover(
-                    "writer-admission-test", local, 8, 0);
-            });
+                gcLease.Dispose();
+                if (firstWriter is not null && secondWriter is not null)
+                    await Task.WhenAll(firstWriter, secondWriter)
+                        .WaitAsync(TimeSpan.FromSeconds(5));
+            }
 
-            await Task.WhenAll(
-                firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)),
-                secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
-
-            Assert.False(firstWriter.IsCompleted);
-            Assert.False(secondWriter.IsCompleted);
-
-            gcLease.Dispose();
-
-            await Task.WhenAll(firstWriter, secondWriter)
-                .WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(first.TryGetProviderPublicationCutover(
                 "writer-admission-test", local, 7, out ulong firstWatermark));
             Assert.True(second.TryGetProviderPublicationCutover(
@@ -67,6 +74,7 @@ public sealed class StorageMetadataWriterAdmissionTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+
     [Fact]
     public async Task Tombstone_commit_guard_holds_writer_admission_until_provider_delete_finishes()
     {
@@ -108,12 +116,13 @@ public sealed class StorageMetadataWriterAdmissionTests
                 Assert.NotNull(liveReferences);
 
                 var writerStarted = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
+                    TaskCreationOptions.RunContinuationsAsynchronously);
                 writer = Task.Run(() =>
-            {
-                writerStarted.SetResult();
-                metadata.EnableProviderPublicationCutover(scope, local, namespaceId, 0);
-            });
+                {
+                    writerStarted.SetResult();
+                    metadata.EnableProviderPublicationCutover(scope, local, namespaceId, 0);
+                });
+
                 await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.False(writer.IsCompleted);
 
@@ -136,5 +145,4 @@ public sealed class StorageMetadataWriterAdmissionTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
-
 }
