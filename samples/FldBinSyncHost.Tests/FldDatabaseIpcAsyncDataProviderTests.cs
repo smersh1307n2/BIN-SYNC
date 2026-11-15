@@ -16,6 +16,16 @@ namespace BinSync.FldHost.Tests;
 
 public sealed class FldDatabaseIpcAsyncDataProviderTests
 {
+    private static void EnableAllGcDomainsForTest(FldBinSyncAsyncHostAdapter adapter)
+    {
+        FldBinSyncGcMaintenanceControl control = adapter.GcMaintenanceControl;
+        control.Start();
+        control.SetEnabled(FldBinSyncGcDomain.Receipt, true);
+        control.SetEnabled(FldBinSyncGcDomain.ChangeId, true);
+        control.SetEnabled(FldBinSyncGcDomain.Tombstone, true);
+    }
+
+
 
     private sealed class CrashAfterTombstoneCandidateRead : IAsyncProviderTombstoneGc
     {
@@ -601,6 +611,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 node, metadata, scope, checked((int)namespaceId));
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { });
+            EnableAllGcDomainsForTest(adapter);
 
             // Exclude setup allocations from the managed-allocation interval. Peak
             // Working Set is an OS high-water mark for this dedicated test process;
@@ -924,6 +935,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 node, metadata, scope, checked((int)namespaceId));
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { });
+            EnableAllGcDomainsForTest(adapter);
 
             // An already-open provider snapshot is a global GC veto. The IPC scan
             // exposes the pin and both Metadata compaction domains must stop before
@@ -1476,6 +1488,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 adapterA = new FldBinSyncAsyncHostAdapter(
                     coordinatorA, providerA, remoteA,
                     current => StorageNodePersistence.Save(nodeStorageA!, current));
+            EnableAllGcDomainsForTest(adapterA);
                 Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                     await adapterA.RecoverBeforeAcceptingSessionsAsync());
 
@@ -1503,6 +1516,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 adapterB = new FldBinSyncAsyncHostAdapter(
                     coordinatorB, providerB, remoteB,
                     current => StorageNodePersistence.Save(nodeStorageB!, current));
+            EnableAllGcDomainsForTest(adapterB);
                 Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                     await adapterB.RecoverBeforeAcceptingSessionsAsync());
             }
@@ -2111,6 +2125,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 adapterA = new FldBinSyncAsyncHostAdapter(
                     coordinatorA, providerA!, remoteA!,
                     current => StorageNodePersistence.Save(nodeStorageA!, current));
+            EnableAllGcDomainsForTest(adapterA);
                 Assert.True(gcA.TryReadNamespaceRoster(namespaceId, trust, out _));
                 Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                     await adapterA.RecoverBeforeAcceptingSessionsAsync());
@@ -2623,9 +2638,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var adapterA = new FldBinSyncAsyncHostAdapter(
                 coordinatorA, providerA, remoteA,
                 current => StorageNodePersistence.Save(nodeStorageA, current));
+            EnableAllGcDomainsForTest(adapterA);
             var adapterB = new FldBinSyncAsyncHostAdapter(
                 coordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
+            EnableAllGcDomainsForTest(adapterB);
 
             AsyncStorageStartupRecoveryResult startupA = await adapterA.RecoverBeforeAcceptingSessionsAsync();
             AsyncStorageStartupRecoveryResult startupB = await adapterB.RecoverBeforeAcceptingSessionsAsync();
@@ -2786,9 +2803,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var recoveredAdapterA = new FldBinSyncAsyncHostAdapter(
                 recoveredCoordinatorA, providerA, remoteA,
                 current => StorageNodePersistence.Save(nodeStorageA, current));
+            EnableAllGcDomainsForTest(recoveredAdapterA);
             var recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
                 recoveredCoordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
+            EnableAllGcDomainsForTest(recoveredAdapterB);
 
             AsyncStorageStartupRecoveryResult recoveredA =
                 await recoveredAdapterA.RecoverBeforeAcceptingSessionsAsync();
@@ -2964,6 +2983,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
                 recoveredCoordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
+            EnableAllGcDomainsForTest(recoveredAdapterB);
 
             RecordId processCrashRecord = RecordId.From(Id(0x79));
             byte[] processCrashValue = "host-b-crash-after-durable-apply"u8.ToArray();
@@ -3031,6 +3051,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
                 recoveredCoordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
+            EnableAllGcDomainsForTest(recoveredAdapterB);
 
             AsyncStorageStartupRecoveryResult processCrashRecovery =
                 await recoveredAdapterB.RecoverBeforeAcceptingSessionsAsync();
