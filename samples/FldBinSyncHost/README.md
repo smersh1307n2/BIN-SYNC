@@ -224,3 +224,51 @@ Point reads use 0x210F/0x2110 and revalidate ChangeId before every value chunk. 
 Use `FldDatabaseIpcRemoteBatchApplyStore` for remote apply. It implements `IAsyncProviderRemoteBatchCommitStore` and preserves the full authenticated batch context. The context-free `IAsyncDataProvider.ApplyRemoteBatchAsync` path intentionally throws.
 
 **Boundary:** this is an IPC-backed provider primitive, not yet a complete process-isolated BIN-SYNC coordinator. It implements async published-origin stamping, but does not implement the optional async commit-guard, publication-mode, author-epoch, snapshot-state, FULL_REPLACE, durable-snapshot or GC-scanner capabilities. Origin stamping is not cross-store atomic without the composed async commit barrier. `StorageSyncCoordinator` remains synchronous and Monitor-based. Do not use sync-over-async or hold Monitor across awaits. The async coordinator and composed async-safe commit lease remain the next architectural gate. Physical GC stays disabled.
+
+## v3.1 physical-GC operator procedure (proof-only; production deletion remains off)
+
+The host exposes `GetGcReadinessAsync(gcStore, trustStore)` as a read-only
+preflight report and `RunGcMaintenanceAsync(...)` as a bounded maintenance
+attempt. The report is split into Receipt, ChangeId and Record/Field Tombstone
+domains. Each domain reports its own enabled state and global blockers; a
+ready domain is only eligible to enter candidate-level proof checks, not
+authorized to delete arbitrary rows.
+
+Operational rules:
+
+1. Keep all three `StorageNamespaceGcFeatureOptions` switches false in
+   production until the independent release gates in the V3 roadmap are met.
+   Defaults are false. The options are captured by the store instance at
+   construction; they are not a live mutable control plane.
+2. Treat each domain independently. A disabled domain must remain disabled
+   even if its prerequisites are satisfied. Do not enable one domain as a
+   workaround for blockers reported by another.
+3. Before any controlled test, record the complete readiness report, including
+   roster/checkpoint/FULL_REPLACE identity, draft horizon, snapshot-pin state,
+   reservation diagnostics, each domain's enabled bit and every blocked reason.
+   Re-read readiness immediately before each bounded maintenance round.
+4. A non-empty blocker list means skip that domain. In particular, missing or
+   unverifiable signed roster/checkpoint, unavailable Host reference scan,
+   unpublished drafts, snapshot pins and outstanding peer reservations are
+   stop conditions. Tombstone GC additionally requires the exact installed
+   FULL_REPLACE baseline for every Active roster member and the provider's
+   tombstone-GC capability.
+5. Run only bounded pages. Cancellation is observed between domains and by the
+   compaction operations. After cancellation, timeout, process restart or an
+   uncertain result, leave the domain disabled, complete startup recovery,
+   obtain a fresh readiness report and resume only through the durable
+   compaction cursors. Never infer deletion from a transport ACK or from a
+   previous readiness snapshot.
+6. To disable maintenance, stop scheduling calls to `RunGcMaintenanceAsync`.
+   For a configuration rollback, stop the host cleanly and restart the entire
+   composition (coordinator and GC store included) with the relevant option
+   false; do not swap the GC store underneath an attached coordinator.
+7. Keep Ghost GC excluded. Do not use TTL, LRU or wall-clock age as a deletion
+   authority. Do not treat process-restart tests as Windows NTFS power-loss
+   durability evidence.
+
+The current switches are startup configuration, not an emergency in-process
+kill switch. A production rollout still needs an operator-owned stop mechanism,
+durable configuration/audit trail, blocked-reason telemetry, rollback exercise,
+retention policy and staged canary. Until those are implemented and the
+remaining V3 release gates pass, physical GC stays disabled.
