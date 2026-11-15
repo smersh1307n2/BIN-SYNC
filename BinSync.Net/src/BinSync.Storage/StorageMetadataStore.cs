@@ -982,15 +982,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (candidates.Count == 0)
             return 0;
 
-        var hostUnreferenced = new HashSet<BatchId>();
-        foreach ((LedgerKey key, _) in candidates)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!await externalScan.HasExternalChangeIdReferenceAsync(
-                    key.ChangeId, cancellationToken).ConfigureAwait(false))
-                hostUnreferenced.Add(key.ChangeId);
-        }
-        if (hostUnreferenced.Count == 0)
+        BatchId[] candidateChangeIds = candidates
+            .Select(item => item.Key.ChangeId).Distinct().ToArray();
+        IReadOnlySet<BatchId> hostReferenced =
+            await externalScan.FindExternalChangeIdReferencesAsync(
+                candidateChangeIds, cancellationToken).ConfigureAwait(false);
+        if (hostReferenced.Count >= candidateChangeIds.Length)
             return 0;
 
         lock (_gate)
@@ -1011,7 +1008,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var approved = new List<(LedgerKey Key, byte[] StorageKey)>(hostUnreferenced.Count);
             foreach ((LedgerKey key, OperationOrigin origin) in candidates)
             {
-                if (!hostUnreferenced.Contains(key.ChangeId) ||
+                if (hostReferenced.Contains(key.ChangeId) ||
                     liveChangeIds.Contains(key.ChangeId) ||
                     !current.ChangeLedger.TryGetValue(key, out ChangeLedgerValue? currentValue) ||
                     currentValue.Provenance != origin ||
