@@ -7,6 +7,15 @@ namespace BinSync.Storage.Integration;
 
 public sealed class StorageMetadataWriterAdmissionTests
 {
+    private static async Task WaitForWriterWaitersAsync(StorageDatabase storage, int expected)
+    {
+        var admission = StorageMetadataWriterAdmission.For(storage);
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (admission.WaitingWriterCount < expected && DateTime.UtcNow < deadline)
+            await Task.Delay(1);
+        Assert.Equal(expected, admission.WaitingWriterCount);
+    }
+
     [Fact]
     public async Task Direct_public_metadata_writers_wait_for_gc_lease_across_store_instances()
     {
@@ -50,6 +59,7 @@ public sealed class StorageMetadataWriterAdmissionTests
                 await Task.WhenAll(
                     firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)),
                     secondStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+                await WaitForWriterWaitersAsync(storage, 2);
 
                 Assert.False(firstWriter.IsCompleted);
                 Assert.False(secondWriter.IsCompleted);
@@ -124,6 +134,7 @@ public sealed class StorageMetadataWriterAdmissionTests
                 });
 
                 await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await WaitForWriterWaitersAsync(storage, 1);
                 Assert.False(writer.IsCompleted);
 
                 releaseGuard.SetResult();
@@ -213,6 +224,7 @@ public sealed class StorageMetadataWriterAdmissionTests
                 });
 
                 await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await WaitForWriterWaitersAsync(storage, 1);
                 Assert.False(rosterWriter.IsCompleted);
             }
             finally
