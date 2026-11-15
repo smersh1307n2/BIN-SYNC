@@ -67,4 +67,51 @@ public sealed class StorageMetadataWriterAdmissionTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+    [Fact]
+    public async Task Tombstone_commit_guard_holds_writer_admission_until_provider_delete_finishes()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-metadata-tombstone-guard-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 948);
+            using var metadata = new StorageMetadataStore(storage);
+            const string scope = "metadata-tombstone-guard";
+            const int namespaceId = 7;
+            NodeId local = NodeId.From(new byte[]
+            {
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2
+            });
+            var gcStore = new StorageNamespaceGcStore(storage, scope, local);
+            var trustStore = new TrustStore();
+            metadata.AttachNamespaceGcGuard(gcStore, trustStore, scope, local);
+
+            using IDisposable commitGuard = metadata.AcquireTombstoneGcCommitGuard(
+                scope, local, namespaceId, gcStore, trustStore,
+                out IReadOnlySet<RecordId>? liveReferences);
+            Assert.NotNull(liveReferences);
+
+            var started = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            Task writer = Task.Run(() =>
+            {
+                started.SetResult();
+                metadata.EnableProviderPublicationCutover(scope, local, namespaceId, 0);
+            });
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(writer.IsCompleted);
+
+            commitGuard.Dispose();
+            await writer.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(metadata.TryGetProviderPublicationCutover(
+                scope, local, namespaceId, out ulong watermark));
+            Assert.Equal(0UL, watermark);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
