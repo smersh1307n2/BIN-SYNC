@@ -54,6 +54,9 @@ public sealed class FldBinSyncAsyncHostAdapter
     private readonly int _publicationLimit;
     private readonly FldBinSyncGcMaintenanceControl _gcControl;
 
+    /// <summary>Runtime stop/domain switches used by every GC maintenance entry point.</summary>
+    public FldBinSyncGcMaintenanceControl GcMaintenanceControl => _gcControl;
+
     public FldBinSyncAsyncHostAdapter(
         AsyncStorageSyncCoordinator coordinator,
         IAsyncDataProvider provider,
