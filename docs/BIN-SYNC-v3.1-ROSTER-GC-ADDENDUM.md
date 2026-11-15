@@ -637,3 +637,20 @@ The Host sample README now specifies a proof-only operator procedure for `GetGcR
 The Storage integration test exercises all eight independent combinations of Receipt, ChangeId and Tombstone feature switches and separately verifies the all-disabled default. Code commit: `baa8340`; operator README commit: `9849ffe`. CI for this block is pending.
 
 Remaining operational gates: emergency stop mechanism, durable operator configuration/audit, blocked-reason telemetry, rollback exercise, retention policy and staged canary. Physical GC remains default-off; Ghost GC remains excluded. NTFS power-loss durability and representative retention/scale evidence remain independent release gates.
+
+
+#### 10.42 — Runtime emergency stop
+
+The async Host now has a process-local `FldBinSyncGcMaintenanceControl`.
+It starts stopped/all-disabled; Start opens the global gate; domain-specific
+enables remain independent; Stop closes every domain and cancels active
+bounded-page tokens. All combined and legacy GC adapter entry points use the
+same gate. The durable GC-store feature option must independently be true, so
+the runtime control cannot bypass the persistent startup configuration.
+Readiness reports identify runtime-disabled domains.
+
+Unit tests cover stop/start, independent switches and cancellation of active
+domain tokens. This control is not a durable operator policy or audit system;
+process restart is fail-closed. CI pending. Physical GC remains default-off
+unless both independent gates and signed proof checks pass; Ghost GC remains
+excluded.
