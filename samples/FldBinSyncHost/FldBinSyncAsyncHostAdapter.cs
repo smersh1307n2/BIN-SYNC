@@ -52,13 +52,15 @@ public sealed class FldBinSyncAsyncHostAdapter
     private readonly IAsyncProviderRemoteBatchCommitStore _remoteApply;
     private readonly Action<Node> _persistNode;
     private readonly int _publicationLimit;
+    private readonly FldBinSyncGcMaintenanceControl _gcControl;
 
     public FldBinSyncAsyncHostAdapter(
         AsyncStorageSyncCoordinator coordinator,
         IAsyncDataProvider provider,
         IAsyncProviderRemoteBatchCommitStore remoteApply,
         Action<Node> persistNode,
-        int publicationLimit = 1024)
+        int publicationLimit = 1024,
+        FldBinSyncGcMaintenanceControl? gcControl = null)
     {
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
@@ -67,6 +69,7 @@ public sealed class FldBinSyncAsyncHostAdapter
         if (publicationLimit is < 1 or > 4096)
             throw new ArgumentOutOfRangeException(nameof(publicationLimit));
         _publicationLimit = publicationLimit;
+        _gcControl = gcControl ?? new FldBinSyncGcMaintenanceControl();
     }
 
     /// <summary>
@@ -193,6 +196,15 @@ public sealed class FldBinSyncAsyncHostAdapter
         var receiptReasons = new List<string>(common);
         var changeIdReasons = new List<string>(common);
         var tombstoneReasons = new List<string>(common);
+        bool receiptRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.Receipt);
+        bool changeIdRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.ChangeId);
+        bool tombstoneRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.Tombstone);
+        if (!receiptRuntimeEnabled)
+            receiptReasons.Add("Runtime Receipt GC gate is stopped or this domain is disabled.");
+        if (!changeIdRuntimeEnabled)
+            changeIdReasons.Add("Runtime ChangeId GC gate is stopped or this domain is disabled.");
+        if (!tombstoneRuntimeEnabled)
+            tombstoneReasons.Add("Runtime Tombstone GC gate is stopped or this domain is disabled.");
         if (metadataReservations?.HasOutstandingPeerReservation == true)
         {
             string reason = $"Metadata has {metadataReservations.OutstandingPeerReservationCount} pushed-but-unacknowledged or pending peer reservation(s).";
@@ -224,11 +236,11 @@ public sealed class FldBinSyncAsyncHostAdapter
             hasSnapshotPin,
             metadataReservations,
             new FldBinSyncGcDomainReadiness(
-                "Receipt", gcStore.IsReceiptGcProofEnabled, receiptReasons.Count == 0, receiptReasons),
+                "Receipt", gcStore.IsReceiptGcProofEnabled && receiptRuntimeEnabled, receiptReasons.Count == 0, receiptReasons),
             new FldBinSyncGcDomainReadiness(
-                "ChangeId", gcStore.IsChangeIdGcProofEnabled, changeIdReasons.Count == 0, changeIdReasons),
+                "ChangeId", gcStore.IsChangeIdGcProofEnabled && changeIdRuntimeEnabled, changeIdReasons.Count == 0, changeIdReasons),
             new FldBinSyncGcDomainReadiness(
-                "Record/Field Tombstone", gcStore.IsTombstoneGcProofEnabled,
+                "Record/Field Tombstone", gcStore.IsTombstoneGcProofEnabled && tombstoneRuntimeEnabled,
                 tombstoneReasons.Count == 0, tombstoneReasons));
     }
 
@@ -257,15 +269,19 @@ public sealed class FldBinSyncAsyncHostAdapter
             if (readiness.Receipts.ReadyForAttempt)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                receipts = await _coordinator.CompactReceiptsAsync(
-                    referenceScanner, limit, cancellationToken).ConfigureAwait(false);
+                receipts = await RunGcDomainAsync(
+                    FldBinSyncGcDomain.Receipt, gcStore.IsReceiptGcProofEnabled,
+                    ct => _coordinator.CompactReceiptsAsync(referenceScanner, limit, ct),
+                    cancellationToken).ConfigureAwait(false);
             }
 
             if (readiness.ChangeIds.ReadyForAttempt)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                changeIds = await _coordinator.CompactChangeLedgerAsync(
-                    referenceScanner, limit, cancellationToken).ConfigureAwait(false);
+                changeIds = await RunGcDomainAsync(
+                    FldBinSyncGcDomain.ChangeId, gcStore.IsChangeIdGcProofEnabled,
+                    ct => _coordinator.CompactChangeLedgerAsync(referenceScanner, limit, ct),
+                    cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -273,11 +289,26 @@ public sealed class FldBinSyncAsyncHostAdapter
             _provider is IAsyncProviderTombstoneGc tombstoneGc)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            tombstones = await _coordinator.CompactTombstonesAsync(
-                tombstoneGc, limit, cancellationToken).ConfigureAwait(false);
+            tombstones = await RunGcDomainAsync(
+                FldBinSyncGcDomain.Tombstone, gcStore.IsTombstoneGcProofEnabled,
+                ct => _coordinator.CompactTombstonesAsync(tombstoneGc, limit, ct),
+                cancellationToken).ConfigureAwait(false);
         }
 
         return new FldBinSyncAsyncGcPassResult(readiness, receipts, changeIds, tombstones);
+    }
+
+    private async Task<int> RunGcDomainAsync(
+        FldBinSyncGcDomain domain,
+        bool storeFeatureEnabled,
+        Func<CancellationToken, Task<int>> operation,
+        CancellationToken cancellationToken)
+    {
+        if (!storeFeatureEnabled) return 0;
+        using CancellationTokenSource? linked =
+            _gcControl.TryCreateLinkedTokenSource(domain, cancellationToken);
+        if (linked is null) return 0;
+        return await operation(linked.Token).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -295,7 +326,10 @@ public sealed class FldBinSyncAsyncHostAdapter
             throw new NotSupportedException(
                 "The configured async provider does not expose the process-isolated tombstone-GC capability.");
         _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
-        return _coordinator.CompactTombstonesAsync(tombstoneGc, limit, cancellationToken);
+        return RunGcDomainAsync(
+            FldBinSyncGcDomain.Tombstone, gcStore.IsTombstoneGcProofEnabled,
+            ct => _coordinator.CompactTombstonesAsync(tombstoneGc, limit, ct),
+            cancellationToken);
     }
 
     /// <summary>
@@ -312,10 +346,14 @@ public sealed class FldBinSyncAsyncHostAdapter
             throw new NotSupportedException(
                 "The configured async provider does not expose Host-owned GC reference scans.");
         _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
-        int receipts = await _coordinator.CompactReceiptsAsync(
-            referenceScanner, limit, cancellationToken).ConfigureAwait(false);
-        int changeIds = await _coordinator.CompactChangeLedgerAsync(
-            referenceScanner, limit, cancellationToken).ConfigureAwait(false);
+        int receipts = await RunGcDomainAsync(
+            FldBinSyncGcDomain.Receipt, gcStore.IsReceiptGcProofEnabled,
+            ct => _coordinator.CompactReceiptsAsync(referenceScanner, limit, ct),
+            cancellationToken).ConfigureAwait(false);
+        int changeIds = await RunGcDomainAsync(
+            FldBinSyncGcDomain.ChangeId, gcStore.IsChangeIdGcProofEnabled,
+            ct => _coordinator.CompactChangeLedgerAsync(referenceScanner, limit, ct),
+            cancellationToken).ConfigureAwait(false);
         return (changeIds, receipts);
     }
 
@@ -329,7 +367,10 @@ public sealed class FldBinSyncAsyncHostAdapter
             throw new NotSupportedException(
                 "The configured async provider does not expose Host-owned GC reference scans.");
         _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
-        return _coordinator.CompactChangeLedgerAsync(referenceScanner, limit, cancellationToken);
+        return RunGcDomainAsync(
+            FldBinSyncGcDomain.ChangeId, gcStore.IsChangeIdGcProofEnabled,
+            ct => _coordinator.CompactChangeLedgerAsync(referenceScanner, limit, ct),
+            cancellationToken);
     }
 
     public Task<int> RunReceiptGcPassAsync(
@@ -342,7 +383,10 @@ public sealed class FldBinSyncAsyncHostAdapter
             throw new NotSupportedException(
                 "The configured async provider does not expose Host-owned GC reference scans.");
         _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
-        return _coordinator.CompactReceiptsAsync(referenceScanner, limit, cancellationToken);
+        return RunGcDomainAsync(
+            FldBinSyncGcDomain.Receipt, gcStore.IsReceiptGcProofEnabled,
+            ct => _coordinator.CompactReceiptsAsync(referenceScanner, limit, ct),
+            cancellationToken);
     }
 
     /// <summary>Receive one DELTA_BATCH; transport ACK follows durable FLD APPLY and Metadata finalization.</summary>
