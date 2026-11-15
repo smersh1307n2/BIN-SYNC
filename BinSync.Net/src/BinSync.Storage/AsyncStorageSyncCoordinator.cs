@@ -149,13 +149,18 @@ public sealed class AsyncStorageSyncCoordinator
                 checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
                 return 0;
 
+            Guid generation = checkpoint.FullReplaceGeneration.Value;
+            byte[] digest = checkpoint.FullReplaceDigest;
+            TombstoneGcProofSnapshot? proofSnapshot =
+                gcStore.TryCreateTombstoneGcProofSnapshot(roster, trustStore, generation, digest);
+            if (proofSnapshot is null)
+                return 0;
+
             IReadOnlyList<ProviderMutation> candidates =
                 await providerGc.ReadTombstoneGcCandidatesAsync(limit, ct).ConfigureAwait(false);
             if (candidates.Count == 0)
                 return 0;
 
-            Guid generation = checkpoint.FullReplaceGeneration.Value;
-            byte[] digest = checkpoint.FullReplaceDigest;
             var approved = new List<ProviderMutation>(candidates.Count);
             foreach (ProviderMutation candidate in candidates)
             {
@@ -166,10 +171,9 @@ public sealed class AsyncStorageSyncCoordinator
                     liveRecordReferences.Contains(candidate.RecordId))
                     continue;
 
-                if (gcStore.HasProtocolTombstoneGcProof(
-                    roster, trustStore, candidate.AuthorNodeId,
-                    candidate.OriginAuthorEpoch, candidate.OriginSequence,
-                    candidate.HlcWall, candidate.HlcLogical, generation, digest))
+                if (proofSnapshot.HasProof(
+                    candidate.AuthorNodeId, candidate.OriginAuthorEpoch,
+                    candidate.OriginSequence, candidate.HlcWall, candidate.HlcLogical))
                     approved.Add(candidate);
                 if (approved.Count == limit)
                     break;

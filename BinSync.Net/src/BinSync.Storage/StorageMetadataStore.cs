@@ -832,6 +832,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
                 roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for ChangeId GC.");
+            if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore,
+                    out NamespaceRetentionCheckpoint? retentionCheckpoint) ||
+                retentionCheckpoint is null)
+                return 0;
+            Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier =
+                BuildSafeOriginFrontier(retentionCheckpoint);
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
 
@@ -868,8 +874,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 OperationOrigin origin = pair.Value.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
                     continue;
-                if (!gcStore.IsOriginCoveredByRetentionCheckpoint(
-                        roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
+                if (!IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
                 if (liveChangeIds.Contains(pair.Key.ChangeId) ||
                     externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
@@ -943,6 +948,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
                 roster is null)
                 throw new InvalidOperationException("No accepted namespace roster is available for ChangeId GC.");
+            if (!gcStore.TryReadRetentionCheckpoint(roster, trustStore,
+                    out NamespaceRetentionCheckpoint? retentionCheckpoint) ||
+                retentionCheckpoint is null)
+                return 0;
+            Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier =
+                BuildSafeOriginFrontier(retentionCheckpoint);
             if (current.PeerStreams.Any(pair =>
                 pair.Key.NamespaceId == namespaceId &&
                 IsPeerStreamGcReservationOutstanding(
@@ -960,8 +971,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 OperationOrigin origin = pair.Value.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
                     liveChangeIds.Contains(pair.Key.ChangeId) ||
-                    !gcStore.IsOriginCoveredByRetentionCheckpoint(
-                        roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
+                    !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
                 candidates.Add((pair.Key, origin));
                 if (candidates.Count == limit)
@@ -995,10 +1005,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pair.Value.PushedCursor,
                     pair.Value.AckedCursor)))
                 return 0;
-            if (!gcStore.TryReadNamespaceRoster(namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
-                roster is null)
-                return 0;
-
+            // The Host lease and Metadata writer admission have remained held
+            // since the initial scan, so this signed horizon is still current.
             HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
             var approved = new List<(LedgerKey Key, byte[] StorageKey)>(hostUnreferenced.Count);
             foreach ((LedgerKey key, OperationOrigin origin) in candidates)
@@ -1007,8 +1015,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     liveChangeIds.Contains(key.ChangeId) ||
                     !current.ChangeLedger.TryGetValue(key, out ChangeLedgerValue? currentValue) ||
                     currentValue.Provenance != origin ||
-                    !gcStore.IsOriginCoveredByRetentionCheckpoint(
-                        roster, trustStore, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence))
+                    !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
 
                 byte[] suffix = new byte[18];
@@ -1030,6 +1037,27 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             return approved.Count;
         }
     }
+
+    private static Dictionary<(NodeId Author, uint Epoch), ulong> BuildSafeOriginFrontier(
+        NamespaceRetentionCheckpoint checkpoint)
+    {
+        var frontier = new Dictionary<(NodeId Author, uint Epoch), ulong>(
+            checkpoint.SafeFrontier.Count);
+        foreach (RetentionFrontierEntry entry in checkpoint.SafeFrontier)
+        {
+            if (!frontier.TryAdd(
+                    (entry.OriginAuthorNodeId, entry.OriginAuthorEpoch),
+                    entry.SafeAppliedOriginSequence))
+                throw new InvalidDataException("Retention checkpoint contains a duplicate origin frontier.");
+        }
+        return frontier;
+    }
+
+    private static bool IsOriginCoveredBySafeFrontier(
+        IReadOnlyDictionary<(NodeId Author, uint Epoch), ulong> frontier,
+        OperationOrigin origin)
+        => frontier.TryGetValue((origin.AuthorNodeId, origin.AuthorEpoch), out ulong safeSequence) &&
+           origin.Sequence <= safeSequence;
 
     private static HashSet<BatchId> BuildMetadataLiveChangeIdSet(
         PartitionState current, int namespaceId)
