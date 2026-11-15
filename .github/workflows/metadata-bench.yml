@@ -70,7 +70,7 @@ jobs:
           dotnet run --configuration Release \
             --project bench/BinSync.Bench \
             -- --metadata-gc-only 2>&1 | tee metadata-changeid-gc-bench.log
-          if grep -E '\\|[[:space:]]*NA[[:space:]]*\\|' metadata-changeid-gc-bench.log; then
+          if grep -F 'NA |' metadata-changeid-gc-bench.log; then
             echo "ChangeId GC benchmark produced a failed/NA case."
             exit 1
           fi
