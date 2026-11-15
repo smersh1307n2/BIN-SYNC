@@ -264,6 +264,8 @@ jobs:
 
       - name: Test FLD host adapter against durable FLD database
         shell: bash
+        env:
+          COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/composed-host-metadata-gc-scale-${{ matrix.os }}.md
         run: |
           dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
@@ -274,10 +276,10 @@ jobs:
         shell: bash
         run: |
           summary="$RUNNER_TEMP/composed-host-metadata-gc-scale-${{ matrix.os }}.md"
-          if [ -n "$GITHUB_STEP_SUMMARY" ] && [ -f "$GITHUB_STEP_SUMMARY" ]; then
-            cp "$GITHUB_STEP_SUMMARY" "$summary"
+          if [ -f "$summary" ]; then
+            cp "$summary" "$RUNNER_TEMP/composed-host-metadata-gc-scale-${{ matrix.os }}-artifact.md"
           else
-            printf '%s\n' "No GitHub Step Summary was produced." > "$summary"
+            printf '%s\\n' "The Host GC scale test did not write a measurement file." > "$summary"
           fi
 
       - name: Upload composed Host GC scale measurements
@@ -285,6 +287,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: composed-host-metadata-gc-scale-${{ matrix.os }}
-          path: ${{ runner.temp }}/composed-host-metadata-gc-scale-${{ matrix.os }}.md
+          path: ${{ runner.temp }}/composed-host-metadata-gc-scale-${{ matrix.os }}*.md
           retention-days: 14
           if-no-files-found: error
