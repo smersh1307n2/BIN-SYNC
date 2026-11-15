@@ -971,7 +971,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(0, readiness.MetadataReservations.OutstandingPeerReservationCount);
             Assert.True(readiness.Receipts.PrerequisitesSatisfied, string.Join("; ", readiness.Receipts.BlockedReasons));
             Assert.True(readiness.ChangeIds.PrerequisitesSatisfied, string.Join("; ", readiness.ChangeIds.BlockedReasons));
-            Assert.True(readiness.Tombstones.PrerequisitesSatisfied, string.Join("; ", readiness.Tombstones.BlockedReasons));
+            Assert.False(readiness.Tombstones.PrerequisitesSatisfied);
+            Assert.Contains(readiness.Tombstones.BlockedReasons,
+                reason => reason.Contains("Durable startup Tombstone GC option is disabled.", StringComparison.Ordinal));
             Assert.False(readiness.Tombstones.Enabled);
             Assert.False(readiness.Tombstones.ReadyForAttempt);
 
@@ -1421,6 +1423,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             FldBinSyncAsyncHostAdapter adapterB = new(
                 coordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
+            EnableAllGcDomainsForTest(adapterA);
+            EnableAllGcDomainsForTest(adapterB);
             Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
                 await adapterA.RecoverBeforeAcceptingSessionsAsync());
             Assert.Equal(new AsyncStorageStartupRecoveryResult(0, 0),
