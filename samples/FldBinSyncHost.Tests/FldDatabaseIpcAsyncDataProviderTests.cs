@@ -1013,15 +1013,27 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 out _, out _, out _),
                 "Cancellation must not commit the ChangeId deletion.");
 
-            // Retry from a fresh Host-owned scan. The same candidate is still safe,
-            // and a successful bounded retry may now commit it exactly once.
-            int retryDeleted = await coordinator.CompactChangeLedgerAsync(
-                referenceScanner, limit: 1).WaitAsync(TimeSpan.FromSeconds(20));
-            Assert.Equal(1, retryDeleted);
+            // A successful GC pass must hold the same real Host lease through the
+            // negative reference answer, final Metadata revalidation and durable delete.
+            // A competing provider writer is released only after that transaction ends.
+            var successfulScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
+            Task<int> successfulGc = coordinator.CompactChangeLedgerAsync(
+                successfulScanner, limit: 1);
+            await successfulScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
+            Task<bool> successfulBlockedWriter = writerClient.AcknowledgeThroughAsync(1);
+            await Task.Delay(100);
+            Assert.False(successfulBlockedWriter.IsCompleted,
+                "A competing IPC writer must remain blocked through final Metadata candidate revalidation and deletion.");
+
+            successfulScanner.ContinueReferenceCheck();
+            int reclaimed = await successfulGc.WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(1, reclaimed);
             Assert.False(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _),
-                "The retry deletes the ChangeId only after a fresh Host reference answer and final Metadata commit.");
+                "The successful pass commits the ChangeId deletion before releasing the Host lease.");
+            Assert.False(await successfulBlockedWriter.WaitAsync(TimeSpan.FromSeconds(15)),
+                "The independent writer has no local operation receipts to acknowledge.");
         }
         finally
         {
