@@ -649,11 +649,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore}";
             Console.WriteLine(metrics);
 
-            // GitHub Actions normally suppresses Console output from passing xUnit
-            // tests. Persist the measurements in the job summary so successful runs
-            // retain the benchmark evidence alongside the CI result.
-            string? stepSummary = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
-            if (!string.IsNullOrWhiteSpace(stepSummary))
+            // Each GitHub Actions step receives a different GITHUB_STEP_SUMMARY
+            // file. Write to an explicit runner-temp file shared with the artifact
+            // upload step instead of relying on the per-step summary path.
+            string? measurementFile = Environment.GetEnvironmentVariable(
+                "COMPOSED_HOST_METADATA_GC_SCALE_FILE");
+            if (!string.IsNullOrWhiteSpace(measurementFile))
             {
                 string summaryLine =
                     $"- **{candidateCount:N0} candidates**: {pages} pages; " +
@@ -664,9 +665,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     $"Host-process peak WS {hostPeakWorkingSet:N0} bytes " +
                     $"(before {hostPeakWorkingSetBefore:N0})." +
                     Environment.NewLine;
-                File.AppendAllText(stepSummary, summaryLine);
-            }
-        }
+                File.AppendAllText(measurementFile, summaryLine);
+            }        }
         finally
         {
             if (remoteApply is not null)
