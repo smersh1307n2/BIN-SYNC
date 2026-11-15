@@ -420,6 +420,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     [InlineData(50_000)]
     public async Task Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan(int candidateCount)
     {
+        static byte[] ScaleId(int value)
+        {
+            var bytes = new byte[16];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(bytes.AsSpan(12), value);
+            return bytes;
+        }
+
         string hostRoot = Path.Combine(
             Path.GetTempPath(), "fld-binsync-host-gc-scale-" + Guid.NewGuid().ToString("N"));
         string nodeRoot = Path.Combine(
@@ -505,17 +512,17 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     operations[i] = new MetadataOperation
                     {
                         AuthorNodeId = authority,
-                        ChangeId = BatchId.From(Id(100_000 + sequence)),
+                        ChangeId = BatchId.From(ScaleId(100_000 + sequence)),
                         OriginAuthorEpoch = 8,
                         OriginSequence = (ulong)sequence,
-                        Fingerprint = Id(200_000 + sequence),
+                        Fingerprint = ScaleId(200_000 + sequence),
                         Payload = BitConverter.GetBytes(sequence),
                         RelayEligible = false
                     };
                 }
 
-                byte[] batchId = Id(300_000 + start / seedBatchSize);
-                byte[] digest = Id(400_000 + start / seedBatchSize);
+                byte[] batchId = ScaleId(300_000 + start / seedBatchSize);
+                byte[] digest = ScaleId(400_000 + start / seedBatchSize);
                 var incoming = new MetadataIncomingBatch
                 {
                     ScopeId = scope,
@@ -530,7 +537,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     CursorEnd = (ulong)(start + count),
                     PreviousBatchDigest = previousDigest,
                     BatchDigest = digest,
-                    HeaderFingerprint = Id(500_000 + start / seedBatchSize),
+                    HeaderFingerprint = ScaleId(500_000 + start / seedBatchSize),
                     Operations = operations
                 };
                 Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
@@ -631,7 +638,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(candidateCount, totalReclaimed);
             Assert.Equal((candidateCount + gcPageLimit - 1) / gcPageLimit, pages);
             Assert.False(metadata.TryGetChangeIdentity(
-                scope, local, checked((int)namespaceId), BatchId.From(Id(100_001)),
+                scope, local, checked((int)namespaceId), BatchId.From(ScaleId(100_001)),
                 out _, out _, out _));
             Console.WriteLine(
                 $"COMPOSED_HOST_METADATA_GC_SCALE Candidates={candidateCount} Pages={pages} " +
