@@ -272,3 +272,29 @@ kill switch. A production rollout still needs an operator-owned stop mechanism,
 durable configuration/audit trail, blocked-reason telemetry, rollback exercise,
 retention policy and staged canary. Until those are implemented and the
 remaining V3 release gates pass, physical GC stays disabled.
+
+### Runtime emergency stop API
+
+`FldBinSyncAsyncHostAdapter` accepts an optional
+`FldBinSyncGcMaintenanceControl`. When omitted, it creates a stopped control;
+therefore no physical-GC pass can start until the host explicitly opens it.
+The control is process-local and starts with all three domains disabled:
+
+- Call `Start()` to open the global maintenance gate.
+- Call `SetEnabled(FldBinSyncGcDomain.Receipt, true)`,
+  `SetEnabled(FldBinSyncGcDomain.ChangeId, true)` or
+  `SetEnabled(FldBinSyncGcDomain.Tombstone, true` only for individually approved
+  domains. The corresponding durable `StorageNamespaceGcFeatureOptions` switch
+  must also have been enabled when the GC store was constructed.
+- Call `Stop()` for an emergency stop. It closes all domain gates and cancels
+  linked cancellation tokens for in-flight bounded page operations. A stopped
+  control must be started again and each domain explicitly re-enabled.
+- The legacy per-domain pass methods and combined metadata/tombstone methods use
+  the same runtime gate; they cannot bypass it.
+
+This control is an in-process emergency brake, not durable operator policy:
+process restart returns it to stopped/all-disabled. Production still needs a
+durable, authenticated operator control plane and audit trail. A cancellation
+requested after a page's durable commit may stop only the next operation; it
+cannot roll back an already committed page. Always inspect durable state and
+readiness after stopping or restarting.
