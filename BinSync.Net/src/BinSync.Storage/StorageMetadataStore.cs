@@ -798,7 +798,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         string scopeId, NodeId localReplica, int namespaceId, IDataProvider provider, int limit,
         Func<IDisposable?> acquireGcLease, IApplicationGcReferenceScanner externalReferences)
     {
-        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
@@ -810,6 +809,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         IDisposable? lease = acquireGcLease();
         if (lease is null)
             throw new InvalidOperationException("Cross-store ChangeId GC proof is unavailable; no ledger rows were reclaimed.");
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         using (lease)
         using (IDisposable? providerSnapshotLease =
             provider is IProviderSnapshotGcGuard snapshotGuard
@@ -907,7 +907,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         IAsyncApplicationGcReferenceScanner externalReferences,
         CancellationToken cancellationToken = default)
     {
-        using IDisposable writerAdmission = await _writerAdmission.EnterAsync(cancellationToken).ConfigureAwait(false);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
@@ -917,6 +916,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         await using IAsyncApplicationGcReferenceScan externalScan =
             await externalReferences.OpenScanAsync(scopeId, localReplica, namespaceId, cancellationToken)
                 .ConfigureAwait(false);
+        using IDisposable writerAdmission = await _writerAdmission.EnterAsync(cancellationToken).ConfigureAwait(false);
         ApplicationDraftHorizon draftHorizon =
             await externalScan.GetUnpublishedLocalDraftHorizonAsync(cancellationToken).ConfigureAwait(false);
         if (draftHorizon.Count == 0 &&
@@ -1056,7 +1056,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         IAsyncApplicationGcReferenceScanner externalReferences,
         CancellationToken cancellationToken = default)
     {
-        using IDisposable writerAdmission = await _writerAdmission.EnterAsync(cancellationToken).ConfigureAwait(false);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
@@ -1066,6 +1065,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         await using IAsyncApplicationGcReferenceScan externalScan =
             await externalReferences.OpenScanAsync(scopeId, localReplica, namespaceId, cancellationToken)
                 .ConfigureAwait(false);
+        using IDisposable writerAdmission = await _writerAdmission.EnterAsync(cancellationToken).ConfigureAwait(false);
         ApplicationDraftHorizon draftHorizon =
             await externalScan.GetUnpublishedLocalDraftHorizonAsync(cancellationToken).ConfigureAwait(false);
         if (draftHorizon.Count == 0 &&
@@ -1230,7 +1230,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         string scopeId, NodeId localReplica, int namespaceId, int limit,
         Func<IDisposable?> acquireGcLease, IApplicationGcReferenceScanner externalReferences)
     {
-        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
@@ -1241,6 +1240,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         IDisposable? lease = acquireGcLease();
         if (lease is null)
             throw new InvalidOperationException("Cross-store receipt GC proof is unavailable; no receipts were reclaimed.");
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         using (lease)
         lock (_gate)
         {
