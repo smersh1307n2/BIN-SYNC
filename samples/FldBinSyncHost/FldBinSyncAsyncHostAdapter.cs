@@ -202,6 +202,12 @@ public sealed class FldBinSyncAsyncHostAdapter
         bool receiptRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.Receipt);
         bool changeIdRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.ChangeId);
         bool tombstoneRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.Tombstone);
+        if (!gcStore.IsReceiptGcProofEnabled)
+            receiptReasons.Add("Durable startup Receipt GC option is disabled.");
+        if (!gcStore.IsChangeIdGcProofEnabled)
+            changeIdReasons.Add("Durable startup ChangeId GC option is disabled.");
+        if (!gcStore.IsTombstoneGcProofEnabled)
+            tombstoneReasons.Add("Durable startup Tombstone GC option is disabled.");
         if (!receiptRuntimeEnabled)
             receiptReasons.Add("Runtime Receipt GC gate is stopped or this domain is disabled.");
         if (!changeIdRuntimeEnabled)
