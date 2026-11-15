@@ -4072,3 +4072,26 @@ The async Host sample now documents the proof-only operator procedure in `sample
 The integration test covers all eight combinations of the three independent Receipt/ChangeId/Tombstone switches, plus the all-disabled default. Enabling one domain does not implicitly enable either of the others. Test commit `baa8340`; operator documentation commit `9849ffe`. CI for these commits is pending at the time of this update.
 
 This closes the documentation and configuration-matrix portion of the operator readiness block, not the operational release gate. A true in-process emergency stop, durable operator configuration/audit, blocked-reason telemetry, rollback exercise, retention policy and staged canary remain outstanding. Physical GC remains default-off; Ghost GC remains excluded. Windows NTFS power-loss durability and representative scale/retention evidence remain separate gates.
+
+
+#### 1.172 — Process-local GC emergency stop and legacy-entry-point enforcement
+
+Added `FldBinSyncGcMaintenanceControl` (commit `25b5510`) and wired it through
+`FldBinSyncAsyncHostAdapter` (commit `2714940`). The control starts stopped
+with all domains disabled; Start opens only the global gate, and Receipt,
+ChangeId and Tombstone still require separate explicit enables. Stop closes all
+domains and cancels linked tokens used by active bounded maintenance calls.
+The durable `StorageNamespaceGcFeatureOptions` flags remain an additional
+independent requirement; runtime control cannot override a false durable flag.
+
+All adapter entry points now use the same domain gate: combined maintenance,
+legacy per-domain methods, combined Metadata maintenance and tombstone
+maintenance. Readiness reports also expose runtime-disabled domains as blocked.
+The control is process-local and intentionally resets to stopped/all-disabled
+after process restart; durable authenticated operator policy/audit remains open.
+
+Tests added in `FldBinSyncGcMaintenanceControlTests.cs` (commit `ef1fbb2`)
+cover default-stop, independent domain enables, in-flight cancellation, emergency
+stop and restart fail-closed behavior. README operator instructions are updated
+in commit `0904519`. CI is pending. This is a safety control, not authorization
+to enable physical GC in production. Ghost GC remains excluded.
