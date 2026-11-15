@@ -628,3 +628,12 @@ BIN-SYNC adds the complementary successful ChangeId deletion cut: the competing 
 The composed signed-proof + Metadata + real FLD IPC reference scan + Host maintenance scale test completed 1k/10k/50k candidate sweeps in 1/3/13 bounded pages. Ubuntu results: 27.482 ms / 3,850,016 B; 92.908 ms / 30,618,376 B; 551.875 ms / 152,923,752 B. Windows: 44.279 ms / 3,797,856 B; 133.392 ms / 30,561,408 B; 762.360 ms / 152,930,368 B. Artifacts: [Ubuntu 14168619118](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43733463452/artifacts/14168619118), [Windows 14169461974](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43733463452/artifacts/14169461974). Working-set values are OS high-water observations and not exact GC-attributable allocations; shared test-process high-water marks make some per-case deltas zero.
 
 This is correctness and integration-scale evidence only. Physical Receipt, ChangeId and Tombstone GC remain default-off. Ghost GC remains excluded. Remaining independent gates: representative retention/capacity evidence, Windows NTFS power-loss durability, operator-visible blocked reasons, independent kill switches, rollback/retention policy and staged canary.
+
+
+#### 10.41 — Operator handling and startup-only feature switches
+
+The Host sample README now specifies a proof-only operator procedure for `GetGcReadinessAsync` and bounded `RunGcMaintenanceAsync`: capture all domain states/blockers, skip blocked domains, recover before resuming after restart or uncertain outcomes, and disable by stopping maintenance. It explicitly states that the three feature options are immutable for a constructed GC-store instance; a configuration rollback requires a clean restart of the complete coordinator/GC-store composition. This is not an in-process emergency kill switch.
+
+The Storage integration test exercises all eight independent combinations of Receipt, ChangeId and Tombstone feature switches and separately verifies the all-disabled default. Code commit: `baa8340`; operator README commit: `9849ffe`. CI for this block is pending.
+
+Remaining operational gates: emergency stop mechanism, durable operator configuration/audit, blocked-reason telemetry, rollback exercise, retention policy and staged canary. Physical GC remains default-off; Ghost GC remains excluded. NTFS power-loss durability and representative retention/scale evidence remain independent release gates.
