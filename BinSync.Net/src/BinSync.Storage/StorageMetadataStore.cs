@@ -1005,7 +1005,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             // The Host lease and Metadata writer admission have remained held
             // since the initial scan, so this signed horizon is still current.
             HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
-            var approved = new List<(LedgerKey Key, byte[] StorageKey)>(hostUnreferenced.Count);
+            var approved = new List<(LedgerKey Key, byte[] StorageKey)>(candidates.Count);
             foreach ((LedgerKey key, OperationOrigin origin) in candidates)
             {
                 if (hostReferenced.Contains(key.ChangeId) ||
