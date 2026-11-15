@@ -22,6 +22,7 @@ public sealed record MetadataGcReservationDiagnostics(
 public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMetadataOutboundChangeIdentityStore, IMetadataProviderReceiptStreamStore, IMetadataChangeIdentityStore, IMetadataLegacyNodeLedgerStore, IMetadataFullReplaceCommitGuard, IMetadataBaselineCommitStore, IMetadataBaselinePayloadCompactionStore
 {
     private readonly object _gate;
+    private readonly StorageMetadataWriterAdmission _writerAdmission;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
     private readonly StorageDatabase _storage;
     private readonly string? _directory;
@@ -39,6 +40,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         _ownsStorage = true;
         _storage = StorageDatabase.Open(directory, partitionId);
         _gate = StorageDatabaseTransactionGate.For(_storage);
+        _writerAdmission = StorageMetadataWriterAdmission.For(_storage);
     }
 
     /// <summary>Attach to a caller-owned shared Storage database.</summary>
@@ -56,6 +58,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         StorageNamespaceGcStore gcStore, TrustStore trustStore,
         string scopeId, NodeId localReplica)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         ArgumentNullException.ThrowIfNull(gcStore);
         if (localReplica.IsZero || !gcStore.IsBoundTo(_storage, scopeId, localReplica))
@@ -72,6 +75,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// </summary>
     public void AttachNamespaceGcGuard(StorageNamespaceGcStore gcStore, TrustStore trustStore)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentNullException.ThrowIfNull(gcStore);
         ArgumentNullException.ThrowIfNull(trustStore);
         if (!gcStore.IsBoundTo(_storage))
@@ -87,6 +91,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             _namespaceGcTrustStore = trustStore;
         }
     }
+
+    internal ValueTask<IDisposable> AcquireGcWriterAdmissionAsync(CancellationToken cancellationToken)
+        => _writerAdmission.EnterAsync(cancellationToken);
 
     internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
     internal bool IsBoundTo(StorageNamespaceGcStore gcStore, string scopeId, NodeId localReplica)
@@ -137,6 +144,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     public void EnableProviderPublicationCutover(
         string scopeId, NodeId localReplica, int namespaceId, ulong nodeOutboxHighWatermark)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
         ushort ns = checked((ushort)namespaceId);
@@ -182,6 +190,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     public Guid BindProviderReceiptStream(
         string scopeId, NodeId localReplica, int namespaceId, Guid receiptStreamId)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero)
             throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
@@ -275,6 +284,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         int namespaceId,
         PreparedFullReplaceSnapshotState state)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         ArgumentNullException.ThrowIfNull(state);
         if (localReplica.IsZero || state.Generation == Guid.Empty || state.SnapshotToken == Guid.Empty ||
@@ -404,6 +414,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     public void DeletePreparedFullReplaceSnapshot(
         string scopeId, NodeId localReplica, int namespaceId, Guid generation)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica must be non-zero.", nameof(localReplica));
         if (generation == Guid.Empty) return;
@@ -610,6 +621,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         bool finalForAuthor,
         ReadOnlySpan<byte> memberSeed)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localMember.IsZero) throw new ArgumentException("Local member identity must be non-zero.", nameof(localMember));
         ArgumentNullException.ThrowIfNull(acceptedRoster);
@@ -785,6 +797,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         string scopeId, NodeId localReplica, int namespaceId, IDataProvider provider, int limit,
         Func<IDisposable?> acquireGcLease, IApplicationGcReferenceScanner externalReferences)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
@@ -893,6 +906,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         IAsyncApplicationGcReferenceScanner externalReferences,
         CancellationToken cancellationToken = default)
     {
+        using IDisposable writerAdmission = await _writerAdmission.EnterAsync(cancellationToken).ConfigureAwait(false);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
@@ -1041,6 +1055,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         IAsyncApplicationGcReferenceScanner externalReferences,
         CancellationToken cancellationToken = default)
     {
+        using IDisposable writerAdmission = await _writerAdmission.EnterAsync(cancellationToken).ConfigureAwait(false);
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
@@ -1214,6 +1229,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         string scopeId, NodeId localReplica, int namespaceId, int limit,
         Func<IDisposable?> acquireGcLease, IApplicationGcReferenceScanner externalReferences)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero) throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
         if (namespaceId <= 0 || namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
@@ -1446,6 +1462,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     public MetadataBatchReceipt AcceptIncomingBatch(MetadataIncomingBatch batch)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -1464,6 +1481,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     public MetadataPendingApplyIntent BeginPendingApply(MetadataIncomingBatch batch, Guid applyToken)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
         ArgumentNullException.ThrowIfNull(batch);
@@ -1641,6 +1659,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         NodeId localReplica,
         MetadataProviderApplyReceipt providerReceipt)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -2421,6 +2440,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId localAuthor,
         IReadOnlyList<MetadataFrozenOperation> operations)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
         ValidatePartitionArguments(scopeId, localReplica, namespaceId, localAuthor);
@@ -2660,6 +2680,7 @@ private static bool ValidateIncomingBatchForStaging(
         string scopeId, NodeId localReplica, int namespaceId,
         IReadOnlyList<MetadataLegacyNodeLedgerFingerprint> fingerprints)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentNullException.ThrowIfNull(fingerprints);
         if (fingerprints.Count == 0)
             return;
@@ -2742,6 +2763,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId localAuthor,
         Guid consumerId)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -2815,6 +2837,7 @@ private static bool ValidateIncomingBatchForStaging(
         ulong leaseGeneration,
         ulong safeThroughSequence)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -2843,6 +2866,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId localAuthor,
         ulong safeThroughSequence)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -2873,6 +2897,7 @@ private static bool ValidateIncomingBatchForStaging(
         string scopeId, NodeId localReplica, int namespaceId, NodeId localAuthor,
         ulong safeThroughSequence, int maxEntries = 512)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         if (maxEntries <= 0 || maxEntries > 4096)
             throw new ArgumentOutOfRangeException(nameof(maxEntries));
         lock (_gate)
@@ -2902,6 +2927,7 @@ private static bool ValidateIncomingBatchForStaging(
         string scopeId, NodeId localReplica, int namespaceId, NodeId originalAuthor,
         ulong safeThroughSequence, int maxEntries = 512)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         if (maxEntries <= 0 || maxEntries > 4096)
             throw new ArgumentOutOfRangeException(nameof(maxEntries));
         lock (_gate)
@@ -2939,6 +2965,7 @@ private static bool ValidateIncomingBatchForStaging(
         string scopeId, NodeId localReplica, NamespaceRosterCertificate acceptedRoster,
         Guid generation, ReadOnlySpan<byte> snapshotDigest, int maxEntriesPerStream = 512)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero)
             throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
@@ -3141,6 +3168,7 @@ private static bool ValidateIncomingBatchForStaging(
         ulong reportSequence,
         ReadOnlySpan<byte> memberSeed)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentNullException.ThrowIfNull(installedAck);
         ArgumentNullException.ThrowIfNull(acceptedRoster);
         if (installedAck.MemberNodeId != localReplica ||
@@ -3506,6 +3534,7 @@ private static bool ValidateIncomingBatchForStaging(
     public void RegisterInterestedPeer(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -3579,6 +3608,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId peer, uint peerEpoch, int namespaceId,
         IReadOnlyList<MetadataPeerStreamBaseline> streamBaselines)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -3677,6 +3707,7 @@ private static bool ValidateIncomingBatchForStaging(
         NamespaceRosterCertificate acceptedRoster, Guid generation,
         ReadOnlySpan<byte> snapshotDigest)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero)
             throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
@@ -4133,6 +4164,7 @@ private static bool ValidateIncomingBatchForStaging(
     public void RetireInterestedPeer(string scopeId, NodeId localReplica,
         NodeId peer, uint retiredPeerEpoch, uint replacementPeerEpoch, int namespaceId)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -4258,6 +4290,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         ulong baselineAckedCursor, ulong streamOffset, uint issuerEpoch, byte[] lastBatchDigest)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -4349,6 +4382,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         MetadataOutboundBatchReservation reservation)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -4392,6 +4426,7 @@ private static bool ValidateIncomingBatchForStaging(
     public void MarkOutboundBatchPushed(string scopeId, NodeId localReplica,
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream, BatchId batchId)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -4414,6 +4449,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId peer, uint peerEpoch, int namespaceId, NodeId authorStream,
         BatchId batchId, ulong cursorEnd, byte[] batchDigest)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -4622,6 +4658,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId originalAuthor,
         ulong safeThroughSequence)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -4691,6 +4728,7 @@ private static bool ValidateIncomingBatchForStaging(
         NodeId originalAuthor,
         ulong safeThroughSequence)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -4816,6 +4854,7 @@ private static bool ValidateIncomingBatchForStaging(
 
     public void Dispose()
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         lock (_gate)
         {
         if (_disposed) return;
@@ -6392,6 +6431,7 @@ private static bool ValidateIncomingBatchForStaging(
         out ReceiveChainKey? legacyTargetKey,
         out ReceiveChainState? legacyTargetState)
     {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
         var key = new ReceiveChainKey(receiveKey.Sender, receiveKey.Epoch,
             receiveKey.NamespaceId, receiveKey.AuthorStream);
         var legacy = new LegacyReceiveChainKey(receiveKey.Sender, receiveKey.Epoch, receiveKey.NamespaceId);
@@ -6540,6 +6580,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public FullReplaceCommitLease(object gate) => _gate = gate;
         public void Dispose()
         {
+        using IDisposable writerAdmission = _writerAdmission.Enter();
             object? gate = Interlocked.Exchange(ref _gate, null);
             if (gate is not null) Monitor.Exit(gate);
         }
