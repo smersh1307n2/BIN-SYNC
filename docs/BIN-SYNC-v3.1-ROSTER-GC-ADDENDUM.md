@@ -606,7 +606,14 @@ This implementation is a C-pass source milestone only. Required T-pass coverage 
 - [x T] Existing Host-death cuts before candidate enumeration and after durable provider deletion, plus cancellation, heartbeat, snapshot pin, lease expiry and writer-exclusion tests, remain green.
 - [x T] FLD provider tombstone-compaction matrix covers four durable cuts across field and record tombstones (eight fault-cut cases). FULL_REPLACE tests cover incomplete staging, digest rejection, bounded abort across restarts and uncertain Manifest commit recovery.
 - [x CI] Exact FLD head `2b015345a3d79903d731f67443fdcd2e11be372b` passed the full suite on Ubuntu, macOS 15 and Windows; each platform passed 112 Engine tests.
-- [~ CI] Exact-head BIN-SYNC cross-repository Host/provider validation against FLD head `2b015345a3d79903d731f67443fdcd2e11be372b` is being rerun; do not close the provider gate until both Host adapter builds and all durable-provider integration jobs pass on that exact FLD head.
+- [x CI] Exact-head BIN-SYNC `98a7f3943f2fed69717680b375c4bec40eef6937` cross-repository validation against FLD head `2b015345a3d79903d731f67443fdcd2e11be372b` passed: Host adapter + FLD Core/Storage/Manifest/Run/WAL/Engine and Host tests on Linux/Windows; durable provider integration passed on Ubuntu, Windows and macOS 15 (319/319 each).
 - [x C/T] Async Host readiness and bounded maintenance are implemented; `HasSnapshotPin` is reported and blocks Receipt, ChangeId and Tombstone GC. Metadata writer-bypass closure and reservation diagnostics are complete.
 - [!] Windows uses an NTFS-only handle-scoped write-through rename candidate; power-loss evidence remains open in Roadmap v3 §1.160. Process-level restart tests do not establish power-loss durability.
 - [ ] Remaining gates: adversarial peer replay/rejoin after actual deletion, representative end-to-end scale/retention measurements, operator-visible disable/rollback, independent flag configuration, retention policy and staged canary. `EnableReceiptGc`, `EnableChangeIdGc` and `EnableTombstoneGc` remain false by default; Ghost GC remains disabled.
+
+## 10.39. Stale tombstone replay after physical deletion and Metadata restart — 2026-11-15
+
+The real two-FLD-Host signed-GC integration scenario now extends beyond the deletion boundary. After both providers physically reclaim the field tombstones, the test closes and reopens the independent Metadata Storage partition, restores the accepted signed namespace-GC guard, and retries the exact stale tombstone operation using the current transport epoch. The persisted signed origin checkpoint must reject the operation even though its ChangeId ledger row, provider tombstone and old receipt evidence have already been reclaimed.
+
+- [~ T/CI] Test added in BIN-SYNC commit `f4e3eb411b01a0266d7d03fecad5a59f9906f9af`; exact-head Linux/Windows tests, cross-repository FLD Host validation and 3-platform durable-provider validation are pending.
+- [!] This closes one adversarial replay cut only after its exact-head tests pass. It does not authorize physical GC. Receipt/ChangeId/Tombstone flags remain false by default; Ghost GC remains excluded.
