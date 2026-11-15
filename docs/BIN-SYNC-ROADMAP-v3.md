@@ -3934,3 +3934,11 @@ All physical-GC flags remain default-off. At this 2026-11-14 checkpoint, these d
 - [ ] Remaining in this provider block: inspect the exact cross-repository test result and add any missing crash cut exposed by it. Keep the separate Metadata page/cursor uncertain-completion proof in §1.153; it is not replaced by these FLD Run/Manifest cuts.
 - [!] This is provider crash-test instrumentation and coverage, not production-GC authorization. EnableReceiptGc, EnableChangeIdGc and EnableTombstoneGc remain false by default; Ghost GC remains excluded.
 
+## 1.159. Failed FULL_REPLACE installation and durable abort/restart — 2026-11-15
+
+- [x C] FLD FULL_REPLACE staging already writes the abort cursor ahead of deleting staged Run/blob bytes. Recovery retains only the un-aborted suffix as live stage references; the active Manifest remains authoritative until the explicit commit switch.
+- [~ T] Added a real on-disk FLD Engine test covering an incomplete staged snapshot, a mismatched verified digest, rejection before active Manifest publication, bounded abort pages, and two database restarts between abort pages. It verifies the original namespace data remains readable and no staged replacement field becomes visible after final cleanup.
+- [~ CI] FLD-DB branch fix/crash-consistency-outbox HEAD d993af9953a42a505cd0bb96ab3008adece6da2f. Exact-head Linux, Windows and macOS CI plus BIN-SYNC cross-repository Host/provider validation are pending.
+- [!] This covers failed local FULL_REPLACE staging/abort, not the full signed peer-rejoin matrix. Signed roster generation gaps, missing/lagging Active member frontiers, installed-ACK requirements and post-GC replay fencing remain separately covered by the BIN-SYNC integration tests cited in §§1.150–1.153; the remaining adversarial audit must verify no untested gap exists.
+- [!] All physical-GC switches remain default-off; Ghost GC remains excluded.
+
