@@ -16,6 +16,9 @@ internal sealed class StorageMetadataWriterAdmission
 
     private readonly SemaphoreSlim _semaphore = new(1, 1);
     private readonly ConcurrentDictionary<int, int> _syncDepthByThread = new();
+    private int _waitingWriters;
+
+    internal int WaitingWriterCount => Volatile.Read(ref _waitingWriters);
 
     public static StorageMetadataWriterAdmission For(StorageDatabase storage)
     {
@@ -32,7 +35,15 @@ internal sealed class StorageMetadataWriterAdmission
             return new SyncLease(this, threadId);
         }
 
-        _semaphore.Wait();
+        Interlocked.Increment(ref _waitingWriters);
+        try
+        {
+            _semaphore.Wait();
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _waitingWriters);
+        }
         if (!_syncDepthByThread.TryAdd(threadId, 1))
         {
             _semaphore.Release();
@@ -43,7 +54,15 @@ internal sealed class StorageMetadataWriterAdmission
 
     public async ValueTask<IDisposable> EnterAsync(CancellationToken cancellationToken)
     {
-        await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _waitingWriters);
+        try
+        {
+            await _semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _waitingWriters);
+        }
         return new AsyncLease(_semaphore);
     }
 
