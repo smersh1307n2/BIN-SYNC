@@ -640,13 +640,27 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(metadata.TryGetChangeIdentity(
                 scope, local, checked((int)namespaceId), BatchId.From(ScaleId(100_001)),
                 out _, out _, out _));
-            Console.WriteLine(
+            string metrics =
                 $"COMPOSED_HOST_METADATA_GC_SCALE Candidates={candidateCount} Pages={pages} " +
                 $"ElapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3} " +
                 $"AllocatedBytes={allocatedBytes} TestProcessPeakWorkingSetBytes={peakWorkingSet} " +
                 $"TestProcessPeakBeforeBytes={peakWorkingSetBefore} " +
                 $"HostProcessPeakWorkingSetBytes={hostPeakWorkingSet} " +
-                $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore}");
+                $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore}";
+            Console.WriteLine(metrics);
+
+            // GitHub Actions normally suppresses Console output from passing xUnit
+            // tests. Persist the measurements in the job summary so successful runs
+            // retain the benchmark evidence alongside the CI result.
+            string? stepSummary = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
+            if (!string.IsNullOrWhiteSpace(stepSummary))
+            {
+                string summaryRow =
+                    $"| {candidateCount:N0} | {pages} | {stopwatch.Elapsed.TotalMilliseconds:F3} | " +
+                    $"{allocatedBytes:N0} | {peakWorkingSet:N0} | {hostPeakWorkingSet:N0} |" +
+                    Environment.NewLine;
+                File.AppendAllText(stepSummary, summaryRow);
+            }
         }
         finally
         {
