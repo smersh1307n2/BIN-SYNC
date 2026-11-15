@@ -1950,6 +1950,27 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
             Assert.Null(await providerB.ReadCurrentAsync(record, 0x0952));
 
+            // The physical provider tombstones are now gone on both Hosts. Reopen
+            // the independent Metadata Storage partition as well, then retry the
+            // exact stale tombstone operation under the current transport epoch.
+            // The signed origin checkpoint, not the deleted ChangeId row or provider
+            // tombstone, must continue to fence resurrection after a full restart.
+            metadataA.Dispose();
+            metadataA = null;
+            nodeStorageA!.Dispose();
+            nodeStorageA = null;
+            nodeStorageA = StorageDatabase.Open(nodeRootA, nodeStorageNamespace);
+            metadataA = new StorageMetadataStore(nodeStorageA);
+            gcA = new StorageNamespaceGcStore(
+                nodeStorageA, scope, nodeA!.NodeId,
+                new StorageNamespaceGcFeatureOptions(
+                    EnableTombstoneGc: true,
+                    EnableChangeIdGc: true,
+                    EnableReceiptGc: true));
+            metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
+            Assert.Throws<InvalidDataException>(
+                () => metadataA.AcceptIncomingBatch(replacementReceiptBatch));
+
             // Tombstone page two also completes after Host restart, independently
             // of the already-reclaimed ChangeId ledger identities.
             Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
