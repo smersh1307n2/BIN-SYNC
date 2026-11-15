@@ -14,7 +14,7 @@ internal sealed class StorageMetadataWriterAdmission
     private static readonly ConditionalWeakTable<StorageDatabase, StorageMetadataWriterAdmission> Gates = new();
 
     private readonly SemaphoreSlim _semaphore = new(1, 1);
-    private readonly ThreadLocal<int> _syncDepth = new(() => 0);
+    private readonly AsyncLocal<int> _syncDepth = new();
 
     public static StorageMetadataWriterAdmission For(StorageDatabase storage)
     {
