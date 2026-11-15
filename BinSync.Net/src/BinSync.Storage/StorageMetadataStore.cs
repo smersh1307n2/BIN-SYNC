@@ -6431,7 +6431,6 @@ private static bool ValidateIncomingBatchForStaging(
         out ReceiveChainKey? legacyTargetKey,
         out ReceiveChainState? legacyTargetState)
     {
-        using IDisposable writerAdmission = _writerAdmission.Enter();
         var key = new ReceiveChainKey(receiveKey.Sender, receiveKey.Epoch,
             receiveKey.NamespaceId, receiveKey.AuthorStream);
         var legacy = new LegacyReceiveChainKey(receiveKey.Sender, receiveKey.Epoch, receiveKey.NamespaceId);
