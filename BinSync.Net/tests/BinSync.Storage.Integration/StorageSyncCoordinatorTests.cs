@@ -4567,6 +4567,8 @@ public sealed class StorageSyncCoordinatorTests
         string directory = Path.Combine(_root, scope);
         NodeId localId;
         int seenChangesBeforeCutover;
+        BatchId firstBatchedChangeId = default;
+        BatchId lastUnbatchedChangeId = default;
 
         using (var storage = StorageDatabase.Open(directory, partitionId))
         using (var provider = new StorageDataProvider(storage))
@@ -4627,6 +4629,8 @@ public sealed class StorageSyncCoordinatorTests
                 .Select(pair => new MetadataLegacyNodeLedgerFingerprint(
                     pair.Key.ChangeId, pair.Value.Fingerprint.ToArray()))
                 .ToArray();
+            firstBatchedChangeId = firstBatch[0].ChangeId;
+            lastUnbatchedChangeId = ledgerEntries[^1].Key.ChangeId;
             metadata.StoreLegacyNodeLedgerFingerprints(scope, local.NodeId, 1, firstBatch);
             var firstConflict = new MetadataLegacyNodeLedgerFingerprint(
                 firstBatch[0].ChangeId, Enumerable.Repeat((byte)0xA7, 16).ToArray());
@@ -4642,14 +4646,10 @@ public sealed class StorageSyncCoordinatorTests
         {
             Assert.Equal(operationCount, reopenedNode.GlobalChangeLedger.Count);
             Assert.Equal(seenChangesBeforeCutover, reopenedNode.SeenChanges.Count);
-            var first = reopenedNode.GlobalChangeLedger
-                .Where(pair => pair.Key.Ns == 1).First();
-            var last = reopenedNode.GlobalChangeLedger
-                .Where(pair => pair.Key.Ns == 1).Last();
             Assert.Throws<InvalidDataException>(() =>
                 reopenedMetadata.StoreLegacyNodeLedgerFingerprints(scope, localId, 1,
                     new[] { new MetadataLegacyNodeLedgerFingerprint(
-                        first.Key.ChangeId, Enumerable.Repeat((byte)0xA8, 16).ToArray()) }));
+                        firstBatchedChangeId, Enumerable.Repeat((byte)0xA8, 16).ToArray()) }));
 
             var coordinator = new StorageSyncCoordinator(
                 reopenedNode, reopenedProvider, 1, reopenedMetadata, scope);
@@ -4661,7 +4661,7 @@ public sealed class StorageSyncCoordinatorTests
             Assert.Throws<InvalidDataException>(() =>
                 reopenedMetadata.StoreLegacyNodeLedgerFingerprints(scope, localId, 1,
                     new[] { new MetadataLegacyNodeLedgerFingerprint(
-                        last.Key.ChangeId, Enumerable.Repeat((byte)0xA9, 16).ToArray()) }));
+                        lastUnbatchedChangeId, Enumerable.Repeat((byte)0xA9, 16).ToArray()) }));
         }
 
         // A second restart must treat the completed marker and every alias as
