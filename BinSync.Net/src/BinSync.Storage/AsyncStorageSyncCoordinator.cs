@@ -104,11 +104,10 @@ public sealed class AsyncStorageSyncCoordinator
 
     /// <summary>
     /// Run one bounded, process-isolated FLD tombstone-GC pass. The shared async
-    /// admission semaphore excludes every coordinator writer across candidate discovery
-    /// and the final Host RPC; the Host independently revalidates exact tombstone
-    /// identities, snapshot pins, Outbox drafts and ApplyJournal references atomically.
-    /// Host composition must keep the StorageMetadataStore writer capability private:
-    /// direct Metadata mutations outside this coordinator are not covered by Admission.
+    /// admission semaphore excludes coordinator writers, while a StorageDatabase-scoped
+    /// writer-admission lease also fences direct public Metadata mutations across
+    /// candidate discovery and the final Host RPC. The Host independently revalidates
+    /// exact tombstone identities, pins, Outbox drafts and ApplyJournal references.
     /// </summary>
     public async Task<int> CompactTombstonesAsync(
         IAsyncProviderTombstoneGc providerGc,
