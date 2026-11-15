@@ -12,7 +12,6 @@ namespace BinSync.Bench;
 /// signs a v3.1 all-member origin horizon, and seeds incoming ChangeId rows.
 /// The benchmark invocation itself performs exactly one bounded compaction page.
 /// </summary>
-[MemoryDiagnoser]
 [InvocationCount(1)]
 [HideColumns("Error", "StdDev", "Median", "RatioSD")]
 public class MetadataChangeIdGcBench
@@ -30,6 +29,7 @@ public class MetadataChangeIdGcBench
     private StorageDataProvider _provider = null!;
     private DelegateApplicationGcReferenceScanner _scanner = null!;
     private int _expectedReclaimed;
+    private long _lastGcAllocatedBytes;
     private string _directory = string.Empty;
 
     [Params(1_000, 10_000, 50_000)]
@@ -170,6 +170,8 @@ public class MetadataChangeIdGcBench
     [IterationCleanup]
     public void Cleanup()
     {
+        Console.WriteLine(
+            $"CHANGEID_GC_ALLOCATED_BYTES Existing={ExistingChangeIds} Eligible={EligibleChangeIds} Bytes={_lastGcAllocatedBytes}");
         _metadata.Dispose();
         _provider.Dispose();
         _storage.Dispose();
@@ -179,9 +181,11 @@ public class MetadataChangeIdGcBench
     [Benchmark(Description = "Bounded ChangeId GC page / namespace cardinality and eligible-prefix density")]
     public int CompactBoundedChangeIdPage()
     {
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         int reclaimed = _metadata.CompactChangeLedger(
             Scope, Local, NamespaceId, _provider, GcPageLimit,
             static () => new MemoryStream(), _scanner);
+        _lastGcAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
         if (reclaimed != _expectedReclaimed)
             throw new InvalidOperationException(
                 $"ChangeId GC reclaimed {reclaimed}; expected {_expectedReclaimed}.");

@@ -63,6 +63,18 @@ jobs:
           --metadata-cardinality-only
           --artifacts BenchmarkDotNet.Artifacts/cardinality
 
+      - name: Run bounded ChangeId GC cardinality benchmarks
+        working-directory: BinSync.Net
+        run: |
+          set -o pipefail
+          dotnet run --configuration Release \
+            --project bench/BinSync.Bench \
+            -- --metadata-gc-only 2>&1 | tee metadata-changeid-gc-bench.log
+          if grep -E '\\|[[:space:]]*NA[[:space:]]*\\|' metadata-changeid-gc-bench.log; then
+            echo "ChangeId GC benchmark produced a failed/NA case."
+            exit 1
+          fi
+
       - name: Run one-million-row metadata freeze benchmark
         working-directory: BinSync.Net
         run: >
@@ -70,14 +82,6 @@ jobs:
           --project bench/BinSync.Bench
           --
           --metadata-million-only
-
-      - name: Run bounded ChangeId GC cardinality benchmarks
-        working-directory: BinSync.Net
-        run: >
-          dotnet run --configuration Release
-          --project bench/BinSync.Bench
-          --
-          --metadata-gc-only
 
       - name: Fail if any benchmark case failed
         working-directory: BinSync.Net

@@ -28,7 +28,16 @@ if (args.Contains("--coordinator-retry-only", StringComparer.Ordinal))
 else if (args.Contains("--metadata-cardinality-only", StringComparer.Ordinal))
     BenchmarkRunner.Run<BinSync.Bench.MetadataStoreCardinalityBench>(config);
 else if (args.Contains("--metadata-gc-only", StringComparer.Ordinal))
-    BenchmarkRunner.Run<BinSync.Bench.MetadataChangeIdGcBench>(config);
+{
+    // IterationSetup seeds the large namespace. Keep MemoryDiagnoser disabled here;
+    // it includes fixture setup allocations in this stateful one-invocation benchmark.
+    var gcConfig = DefaultConfig.Instance
+        .AddJob(Job.Default
+            .WithToolchain(InProcessEmitToolchain.Instance)
+            .WithWarmupCount(3)
+            .WithIterationCount(10));
+    BenchmarkRunner.Run<BinSync.Bench.MetadataChangeIdGcBench>(gcConfig);
+}
 else if (args.Contains("--metadata-million-only", StringComparer.Ordinal))
 {
     var millionConfig = DefaultConfig.Instance
