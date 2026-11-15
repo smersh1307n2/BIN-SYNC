@@ -278,7 +278,7 @@ remaining V3 release gates pass, physical GC stays disabled.
 `FldBinSyncAsyncHostAdapter` accepts an optional
 `FldBinSyncGcMaintenanceControl`. When omitted, it creates a stopped control;
 therefore no physical-GC pass can start until the host explicitly opens it.
-The control is process-local and starts with all three domains disabled:
+The control is process-local and starts with all three domains disabled. Hosts may inject a shared control in the adapter constructor or use the adapter's public `GcMaintenanceControl` property:
 
 - Call `Start()` to open the global maintenance gate.
 - Call `SetEnabled(FldBinSyncGcDomain.Receipt, true)`,
