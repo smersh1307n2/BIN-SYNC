@@ -3942,3 +3942,12 @@ All physical-GC flags remain default-off. At this 2026-11-14 checkpoint, these d
 - [!] This covers failed local FULL_REPLACE staging/abort, not the full signed peer-rejoin matrix. Signed roster generation gaps, missing/lagging Active member frontiers, installed-ACK requirements and post-GC replay fencing remain separately covered by the BIN-SYNC integration tests cited in §§1.150–1.153; the remaining adversarial audit must verify no untested gap exists.
 - [!] All physical-GC switches remain default-off; Ghost GC remains excluded.
 
+## 1.160. Windows durable namespace publication — explicit platform release gate
+
+- [!] Current FLD StorageDirectorySync.Flush is intentionally a no-op on Windows; current Windows CI therefore proves process-level recovery and API behavior, not power-loss durability of directory-entry publication/deletion.
+- [ ] Before physical GC is enabled on Windows, implement and prove a Windows-specific durable publication/deletion contract for Manifest, Run mirrors, immutable blobs, FULL_REPLACE stage files and database directory creation.
+- [ ] Use a documented platform primitive (candidate: MoveFileEx with MOVEFILE_WRITE_THROUGH) only after validating its exact same-volume replace and directory behavior; test interrupted publication and deletion on supported filesystems.
+- [!] If that durability contract cannot be established, keep physical Receipt/ChangeId/Tombstone GC disabled on Windows. Do not treat passing Windows CI as a substitute for power-loss evidence.
+- Tracking: FLD-DB issue #4 — https://github.com/smersh1307n2/FLD-DB/issues/4
+- All physical-GC flags remain default-off; Ghost GC remains excluded.
+
