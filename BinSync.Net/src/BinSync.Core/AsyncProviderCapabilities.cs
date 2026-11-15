@@ -146,6 +146,26 @@ public interface IAsyncApplicationGcReferenceScan : IAsyncDisposable
         CancellationToken cancellationToken = default);
     ValueTask<bool> HasExternalChangeIdReferenceAsync(
         BatchId changeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the subset of supplied ChangeIds still referenced by the captured Host
+    /// snapshot. The default implementation preserves compatibility; IPC providers
+    /// should override it with a bounded batch request.
+    /// </summary>
+    async ValueTask<IReadOnlySet<BatchId>> FindExternalChangeIdReferencesAsync(
+        IReadOnlyList<BatchId> changeIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(changeIds);
+        var referenced = new HashSet<BatchId>();
+        foreach (BatchId changeId in changeIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await HasExternalChangeIdReferenceAsync(changeId, cancellationToken).ConfigureAwait(false))
+                referenced.Add(changeId);
+        }
+        return referenced;
+    }
+
     ValueTask<bool> HasExternalRecordReferenceAsync(
         RecordId recordId, BatchId tombstoneChangeId,
         CancellationToken cancellationToken = default);
