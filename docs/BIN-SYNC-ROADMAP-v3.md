@@ -3945,8 +3945,8 @@ All physical-GC flags remain default-off. At this 2026-11-14 checkpoint, these d
 ## 1.160. Windows durable namespace publication — explicit platform release gate
 
 - [x C] Added a Windows publication candidate in FLD-DB: StorageDirectorySync.AtomicReplaceFile uses MoveFileExW with MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH after the temporary file is flushed; CreateDirectoryDurableWindows publishes newly created directories through a temporary sibling and MOVEFILE_WRITE_THROUGH. Extended-length local/UNC paths are normalized.
-- [x C] Applied the helper to FLD Manifest replacement, Run mirrors, FULL_REPLACE stage files and immutable Storage blob page publication. Linux/macOS retain atomic File.Move plus containing-directory fsync; blob page batches retain one directory fsync on Unix.
-- [~ T] FLD-DB exact branch fix/crash-consistency-outbox HEAD 384bf65e88045d5b333ccdada71a3902d4fa91d6 is awaiting exact-head Linux/macOS/Windows CI and BIN-SYNC cross-repository Host/provider validation.
+- [x C] Applied the helper to FLD Manifest replacement, Run mirrors, FULL_REPLACE stage files, immutable Storage blob page publication, Storage snapshot/manifest files, both WAL segment managers, Outbox creation/compaction/ACK/state/lease files and ApplyJournal creation/compaction/relay-ACK sidecars. Linux/macOS retain atomic File.Move plus containing-directory fsync; blob page batches retain one directory fsync on Unix.
+- [~ T] FLD-DB exact branch fix/crash-consistency-outbox HEAD 6aa8a79f34f07bfe781174833290c8fd75c632e8 is awaiting exact-head Linux/macOS/Windows CI and BIN-SYNC cross-repository Host/provider validation.
 - [ ] Prove power-loss behavior and safe deletion/orphan semantics on supported Windows filesystems. Process-level restart tests and a green Windows build are not sufficient evidence by themselves.
 - [!] Until the Windows durability contract is independently demonstrated, keep physical Receipt/ChangeId/Tombstone GC disabled on Windows. If a filesystem cannot meet the contract, retain the platform gate there.
 - Tracking: FLD-DB issue #4 — https://github.com/smersh1307n2/FLD-DB/issues/4
