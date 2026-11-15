@@ -2,7 +2,7 @@
 
 # BIN-SYNC Metadata GC: safe horizons and implementation plan
 
-**Status (2026-11-15):** v3.1 signed roster/frontier/checkpoint, FULL_REPLACE, async Host reference scans, read-only per-domain readiness and one bounded sequential async maintenance round are implemented and exact-head validated. Async Host scans expose active immutable provider snapshot pins; any pin blocks Receipt, ChangeId and Tombstone GC. Receipt, ChangeId and field/record-tombstone GC remain behind independent feature flags that default false; Ghost GC remains disabled. This is implementation/test readiness, not production authorization. No time-based deletion is authorized.
+**Status (2026-11-15):** v3.1 signed roster/frontier/checkpoint, FULL_REPLACE, async Host reference scans, read-only per-domain readiness, one bounded sequential async maintenance round and shared Metadata writer admission are implemented and exact-head validated on PR #16 HEAD `133a95ce3ac0789d8de1bb5d42117a15f4fed5e4`. Every persistent public Metadata mutation API and every signed namespace-GC evidence writer uses the shared per-`StorageDatabase` admission gate; async GC holds it across Host reference scanning and final deletion. Async Host scans expose active immutable provider snapshot pins; any pin blocks Receipt, ChangeId and Tombstone GC. Receipt, ChangeId and field/record-tombstone GC remain behind independent feature flags that default false; Ghost GC remains disabled. This is implementation/test readiness, not production authorization. No time-based deletion is authorized.
 
 ## 1. Retention domains must remain independent
 
@@ -209,3 +209,17 @@ The v3.1 roster/frontier/checkpoint and FULL_REPLACE implementation is present a
 - [x T] Existing process-death cuts before candidate enumeration and after durable provider deletion, plus cancellation, heartbeat, snapshot pin and lease-expiry tests, remain green.
 - [!] The WAL test closes/reopens after a completed checkpoint; lower-level torn-WAL/checkpoint recovery is covered by the FLD WAL/Engine crash tests. No wire-format change was made.
 - [ ] Remaining release gates: Metadata writer-bypass closure; provider-specific crash/replay proof; representative large-namespace performance/retention measurements; operator-facing diagnostics presentation; independent flag configuration; disable/rollback and retention policy; staged canary. Async readiness and bounded maintenance are implemented, but do not authorize deletion. All physical GC flags remain false by default; Ghost GC remains disabled.
+
+## 11. Shared Metadata writer admission closure — 2026-11-15
+
+The direct public Metadata writer-bypass gate is closed at the adapter API boundary:
+
+- `StorageMetadataWriterAdmission.For(StorageDatabase)` returns one shared admission object for every `StorageMetadataStore` and `StorageNamespaceGcStore` attached to the same exact `StorageDatabase` instance.
+- Persistent public Metadata mutations enter the gate before the Metadata transaction lock. This includes receive staging/finalization, outbound freeze/ACK/lease state, peer lifecycle, provider cutover, prepared FULL_REPLACE state, baseline application, origin-frontier publication and compaction.
+- Signed roster, frontier, checkpoint, FULL_REPLACE installed-ACK and baseline-report writes use the same admission object. A direct namespace-evidence update cannot race a GC proof/reference scan.
+- Async compactors acquire admission before opening the Host reference scan and retain it through final bounded deletion. The tombstone commit guard holds synchronous admission plus the Metadata transaction gate while the provider performs the final delete. Lock order remains coordinator → Node → Host → Metadata → provider.
+- The sync gate is re-entrant on its owning thread; the async lease is thread-independent. Tests verify actual waiters, not merely that a scheduled task has not yet run.
+
+The gate is process-local and keyed by the exact `StorageDatabase` object. FLD's exclusive partition writer fence prevents a second process from opening a competing writer handle; the FLD Host IPC lease still fences external provider/WAL/ApplyJournal mutations. The adapter-owned Metadata keyspaces must not be written through raw `StorageDatabase` batches.
+
+This closes the direct public Metadata API writer-bypass gate. It does not close the remaining provider crash/replay, scale, or operational release gates and does not authorize physical reclamation. All three physical-GC flags remain false by default; Ghost GC remains disabled.
