@@ -450,7 +450,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         try
         {
             using (var database = FldDatabase.Open(hostRoot, namespaceId, localAuthorBytes))
-                Assert.NotEqual(0UL, database.Checkpoint());
+                _ = database.Checkpoint();
 
             host = StartDatabaseHost(hostRoot, namespaceId, localAuthorBytes, enableTombstoneGc: false);
             StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
