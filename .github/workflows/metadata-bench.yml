@@ -32,7 +32,7 @@ jobs:
         run: bash scripts/vendor-ed25519-from-ztsharp.sh
 
       - name: Print benchmark scope
-        run: echo "Metadata peer baselines plus coordinator retry after durable freeze"
+        run: echo "Metadata peer baselines, coordinator retry, cardinality and bounded ChangeId GC"
       - name: Restore benchmark project
         working-directory: BinSync.Net
         run: dotnet restore bench/BinSync.Bench/BinSync.Bench.csproj
@@ -70,6 +70,14 @@ jobs:
           --project bench/BinSync.Bench
           --
           --metadata-million-only
+
+      - name: Run bounded ChangeId GC cardinality benchmarks
+        working-directory: BinSync.Net
+        run: >
+          dotnet run --configuration Release
+          --project bench/BinSync.Bench
+          --
+          --metadata-gc-only
 
       - name: Fail if any benchmark case failed
         working-directory: BinSync.Net

@@ -27,6 +27,8 @@ if (args.Contains("--coordinator-retry-only", StringComparer.Ordinal))
     BenchmarkRunner.Run<BinSync.Bench.MetadataCoordinatorRetryScanBench>(config);
 else if (args.Contains("--metadata-cardinality-only", StringComparer.Ordinal))
     BenchmarkRunner.Run<BinSync.Bench.MetadataStoreCardinalityBench>(config);
+else if (args.Contains("--metadata-gc-only", StringComparer.Ordinal))
+    BenchmarkRunner.Run<BinSync.Bench.MetadataChangeIdGcBench>(config);
 else if (args.Contains("--metadata-million-only", StringComparer.Ordinal))
 {
     var millionConfig = DefaultConfig.Instance
