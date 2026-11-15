@@ -145,4 +145,89 @@ public sealed class StorageMetadataWriterAdmissionTests
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
+    [Fact]
+    public async Task Namespace_roster_updates_wait_for_the_shared_metadata_gc_writer_lease()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-namespace-writer-admission-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 949);
+            using var metadata = new StorageMetadataStore(storage);
+            const string scope = "namespace-writer-admission";
+            NodeId local = NodeId.From(new byte[]
+            {
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3
+            });
+            var keyPair = BatchSignature.GenerateKeyPair();
+            var trust = new TrustStore();
+            NodeId authority = NodeId.From(new byte[]
+            {
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4
+            });
+            trust.Allow(authority, keyPair.PublicKey, TrustMode.PreShared);
+            var gcStore = new StorageNamespaceGcStore(storage, scope, local);
+
+            var firstRoster = new NamespaceRosterCertificate
+            {
+                NamespaceId = 7,
+                RosterGeneration = 1,
+                PreviousRosterDigest = new byte[NamespaceRosterProtocol.DigestSize],
+                AuthorityNodeId = authority,
+                Members = new[]
+                {
+                    new NamespaceRosterMember
+                    {
+                        NodeId = authority,
+                        PublicKey = keyPair.PublicKey,
+                        TransportPeerEpoch = 1,
+                        Status = NamespaceMemberStatus.Active
+                    }
+                }
+            };
+            firstRoster = gcStore.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(firstRoster, keyPair.Seed), trust);
+
+            var nextRoster = new NamespaceRosterCertificate
+            {
+                NamespaceId = firstRoster.NamespaceId,
+                RosterGeneration = 2,
+                PreviousRosterDigest = NamespaceRosterProtocol.ComputeDigest(firstRoster),
+                AuthorityNodeId = authority,
+                Members = firstRoster.Members
+            };
+            byte[] signedNextRoster = NamespaceRosterProtocol.Sign(nextRoster, keyPair.Seed);
+
+            IDisposable gcLease = await metadata.AcquireGcWriterAdmissionAsync(
+                CancellationToken.None);
+            Task<NamespaceRosterCertificate>? rosterWriter = null;
+            try
+            {
+                var writerStarted = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                rosterWriter = Task.Run(() =>
+                {
+                    writerStarted.SetResult();
+                    return gcStore.AcceptNamespaceRoster(signedNextRoster, trust);
+                });
+
+                await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.False(rosterWriter.IsCompleted);
+            }
+            finally
+            {
+                gcLease.Dispose();
+                if (rosterWriter is not null)
+                    await rosterWriter.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+
+            Assert.Equal(2UL, (await rosterWriter!).RosterGeneration);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
 }
