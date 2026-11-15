@@ -131,6 +131,11 @@ public sealed class AsyncStorageSyncCoordinator
         await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            IReadOnlyList<ProviderMutation> candidates =
+                await providerGc.ReadTombstoneGcCandidatesAsync(limit, ct).ConfigureAwait(false);
+            if (candidates.Count == 0)
+                return 0;
+
             using IDisposable writerAdmission = await storageMetadata
                 .AcquireGcWriterAdmissionAsync(ct).ConfigureAwait(false);
             HashSet<RecordId> liveRecordReferences;
@@ -147,11 +152,6 @@ public sealed class AsyncStorageSyncCoordinator
                 checkpoint is null || !checkpoint.FullReplaceGeneration.HasValue ||
                 checkpoint.FullReplaceDigest is null ||
                 checkpoint.FullReplaceDigest.Length != NamespaceRosterProtocol.DigestSize)
-                return 0;
-
-            IReadOnlyList<ProviderMutation> candidates =
-                await providerGc.ReadTombstoneGcCandidatesAsync(limit, ct).ConfigureAwait(false);
-            if (candidates.Count == 0)
                 return 0;
 
             Guid generation = checkpoint.FullReplaceGeneration.Value;
