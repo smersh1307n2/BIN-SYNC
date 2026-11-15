@@ -390,27 +390,51 @@ public sealed class StorageNamespaceGcStoreTests
     }
 
     [Fact]
-    public void Physical_gc_domains_are_disabled_by_default_and_require_explicit_options()
+    public void Physical_gc_domains_are_disabled_by_default()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-gc-flags-" + Guid.NewGuid().ToString("N"));
         try
         {
             using var storage = StorageDatabase.Open(directory, 19);
-            NodeId local = NodeId.From(Id(0x7F));
-            var defaults = new StorageNamespaceGcStore(storage, "gc-flags", local);
+            var defaults = new StorageNamespaceGcStore(
+                storage, "gc-flags-default", NodeId.From(Id(0x7F)));
+
             Assert.False(defaults.IsTombstoneGcProofEnabled);
             Assert.False(defaults.IsChangeIdGcProofEnabled);
             Assert.False(defaults.IsReceiptGcProofEnabled);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
 
-            var enabled = new StorageNamespaceGcStore(
-                storage, "gc-flags", local,
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, true)]
+    public void Physical_gc_feature_switches_are_independent(
+        bool tombstones, bool changeIds, bool receipts)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-ns-gc-flags-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 19);
+            var gc = new StorageNamespaceGcStore(
+                storage, "gc-flags-matrix", NodeId.From(Id(0x7F)),
                 new StorageNamespaceGcFeatureOptions(
-                    EnableTombstoneGc: true,
-                    EnableChangeIdGc: true,
-                    EnableReceiptGc: true));
-            Assert.True(enabled.IsTombstoneGcProofEnabled);
-            Assert.True(enabled.IsChangeIdGcProofEnabled);
-            Assert.True(enabled.IsReceiptGcProofEnabled);
+                    EnableTombstoneGc: tombstones,
+                    EnableChangeIdGc: changeIds,
+                    EnableReceiptGc: receipts));
+
+            Assert.Equal(tombstones, gc.IsTombstoneGcProofEnabled);
+            Assert.Equal(changeIds, gc.IsChangeIdGcProofEnabled);
+            Assert.Equal(receipts, gc.IsReceiptGcProofEnabled);
         }
         finally
         {
