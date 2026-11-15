@@ -813,6 +813,28 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 _scanToken, changeId.ToArray(), cancellationToken));
         }
 
+        public async ValueTask<IReadOnlySet<BatchId>> FindExternalChangeIdReferencesAsync(
+            IReadOnlyList<BatchId> changeIds, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(changeIds);
+            ThrowIfDisposed(cancellationToken);
+            var referenced = new HashSet<BatchId>();
+            const int batchLimit = FldDatabaseIpcGcProtocol.MaxChangeIdBatchCount;
+            for (int offset = 0; offset < changeIds.Count; offset += batchLimit)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                int count = Math.Min(batchLimit, changeIds.Count - offset);
+                var ids = new byte[count][];
+                for (int i = 0; i < count; i++)
+                    ids[i] = changeIds[offset + i].ToArray();
+                bool[] results = await _client.HasGcChangeIdReferencesAsync(
+                    _scanToken, ids, cancellationToken).ConfigureAwait(false);
+                for (int i = 0; i < count; i++)
+                    if (results[i]) referenced.Add(changeIds[offset + i]);
+            }
+            return referenced;
+        }
+
         public ValueTask<bool> HasExternalRecordReferenceAsync(
             RecordId recordId, BatchId tombstoneChangeId,
             CancellationToken cancellationToken = default)
