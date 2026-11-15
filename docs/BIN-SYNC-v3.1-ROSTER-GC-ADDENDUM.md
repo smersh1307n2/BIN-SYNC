@@ -615,5 +615,5 @@ This implementation is a C-pass source milestone only. Required T-pass coverage 
 
 The real two-FLD-Host signed-GC integration scenario now extends beyond the deletion boundary. After both providers physically reclaim the field tombstones, the test closes and reopens the independent Metadata Storage partition, restores the accepted signed namespace-GC guard, and retries the exact stale tombstone operation using the current transport epoch. The persisted signed origin checkpoint must reject the operation even though its ChangeId ledger row, provider tombstone and old receipt evidence have already been reclaimed.
 
-- [~ T/CI] Test added in BIN-SYNC commit `f4e3eb411b01a0266d7d03fecad5a59f9906f9af`; exact-head Linux/Windows tests, cross-repository FLD Host validation and 3-platform durable-provider validation are pending.
+- [x T/CI] Test commit `f4e3eb411b01a0266d7d03fecad5a59f9906f9af` passed exact-code validation: BIN-SYNC run `43685054188` passed 6/6 jobs, including 686/686 .NET tests on Linux and Windows and `FldBinSyncHost.Tests` 38/38 on both Ubuntu and Windows; durable provider run `43685057530` passed 3/3 platforms with 319/319 tests each.
 - [!] This closes one adversarial replay cut only after its exact-head tests pass. It does not authorize physical GC. Receipt/ChangeId/Tombstone flags remain false by default; Ghost GC remains excluded.
