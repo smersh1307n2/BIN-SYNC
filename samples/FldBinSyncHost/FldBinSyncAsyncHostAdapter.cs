@@ -377,7 +377,7 @@ public sealed class FldBinSyncAsyncHostAdapter
             cancellationToken.ThrowIfCancellationRequested();
             tombstones = await RunGcDomainAsync(
                 FldBinSyncGcDomain.Tombstone, gcStore.IsTombstoneGcProofEnabled,
-                ct => _coordinator.CompactTombstonesAsync(tombstoneGc, limit, ct),
+                ct => _coordinator.CompactTombstonesAsync(tombstoneGc, Math.Min(limit, IAsyncProviderTombstoneGc.MaximumCandidatePageSize), ct),
                 cancellationToken).ConfigureAwait(false);
         }
 
@@ -432,7 +432,7 @@ public sealed class FldBinSyncAsyncHostAdapter
         _coordinator.AttachNamespaceGcGuard(gcStore, trustStore);
         return RunGcDomainAsync(
             FldBinSyncGcDomain.Tombstone, gcStore.IsTombstoneGcProofEnabled,
-            ct => _coordinator.CompactTombstonesAsync(tombstoneGc, limit, ct),
+            ct => _coordinator.CompactTombstonesAsync(tombstoneGc, Math.Min(limit, IAsyncProviderTombstoneGc.MaximumCandidatePageSize), ct),
             cancellationToken);
     }
 
