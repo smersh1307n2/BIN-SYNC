@@ -473,7 +473,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
-                StorageIpcEndpoint.DeleteIfOwned(hostRoot, 0, ownerId);
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, hostProcessId, ownerId);
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
         }
     }
@@ -513,6 +513,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         var trust = new TrustStore();
         trust.Allow(authority, keys[0].PublicKey, TrustMode.PreShared);
         Guid ownerId = Guid.Empty;
+        int hostProcessId = 0;
         Process? host = null;
         Process? hostWorker = null;
         FldDatabaseIpcAsyncDataProvider? provider = null;
@@ -527,6 +528,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
                 hostRoot, host, TimeSpan.FromSeconds(45));
             ownerId = endpoint.OwnerId;
+            hostProcessId = endpoint.ProcessId;
             hostWorker = Process.GetProcessById(endpoint.ProcessId);
             provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), local, () => 17);
