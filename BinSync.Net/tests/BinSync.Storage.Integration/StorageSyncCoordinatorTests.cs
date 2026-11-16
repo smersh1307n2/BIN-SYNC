@@ -5630,10 +5630,10 @@ public sealed class StorageSyncCoordinatorTests
         }) { IsBackground = true };
 
         using (IDisposable guard = metadata.AcquireTombstoneGcCommitGuard(
-            scope, local.NodeId, namespaceId, gc, trust, out IReadOnlySet<RecordId>? liveReferences))
+            scope, local.NodeId, namespaceId, gc, trust))
         {
-            Assert.NotNull(liveReferences);
-            Assert.Contains(record, liveReferences!);
+            Assert.True(metadata.HasLiveRecordReference(
+                scope, local.NodeId, namespaceId, record));
             reservationThread.Start();
 
             // Ensure the worker reached the call before asserting that the commit lease
