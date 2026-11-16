@@ -227,7 +227,12 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
             throw;
         }
         if (!committed)
-            throw new InvalidOperationException("GC operator policy generation conflict; no policy change was applied.");
+        {
+            // A different process advanced the durable generation. The local runtime
+            // must not continue operating under an intent that is now stale.
+            _runtime.Stop();
+            throw new InvalidOperationException("GC operator policy generation conflict; local maintenance was stopped.");
+        }
 
         try
         {
