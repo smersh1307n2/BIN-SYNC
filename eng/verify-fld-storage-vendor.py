@@ -39,7 +39,7 @@ def main() -> int:
     for path in sorted(actual_paths - set(expected)):
         errors.append(f"unexpected: {path}")
     for path in sorted(set(expected) & actual_paths):
-        actual_sha = git_blob_sha1((VENDOR / path).read_bytes())
+        # Git stores text blobs with LF; Windows checkout may materialize CRLF.\n        data = (VENDOR / path).read_bytes().replace(b"\\r\\n", b"\\n")\n        actual_sha = git_blob_sha1(data)
         if actual_sha != expected[path]:
             errors.append(f"modified: {path} (expected {expected[path]}, got {actual_sha})")
 
