@@ -18,13 +18,31 @@ public sealed record StoragePayloadCompactionResult(
 public sealed class TombstoneGcCommitLease : IDisposable
 {
     private IDisposable? _inner;
-    public IReadOnlySet<RecordId>? LiveRecordReferences { get; }
+    private readonly StorageMetadataStore _metadataStore;
+    private readonly string _scopeId;
+    private readonly NodeId _localReplica;
+    private readonly int _namespaceId;
 
     internal TombstoneGcCommitLease(
-        IDisposable inner, IReadOnlySet<RecordId>? liveRecordReferences)
+        IDisposable inner, StorageMetadataStore metadataStore,
+        string scopeId, NodeId localReplica, int namespaceId)
     {
         _inner = inner ?? throw new ArgumentNullException(nameof(inner));
-        LiveRecordReferences = liveRecordReferences;
+        _metadataStore = metadataStore ?? throw new ArgumentNullException(nameof(metadataStore));
+        _scopeId = scopeId;
+        _localReplica = localReplica;
+        _namespaceId = namespaceId;
+    }
+
+    /// <summary>
+    /// Exact fail-closed lookup while the lease holds the Metadata writer and transaction
+    /// gates. This deliberately trades repeated payload scans for bounded memory.
+    /// </summary>
+    public bool HasLiveRecordReference(RecordId recordId)
+    {
+        ObjectDisposedException.ThrowIf(_inner is null, this);
+        return _metadataStore.HasLiveRecordReference(
+            _scopeId, _localReplica, _namespaceId, recordId);
     }
 
     public void Dispose()
@@ -485,13 +503,16 @@ public sealed class StorageSyncCoordinator
         if (_namespaceGcStore is null || _namespaceGcTrustStore is null)
             throw new NotSupportedException(
                 "Tombstone GC requires the coordinator to be attached to its exact namespace-GC store and TrustStore.");
-        IReadOnlySet<RecordId>? liveRecordReferences = null;
+        if (_metadataStore is not StorageMetadataStore metadataStore ||
+            string.IsNullOrWhiteSpace(_scopeId))
+            throw new NotSupportedException(
+                "Tombstone GC requires the durable StorageMetadataStore and a stable Metadata scope.");
         IDisposable inner = AcquireApplicationCommitGuardCore(
             acquireHostCommitLease,
             requireFullReplaceMetadataProof: false,
-            requireTombstoneGcMetadataProof: true,
-            captureTombstoneGcReferences: references => liveRecordReferences = references);
-        return new TombstoneGcCommitLease(inner, liveRecordReferences);
+            requireTombstoneGcMetadataProof: true);
+        return new TombstoneGcCommitLease(
+            inner, metadataStore, _scopeId, _node.NodeId, _namespaceId);
     }
 
     /// <summary>
@@ -511,8 +532,7 @@ public sealed class StorageSyncCoordinator
     private IDisposable AcquireApplicationCommitGuardCore(
         Func<IDisposable?>? acquireHostCommitLease,
         bool requireFullReplaceMetadataProof,
-        bool requireTombstoneGcMetadataProof = false,
-        Action<IReadOnlySet<RecordId>?>? captureTombstoneGcReferences = null)
+        bool requireTombstoneGcMetadataProof = false)
     {
         Monitor.Enter(_gate);
         IDisposable? nodeLease = null;
@@ -552,9 +572,7 @@ public sealed class StorageSyncCoordinator
                 TrustStore trustStore = _namespaceGcTrustStore
                     ?? throw new NotSupportedException("Tombstone GC requires the attached namespace-GC TrustStore.");
                 metadataLease = storageMetadata.AcquireTombstoneGcCommitGuard(
-                    _scopeId, _node.NodeId, _namespaceId, gcStore, trustStore,
-                    out IReadOnlySet<RecordId>? liveRecordReferences);
-                captureTombstoneGcReferences?.Invoke(liveRecordReferences);
+                    _scopeId, _node.NodeId, _namespaceId, gcStore, trustStore);
             }
 
             providerLease = providerGuard.AcquireCommitGuard();
