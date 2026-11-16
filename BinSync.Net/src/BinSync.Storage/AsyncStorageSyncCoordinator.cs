@@ -115,7 +115,7 @@ public sealed class AsyncStorageSyncCoordinator
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(providerGc);
-        if (limit is < 1 or > 256)
+        if (limit is < 1 or > IAsyncProviderTombstoneGc.MaximumCandidatePageSize)
             throw new ArgumentOutOfRangeException(nameof(limit));
         if (_metadataStore is not StorageMetadataStore storageMetadata)
             throw new NotSupportedException("Async tombstone GC requires the durable StorageMetadataStore.");
