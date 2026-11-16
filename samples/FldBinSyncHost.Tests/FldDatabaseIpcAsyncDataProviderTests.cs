@@ -43,6 +43,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         {
             ProviderSnapshotHandle snapshot = await ((IAsyncDataProvider)_inner)
                 .OpenSnapshotAsync(cancellationToken);
+            if (snapshot.Token == Guid.Empty)
+                throw new InvalidDataException("Crash probe did not obtain a provider snapshot token.");
             _host.Kill(entireProcessTree: true);
             await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
             throw new IOException("Injected host death with a provider GC snapshot pin open.");
