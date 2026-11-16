@@ -448,6 +448,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             StorageIpcEndpointInfo endpoint = await WaitForHostEndpointAsync(
                 hostRoot, host, TimeSpan.FromSeconds(45));
             ownerId = endpoint.OwnerId;
+            hostProcessId = endpoint.ProcessId;
             provider = await FldDatabaseIpcAsyncDataProvider.ConnectAsync(
                 hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), author, () => 8);
 
