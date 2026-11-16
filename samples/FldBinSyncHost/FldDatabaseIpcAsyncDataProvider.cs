@@ -501,11 +501,19 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         await using IAsyncApplicationGcReferenceScan scan = await OpenScanAsync(
             scopeId, localReplica, namespaceId, cancellationToken).ConfigureAwait(false);
         if (scan.HasSnapshotPin)
+        {
+            await _client.AbortTombstoneGcApprovalSpoolAsync(
+                spoolToken, CancellationToken.None).ConfigureAwait(false);
             return 0;
+        }
         ApplicationDraftHorizon draft = await scan.GetUnpublishedLocalDraftHorizonAsync(
             cancellationToken).ConfigureAwait(false);
         if (draft.Count != 0 || draft.MaxHlcWall != 0 || draft.MaxHlcLogical != 0)
+        {
+            await _client.AbortTombstoneGcApprovalSpoolAsync(
+                spoolToken, CancellationToken.None).ConfigureAwait(false);
             return 0;
+        }
 
         return await _client.CommitTombstoneGcApprovalSpoolAsync(
             spoolToken, cancellationToken).ConfigureAwait(false);
