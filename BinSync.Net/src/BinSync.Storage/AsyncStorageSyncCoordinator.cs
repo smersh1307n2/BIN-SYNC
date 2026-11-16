@@ -151,6 +151,7 @@ public sealed class AsyncStorageSyncCoordinator
             Guid spoolToken = await providerGc.BeginTombstoneGcApprovalSpoolAsync(ct).ConfigureAwait(false);
             bool spoolCommitted = false;
             ProviderSnapshotHandle? snapshot = null;
+            int approvedExpectedCount = 0;
             try
             {
                 // One immutable provider snapshot spans every candidate page. The
@@ -198,8 +199,11 @@ public sealed class AsyncStorageSyncCoordinator
                         }
 
                         if (approvedPage.Count != 0)
+                        {
+                            approvedExpectedCount = checked(approvedExpectedCount + approvedPage.Count);
                             await providerGc.AppendTombstoneGcApprovalSpoolAsync(
                                 spoolToken, approvedPage, ct).ConfigureAwait(false);
+                        }
                     }
 
                     if (page.IsComplete)
@@ -220,6 +224,8 @@ public sealed class AsyncStorageSyncCoordinator
                         spoolToken, ct).ConfigureAwait(false);
                 if (approvalDigest.Length != 32)
                     throw new InvalidDataException("FLD approval spool returned an invalid SHA-256 digest.");
+                if (approvedCount != approvedExpectedCount)
+                    throw new InvalidDataException("FLD approval spool count differs from the approved IPC stream.");
                 if (approvedCount == 0)
                 {
                     await providerGc.AbortTombstoneGcApprovalSpoolAsync(
