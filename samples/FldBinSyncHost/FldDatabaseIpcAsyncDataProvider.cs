@@ -498,8 +498,9 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         Guid spoolToken, string scopeId, NodeId localReplica, int namespaceId,
         CancellationToken cancellationToken = default)
     {
-        await using IAsyncApplicationGcReferenceScan scan = await OpenScanAsync(
-            scopeId, localReplica, namespaceId, cancellationToken).ConfigureAwait(false);
+        await using IAsyncApplicationGcReferenceScan scan = await OpenScanCoreAsync(
+            scopeId, localReplica, namespaceId,
+            sealCommittedWalForTombstoneGc: true, cancellationToken).ConfigureAwait(false);
         if (scan.HasSnapshotPin)
         {
             await _client.AbortTombstoneGcApprovalSpoolAsync(
@@ -674,9 +675,16 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         }
     }
 
-    public async ValueTask<IAsyncApplicationGcReferenceScan> OpenScanAsync(
+    public ValueTask<IAsyncApplicationGcReferenceScan> OpenScanAsync(
         string scopeId, NodeId localReplica, int namespaceId,
         CancellationToken cancellationToken = default)
+        => OpenScanCoreAsync(scopeId, localReplica, namespaceId,
+            sealCommittedWalForTombstoneGc: false, cancellationToken);
+
+    private async ValueTask<IAsyncApplicationGcReferenceScan> OpenScanCoreAsync(
+        string scopeId, NodeId localReplica, int namespaceId,
+        bool sealCommittedWalForTombstoneGc,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         ThrowIfUnavailable(cancellationToken);
@@ -692,8 +700,9 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         {
             ThrowIfUnavailable(cancellationToken);
             lease = await _client.AcquireGcLeaseAsync(cancellationToken).ConfigureAwait(false);
-            FldDatabaseIpcGcReferenceScan scan =
-                await _client.OpenGcReferenceScanAsync(cancellationToken).ConfigureAwait(false);
+            FldDatabaseIpcGcReferenceScan scan = sealCommittedWalForTombstoneGc
+                ? await _client.OpenTombstoneGcReferenceScanAsync(cancellationToken).ConfigureAwait(false)
+                : await _client.OpenGcReferenceScanAsync(cancellationToken).ConfigureAwait(false);
             scanToken = scan.Token;
             if (scan.NamespaceId != checked((ushort)namespaceId))
                 throw new InvalidOperationException(
