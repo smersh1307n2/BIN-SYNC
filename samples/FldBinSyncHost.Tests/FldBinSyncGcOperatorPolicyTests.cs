@@ -152,12 +152,33 @@ public sealed class FldBinSyncGcOperatorPolicyTests
         Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.ChangeId));
     }
 
+
+    [Fact]
+    public async Task Durable_domain_lease_is_required_and_released_after_bounded_work()
+    {
+        var store = new TestPolicyStore();
+        using var runtime = new FldBinSyncGcMaintenanceControl();
+        var coordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+            Binding(), store, new AllowAllAuthorizer(), runtime);
+        await coordinator.UpdateAsync(new(Binding(), 0, "operator-1", "enable ChangeId only",
+            true, false, true, false));
+
+        Assert.Null(await coordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.Receipt));
+        IAsyncDisposable? lease =
+            await coordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.ChangeId);
+        Assert.NotNull(lease);
+        Assert.Equal(1, store.ActiveLeases);
+        await lease!.DisposeAsync();
+        Assert.Equal(0, store.ActiveLeases);
+    }
+
     private sealed class TestPolicyStore : IFldBinSyncGcOperatorPolicyStore
     {
         public FldBinSyncGcOperatorPolicy? Current { get; private set; }
         public List<FldBinSyncGcOperatorAuditEntry> Audit { get; } = new();
         public bool ThrowOnRead { get; set; }
         public bool ForceConflict { get; set; }
+        public int ActiveLeases { get; private set; }
 
         public ValueTask<FldBinSyncGcOperatorPolicy?> ReadAsync(
             FldBinSyncGcOperatorPolicyBinding binding,
@@ -180,6 +201,38 @@ public sealed class FldBinSyncGcOperatorPolicyTests
             Current = policy;
             Audit.Add(auditEntry);
             return ValueTask.FromResult(true);
+        }
+
+        public ValueTask<IAsyncDisposable?> TryAcquireMaintenanceLeaseAsync(
+            FldBinSyncGcOperatorPolicyBinding binding,
+            ulong expectedGeneration,
+            FldBinSyncGcDomain domain,
+            CancellationToken cancellationToken = default)
+        {
+            if (ForceConflict || Current is null || Current.Binding != binding ||
+                Current.Generation != expectedGeneration || !Current.MaintenanceStarted)
+                return ValueTask.FromResult<IAsyncDisposable?>(null);
+            bool enabled = domain switch
+            {
+                FldBinSyncGcDomain.Receipt => Current.ReceiptEnabled,
+                FldBinSyncGcDomain.ChangeId => Current.ChangeIdEnabled,
+                FldBinSyncGcDomain.Tombstone => Current.TombstoneEnabled,
+                _ => false
+            };
+            if (!enabled) return ValueTask.FromResult<IAsyncDisposable?>(null);
+            ActiveLeases++;
+            return ValueTask.FromResult<IAsyncDisposable?>(new TestLease(this));
+        }
+
+        private sealed class TestLease(TestPolicyStore owner) : IAsyncDisposable
+        {
+            private TestPolicyStore? _owner = owner;
+            public ValueTask DisposeAsync()
+            {
+                TestPolicyStore? owner = Interlocked.Exchange(ref _owner, null);
+                if (owner is not null) owner.ActiveLeases--;
+                return ValueTask.CompletedTask;
+            }
         }
     }
 
