@@ -2247,7 +2247,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
-            Assert.Single(await providerA.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Single(await ReadAllTombstoneCandidatesAsync(providerA, 16));
             Assert.Single(await ReadAllTombstoneCandidatesAsync(providerB, 16));
 
             // WAL is now sealed on both Hosts. Receipt GC can advance independently
@@ -2292,11 +2292,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // The remaining physical tombstone page now resumes from those reopened Hosts.
 
             Assert.Single(await ReadAllTombstoneCandidatesAsync(providerA!, 16));
-            Assert.Single(await providerB!.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Single(await ReadAllTombstoneCandidatesAsync(providerB!, 16));
             Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
-            Assert.Empty(await providerA.ReadTombstoneGcCandidatesAsync(16));
-            Assert.Empty(await providerB.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerA, 16));
+            Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerB, 16));
             Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
             Assert.Null(await providerA.ReadCurrentAsync(record, 0x0952));
             Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
