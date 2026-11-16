@@ -30,6 +30,12 @@ internal sealed class StoragePageCache
     public StoragePageCacheLease Acquire(StoragePageKey key, Func<byte[]> loadPage)
     {
         ArgumentNullException.ThrowIfNull(loadPage);
+        return Acquire(key, _ => loadPage());
+    }
+
+    public StoragePageCacheLease Acquire(StoragePageKey key, Func<ulong, byte[]> loadPage)
+    {
+        ArgumentNullException.ThrowIfNull(loadPage);
         if (key.Generation == 0) throw new ArgumentOutOfRangeException(nameof(key));
         if (key.PageId == 0) throw new ArgumentOutOfRangeException(nameof(key));
 
@@ -44,7 +50,7 @@ internal sealed class StoragePageCache
 
             // Loading under the cache lock prevents duplicate concurrent misses and
             // guarantees that the budget check and insertion are one atomic operation.
-            byte[] page = loadPage() ?? throw new InvalidDataException("Storage page loader returned null.");
+            byte[] page = loadPage(key.PageId) ?? throw new InvalidDataException("Storage page loader returned null.");
             if (page.Length != StoragePageCodec.PageSize)
                 throw new InvalidDataException($"Storage page loader must return exactly {StoragePageCodec.PageSize} bytes.");
 
@@ -71,6 +77,23 @@ internal sealed class StoragePageCache
                     Remove(current);
                 current = previous;
             }
+        }
+    }
+
+    internal StoragePageView Decode(Entry entry, ulong generation, ulong pageId)
+    {
+        lock (_gate)
+        {
+            if (entry.PinCount <= 0)
+                throw new ObjectDisposedException(nameof(StoragePageCacheLease));
+            if (entry.Key.Generation != generation || entry.Key.PageId != pageId)
+                throw new InvalidDataException("Storage page cache lease identity mismatch.");
+            if (entry.DecodedPage.HasValue)
+                return entry.DecodedPage.Value;
+
+            StoragePageView decoded = StoragePageCodec.Decode(entry.Bytes, generation, pageId);
+            entry.DecodedPage = decoded;
+            return decoded;
         }
     }
 
@@ -120,6 +143,7 @@ internal sealed class StoragePageCache
         public StoragePageKey Key { get; } = key;
         public byte[] Bytes { get; } = bytes;
         public int PinCount { get; set; }
+        public StoragePageView? DecodedPage { get; set; }
         public LinkedListNode<Entry>? Node { get; set; }
     }
 }
@@ -143,6 +167,13 @@ internal sealed class StoragePageCacheLease : IDisposable
             ObjectDisposedException.ThrowIf(_owner is null, this);
             return _entry.Bytes;
         }
+    }
+
+    /// <summary>Returns a CRC-validated page view cached for this immutable cache entry.</summary>
+    public StoragePageView Decode(ulong generation, ulong pageId)
+    {
+        StoragePageCache owner = _owner ?? throw new ObjectDisposedException(nameof(StoragePageCacheLease));
+        return owner.Decode(_entry, generation, pageId);
     }
 
     public void Dispose()
