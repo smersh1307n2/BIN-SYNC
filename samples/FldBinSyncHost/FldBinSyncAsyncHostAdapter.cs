@@ -21,7 +21,8 @@ public enum FldBinSyncGcBlockerCode
     OutstandingPeerReservations,
     TombstoneProviderCapabilityUnavailable,
     FullReplaceBaselineUnavailable,
-    FullReplaceBaselineNotInstalled
+    FullReplaceBaselineNotInstalled,
+    DurableOperatorPolicyUnavailable
 }
 
 /// <summary>A stable blocker identifier paired with its operator-readable explanation.</summary>
@@ -75,6 +76,8 @@ public sealed record FldBinSyncGcDomainReadiness(
             return FldBinSyncGcBlockerCode.FullReplaceBaselineUnavailable;
         if (reason == "At least one Active roster member has not durably installed the exact FULL_REPLACE baseline.")
             return FldBinSyncGcBlockerCode.FullReplaceBaselineNotInstalled;
+        if (reason == "Durable GC operator policy coordinator is required but was not configured.")
+            return FldBinSyncGcBlockerCode.DurableOperatorPolicyUnavailable;
         return FldBinSyncGcBlockerCode.Unclassified;
     }
 }
@@ -119,6 +122,8 @@ public sealed class FldBinSyncAsyncHostAdapter
     private readonly Action<Node> _persistNode;
     private readonly int _publicationLimit;
     private readonly FldBinSyncGcMaintenanceControl _gcControl;
+    private readonly FldBinSyncGcOperatorPolicyCoordinator? _gcPolicyCoordinator;
+    private readonly bool _requireDurableOperatorPolicy;
 
     /// <summary>Runtime stop/domain switches used by every GC maintenance entry point.</summary>
     public FldBinSyncGcMaintenanceControl GcMaintenanceControl => _gcControl;
@@ -129,7 +134,9 @@ public sealed class FldBinSyncAsyncHostAdapter
         IAsyncProviderRemoteBatchCommitStore remoteApply,
         Action<Node> persistNode,
         int publicationLimit = 1024,
-        FldBinSyncGcMaintenanceControl? gcControl = null)
+        FldBinSyncGcMaintenanceControl? gcControl = null,
+        FldBinSyncGcOperatorPolicyCoordinator? gcPolicyCoordinator = null,
+        bool requireDurableOperatorPolicy = false)
     {
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
@@ -139,6 +146,8 @@ public sealed class FldBinSyncAsyncHostAdapter
             throw new ArgumentOutOfRangeException(nameof(publicationLimit));
         _publicationLimit = publicationLimit;
         _gcControl = gcControl ?? new FldBinSyncGcMaintenanceControl();
+        _gcPolicyCoordinator = gcPolicyCoordinator;
+        _requireDurableOperatorPolicy = requireDurableOperatorPolicy;
     }
 
     /// <summary>
@@ -265,6 +274,8 @@ public sealed class FldBinSyncAsyncHostAdapter
         var receiptReasons = new List<string>(common);
         var changeIdReasons = new List<string>(common);
         var tombstoneReasons = new List<string>(common);
+        if (_requireDurableOperatorPolicy && _gcPolicyCoordinator is null)
+            common.Add("Durable GC operator policy coordinator is required but was not configured.");
         bool receiptRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.Receipt);
         bool changeIdRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.ChangeId);
         bool tombstoneRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.Tombstone);
@@ -383,6 +394,20 @@ public sealed class FldBinSyncAsyncHostAdapter
         using CancellationTokenSource? linked =
             _gcControl.TryCreateLinkedTokenSource(domain, cancellationToken);
         if (linked is null) return 0;
+
+        if (_requireDurableOperatorPolicy && _gcPolicyCoordinator is null)
+            return 0;
+
+        await using IAsyncDisposable? policyLease = _gcPolicyCoordinator is null
+            ? null
+            : await _gcPolicyCoordinator.TryAcquireMaintenanceLeaseAsync(
+                domain, linked.Token).ConfigureAwait(false);
+        if (_gcPolicyCoordinator is not null && policyLease is null)
+        {
+            _gcControl.Stop();
+            return 0;
+        }
+
         return await operation(linked.Token).ConfigureAwait(false);
     }
 
