@@ -399,6 +399,122 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         return new ProviderSnapshotPage(entries, page.NextIndex, !page.HasMore);
     }
 
+    public ValueTask<ProviderSnapshotHandle> OpenTombstoneGcCandidateSnapshotAsync(
+        CancellationToken cancellationToken = default)
+        => OpenSnapshotAsync(cancellationToken);
+
+    public async ValueTask<ProviderTombstoneGcCandidatePage> ReadTombstoneGcCandidatePageAsync(
+        Guid snapshotToken, int afterIndex, int limit,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfUnavailable(cancellationToken);
+        if (snapshotToken == Guid.Empty || afterIndex < 0 ||
+            limit is < 1 or > FldDatabaseIpcProtocol.MaxSnapshotPageEntries)
+            throw new ArgumentOutOfRangeException(nameof(limit));
+
+        FldDatabaseIpcSnapshotHandle handle;
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (!_snapshots.TryGetValue(snapshotToken, out handle!))
+                throw new InvalidOperationException("The FLD tombstone-candidate snapshot is not active.");
+        }
+
+        FldProviderSnapshotMetadataPage page = await _client.ReadSnapshotPageAsync(
+            handle, afterIndex, limit, cancellationToken).ConfigureAwait(false);
+        var candidates = new List<ProviderMutation>(page.Entries.Count);
+        foreach (FldProviderSnapshotEntryMetadata metadata in page.Entries)
+        {
+            if (!metadata.IsTombstone && !metadata.IsRecordTombstone)
+                continue;
+            if (metadata.AuthorNodeId.Length != 16 || metadata.ChangeId.Length != 16)
+                continue;
+
+            candidates.Add(new ProviderMutation
+            {
+                RecordId = _recordIdResolver(metadata.RecordId),
+                FieldId = metadata.FieldId,
+                IsTombstone = metadata.IsTombstone,
+                IsRecordTombstone = metadata.IsRecordTombstone,
+                HlcWall = metadata.HlcWall,
+                HlcLogical = metadata.HlcLogical,
+                AuthorNodeId = NodeId.From(metadata.AuthorNodeId),
+                KeyEpoch = metadata.KeyEpoch,
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(metadata.ChangeId),
+                OriginAuthorEpoch = metadata.OriginAuthorEpoch,
+                OriginSequence = metadata.OriginSequence
+            });
+        }
+
+        return new ProviderTombstoneGcCandidatePage(
+            candidates, page.NextIndex, !page.HasMore);
+    }
+
+    public ValueTask ReleaseTombstoneGcCandidateSnapshotAsync(
+        Guid snapshotToken, CancellationToken cancellationToken = default)
+        => ReleaseSnapshotAsync(snapshotToken, cancellationToken);
+
+    public ValueTask<Guid> BeginTombstoneGcApprovalSpoolAsync(
+        CancellationToken cancellationToken = default)
+        => new(_client.BeginTombstoneGcApprovalSpoolAsync(cancellationToken));
+
+    public async ValueTask AppendTombstoneGcApprovalSpoolAsync(
+        Guid spoolToken, IReadOnlyList<ProviderMutation> approvedCandidates,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfUnavailable(cancellationToken);
+        ArgumentNullException.ThrowIfNull(approvedCandidates);
+        var candidates = new FldTombstoneGcCandidate[approvedCandidates.Count];
+        for (int i = 0; i < candidates.Length; i++)
+        {
+            ProviderMutation mutation = approvedCandidates[i]
+                ?? throw new ArgumentException("Approved tombstone candidate cannot be null.", nameof(approvedCandidates));
+            if (mutation.IsRecordTombstone == mutation.IsTombstone)
+                throw new ArgumentException("Only record or field tombstones may be approved for GC.", nameof(approvedCandidates));
+
+            byte[] recordId = new byte[16];
+            byte[] changeId = new byte[16];
+            byte[] authorNodeId = new byte[16];
+            mutation.RecordId.WriteTo(recordId);
+            mutation.ChangeId.WriteTo(changeId);
+            mutation.AuthorNodeId.WriteTo(authorNodeId);
+            candidates[i] = new FldTombstoneGcCandidate(
+                recordId, mutation.FieldId, changeId, authorNodeId,
+                mutation.HlcWall, mutation.HlcLogical,
+                mutation.OriginAuthorEpoch, mutation.OriginSequence,
+                mutation.IsRecordTombstone, mutation.IsTombstone);
+        }
+
+        await _client.AppendTombstoneGcApprovalSpoolAsync(
+            spoolToken, candidates, cancellationToken).ConfigureAwait(false);
+    }
+
+    public ValueTask<(int Count, byte[] Digest)> SealTombstoneGcApprovalSpoolAsync(
+        Guid spoolToken, CancellationToken cancellationToken = default)
+        => new(_client.SealTombstoneGcApprovalSpoolAsync(spoolToken, cancellationToken));
+
+    public async ValueTask<int> CommitTombstoneGcApprovalSpoolAsync(
+        Guid spoolToken, string scopeId, NodeId localReplica, int namespaceId,
+        CancellationToken cancellationToken = default)
+    {
+        await using IAsyncApplicationGcReferenceScan scan = await OpenScanAsync(
+            scopeId, localReplica, namespaceId, cancellationToken).ConfigureAwait(false);
+        if (scan.HasSnapshotPin)
+            return 0;
+        ApplicationDraftHorizon draft = await scan.GetUnpublishedLocalDraftHorizonAsync(
+            cancellationToken).ConfigureAwait(false);
+        if (draft.Count != 0 || draft.MaxHlcWall != 0 || draft.MaxHlcLogical != 0)
+            return 0;
+
+        return await _client.CommitTombstoneGcApprovalSpoolAsync(
+            spoolToken, cancellationToken).ConfigureAwait(false);
+    }
+
+    public ValueTask AbortTombstoneGcApprovalSpoolAsync(
+        Guid spoolToken, CancellationToken cancellationToken = default)
+        => new(_client.AbortTombstoneGcApprovalSpoolAsync(spoolToken, cancellationToken));
+
     public async ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
         int limit, CancellationToken cancellationToken = default)
     {
