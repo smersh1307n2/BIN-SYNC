@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/storage-integration.yml"
       - "external/Fld1.Storage/**"
+      - "eng/verify-fld-storage-vendor.py"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
       - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
       - "BinSync.Net/src/BinSync.Core/**"
@@ -15,6 +16,7 @@ on:
   pull_request:
     paths:
       - "external/Fld1.Storage/**"
+      - "eng/verify-fld-storage-vendor.py"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
       - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
       - "BinSync.Net/src/BinSync.Core/**"
