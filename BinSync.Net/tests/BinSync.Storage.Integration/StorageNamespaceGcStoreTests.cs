@@ -685,7 +685,7 @@ public sealed class StorageNamespaceGcStoreTests
     [InlineData("outbound")]
     [InlineData("pending-apply")]
     [InlineData("relay")]
-    public async Task Async_tombstone_gc_fails_closed_before_provider_scan_on_unknown_retained_payload(string source)
+    public async Task Async_tombstone_gc_fails_closed_after_candidate_page_on_unknown_retained_payload(string source)
     {
         string directory = Path.Combine(
             Path.GetTempPath(), "binsync-async-tombstone-gc-unknown-payload-" + source + "-" + Guid.NewGuid().ToString("N"));
@@ -792,8 +792,9 @@ public sealed class StorageNamespaceGcStoreTests
             coordinator.AttachNamespaceGcGuard(gc, trust);
 
             Assert.Equal(0, await coordinator.CompactTombstonesAsync(provider, 16));
-            Assert.Equal(0, provider.ReadCalls);
+            Assert.Equal(1, provider.ReadCalls);
             Assert.Equal(0, provider.CompactCalls);
+            Assert.Null(provider.Approved);
         }
         finally
         {
