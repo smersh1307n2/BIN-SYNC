@@ -54,6 +54,28 @@ public sealed class FldBinSyncGcMaintenanceControlTests
     }
 
     [Fact]
+    public void Stop_invokes_cancellation_callbacks_without_holding_state_lock()
+    {
+        using var control = new FldBinSyncGcMaintenanceControl();
+        control.Start();
+        control.SetEnabled(FldBinSyncGcDomain.ChangeId, true);
+        using var linked = control.TryCreateLinkedTokenSource(FldBinSyncGcDomain.ChangeId);
+        Assert.NotNull(linked);
+
+        bool callbackObservedUnlocked = false;
+        using CancellationTokenRegistration registration = linked!.Token.Register(() =>
+        {
+            Task<bool> stateRead = Task.Run(() => control.IsRunning);
+            callbackObservedUnlocked = stateRead.Wait(TimeSpan.FromSeconds(2));
+        });
+
+        control.Stop();
+
+        Assert.True(callbackObservedUnlocked,
+            "A cancellation callback could not read control state; cancellation ran under the state lock.");
+    }
+
+    [Fact]
     public void Restart_requires_each_domain_to_be_enabled_again()
     {
         using var control = new FldBinSyncGcMaintenanceControl();
