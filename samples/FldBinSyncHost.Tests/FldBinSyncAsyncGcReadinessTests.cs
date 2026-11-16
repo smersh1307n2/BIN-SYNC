@@ -45,6 +45,7 @@ public sealed class FldBinSyncAsyncGcReadinessTests
     [InlineData("Runtime ChangeId GC gate is stopped or this domain is disabled.", FldBinSyncGcBlockerCode.RuntimeGateDisabled)]
     [InlineData("Host reports one or more active immutable provider snapshot pins.", FldBinSyncGcBlockerCode.SnapshotPinsPresent)]
     [InlineData("No authoritative FULL_REPLACE generation/digest is covered by the accepted checkpoint.", FldBinSyncGcBlockerCode.FullReplaceBaselineUnavailable)]
+    [InlineData("Durable GC operator policy coordinator is required but was not configured.", FldBinSyncGcBlockerCode.DurableOperatorPolicyUnavailable)]
     [InlineData("A future blocker message with no registered mapping.", FldBinSyncGcBlockerCode.Unclassified)]
     public void Blocker_messages_expose_stable_codes_without_losing_operator_detail(
         string message, FldBinSyncGcBlockerCode expectedCode)
