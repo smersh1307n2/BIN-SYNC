@@ -4171,3 +4171,12 @@ FLD-DB has recorded the accepted correction in [FLD Tombstone GC Single-Sweep AD
 
 
 The process-isolated handoff is also being changed as part of this correction: do not send a namespace-sized approved-candidate array to FLD. The provider must expose one snapshot-scoped sequential candidate scan; BIN-SYNC applies its existing proof and Metadata-reference checks page by page and streams approved exact identities to a Host-owned temporary spool in bounded IPC batches. The Host seals the sorted spool (count/digest) and consumes it during one FLD sweep after the provider snapshot is released. The spool is disposable scratch, never a recovery journal. This avoids moving the unbounded candidate list from FLD to BIN-SYNC. The current Metadata `TryBuildLiveRecordReferenceSet` HashSet remains a separate memory-cost gate to measure and bound; no end-to-end bounded-memory claim is made until that is addressed.
+
+
+#### 1.177 — Bound Metadata reference scratch to the Tombstone candidate page — 2026-11-16
+
+- [x C] Added `StorageMetadataStore.TryFindLiveRecordReferences`: it scans PendingApply, Relay and Outbound payloads once and retains only RecordIds matching the supplied bounded candidate page. It fails closed on malformed payloads and pending immutable peer reservations.
+- [x C] `AsyncStorageSyncCoordinator.CompactTombstonesAsync` now reads the candidate page first, then performs the page-scoped reference lookup. The previous namespace-wide `HashSet<RecordId>` is no longer materialized on this Tombstone-GC path.
+- [x T] Extended the Metadata conformance regression to verify matching/non-matching page candidates, outbound references, pending reservations and malformed payload fail-closed behavior.
+- [~ CI] Exact commit `c5e0b7b0d216e4e7c83afb3e5340d6dde341985d`: BinSync.Net run [43828239976](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43828239976) is in progress; FLD Storage Integration run [43828239875](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43828239875) has been queued.
+- [!] This removes one namespace-sized transient allocation; it does not make the whole Tombstone sweep bounded yet. Each candidate page still rescans retained Metadata payloads, and the current Host API still returns a candidate array while FLD performs a complete namespace rewrite for each call. The accepted single-sweep + snapshot-scoped streaming + Host approval-spool migration remains the next implementation block. No production GC switch is enabled; Ghost GC remains excluded.
