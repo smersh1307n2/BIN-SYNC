@@ -198,9 +198,22 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
         ulong currentGeneration = current?.Generation ?? 0;
         ulong currentSequence = current?.AuditSequence ?? 0;
         if (current is not null)
-            ValidatePolicy(current);
+        {
+            try
+            {
+                ValidatePolicy(current);
+            }
+            catch
+            {
+                _runtime.Stop();
+                throw;
+            }
+        }
         if (currentGeneration != request.ExpectedGeneration)
-            throw new InvalidOperationException("GC operator policy generation conflict; reload before retrying.");
+        {
+            _runtime.Stop();
+            throw new InvalidOperationException("GC operator policy generation conflict; local maintenance was stopped.");
+        }
         if (currentSequence == ulong.MaxValue)
             throw new InvalidOperationException("GC operator audit sequence is exhausted.");
 
@@ -291,8 +304,6 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
 
             IAsyncDisposable? lease = await _store.TryAcquireMaintenanceLeaseAsync(
                 _binding, policy.Generation, domain, cancellationToken).ConfigureAwait(false);
-            if (lease is null)
-                _runtime.Stop();
             return lease;
         }
         catch
