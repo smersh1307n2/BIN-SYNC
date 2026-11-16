@@ -189,4 +189,8 @@ The Host spool is temporary scratch, not a journal or resume source. It validate
 
 The two-Host regression uses page size 1 with two safe tombstones and verifies that one logical pass reclaims both on each Host, then restarts both Hosts and verifies the complete sweep remains durable.
 
+The FLD provider snapshot no longer constructs a namespace-wide RecordId array or deduplication HashSet. It merges the sorted RecordId slot cursors from immutable Runs with a min-heap whose retained state is proportional to Run count; duplicate RecordIds across Runs are yielded once. The snapshot's existing RecordCount is preserved through a bounded-memory count pass at open, followed by the sequential candidate-page cursor. Exact FLD HEAD `99e8175368dc3b9641c2e3133ac6d04b02ac2a18` passed Ubuntu/Windows/macOS .NET CI (run [43835665775](https://github.com/smersh1307n2/FLD-DB/actions/runs/43835665775)).
+
+Metadata reference checks are page-bounded and do not materialize the namespace-wide live-record HashSet, but each page currently scans retained PendingApply/Relay/Outbound payloads again. This is bounded-memory behavior with potentially repeated CPU work, not yet an end-to-end performance proof.
+
 **Remaining gates:** Metadata reference payloads are currently rescanned once per candidate page, so CPU may grow with page count; overlay snapshot residency and peak managed heap/RSS are not yet measured; no composed 1M Tombstone candidate benchmark has run. Direct Metadata writer-bypass fencing, concrete durable operator policy/audit storage, Windows NTFS power-loss evidence, retention/rollback policy and staged canary remain open. All physical-GC flags remain default-off; Ghost GC remains excluded.
