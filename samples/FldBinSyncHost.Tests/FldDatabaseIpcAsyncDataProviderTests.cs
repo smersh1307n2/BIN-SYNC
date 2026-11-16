@@ -2267,7 +2267,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             }
 
             IReadOnlyList<ProviderMutation> candidatesA =
-                await providerA.ReadTombstoneGcCandidatesAsync(16);
+                await ReadAllTombstoneCandidatesAsync(providerA, 16);
             Assert.Equal(2, candidatesA.Count);
             ProviderMutation candidateA = candidatesA[0];
             Assert.True(gcA.HasProtocolTombstoneGcProof(
@@ -2281,7 +2281,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
             Assert.Single(await providerA.ReadTombstoneGcCandidatesAsync(16));
-            Assert.Single(await providerB.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Single(await ReadAllTombstoneCandidatesAsync(providerB, 16));
 
             // WAL is now sealed on both Hosts. Receipt GC can advance independently
             // from the remaining physical tombstone page. Commit one bounded receipt
@@ -2324,7 +2324,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // Both Hosts were restarted between the bounded Receipt-GC pages above.
             // The remaining physical tombstone page now resumes from those reopened Hosts.
 
-            Assert.Single(await providerA!.ReadTombstoneGcCandidatesAsync(16));
+            Assert.Single(await ReadAllTombstoneCandidatesAsync(providerA!, 16));
             Assert.Single(await providerB!.ReadTombstoneGcCandidatesAsync(16));
             Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
             Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
@@ -3253,6 +3253,35 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             _inner.ReceiveAsync(ct);
 
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
+    private static async Task<IReadOnlyList<ProviderMutation>> ReadAllTombstoneCandidatesAsync(
+        IAsyncProviderTombstoneGc provider, int pageSize)
+    {
+        ProviderSnapshotHandle snapshot =
+            await provider.OpenTombstoneGcCandidateSnapshotAsync();
+        var candidates = new List<ProviderMutation>();
+        try
+        {
+            int cursor = 0;
+            while (true)
+            {
+                ProviderTombstoneGcCandidatePage page =
+                    await provider.ReadTombstoneGcCandidatePageAsync(
+                        snapshot.Token, cursor, pageSize);
+                candidates.AddRange(page.Candidates);
+                if (page.IsComplete)
+                    break;
+                if (page.NextIndex <= cursor)
+                    throw new InvalidDataException("Tombstone candidate snapshot cursor did not advance.");
+                cursor = page.NextIndex;
+            }
+            return candidates;
+        }
+        finally
+        {
+            await provider.ReleaseTombstoneGcCandidateSnapshotAsync(snapshot.Token);
+        }
     }
 
     private static Process StartDatabaseHost(
