@@ -133,14 +133,6 @@ public sealed class AsyncStorageSyncCoordinator
         {
             using IDisposable writerAdmission = await storageMetadata
                 .AcquireGcWriterAdmissionAsync(ct).ConfigureAwait(false);
-            HashSet<RecordId> liveRecordReferences;
-            lock (_metadataGate)
-            {
-                if (!storageMetadata.TryBuildLiveRecordReferenceSet(
-                    scopeId, _node.NodeId, _namespaceId, out liveRecordReferences))
-                    return 0; // Unknown payload or pending immutable peer reservation.
-            }
-
             if (!gcStore.TryReadNamespaceRoster(_namespaceId, trustStore, out NamespaceRosterCertificate? roster) ||
                 roster is null ||
                 !gcStore.TryReadRetentionCheckpoint(roster, trustStore, out NamespaceRetentionCheckpoint? checkpoint) ||
@@ -160,6 +152,20 @@ public sealed class AsyncStorageSyncCoordinator
                 await providerGc.ReadTombstoneGcCandidatesAsync(limit, ct).ConfigureAwait(false);
             if (candidates.Count == 0)
                 return 0;
+
+            // Bound the Metadata reference index to this candidate page. Building a
+            // namespace-wide HashSet<RecordId> here made transient memory grow with
+            // every retained relay/outbound/pending payload, even when the page was tiny.
+            HashSet<RecordId> candidateRecords = candidates
+                .Select(static candidate => candidate.RecordId)
+                .ToHashSet();
+            HashSet<RecordId> liveRecordReferences;
+            lock (_metadataGate)
+            {
+                if (!storageMetadata.TryFindLiveRecordReferences(
+                    scopeId, _node.NodeId, _namespaceId, candidateRecords, out liveRecordReferences))
+                    return 0; // Unknown payload or pending immutable peer reservation.
+            }
 
             var approved = new List<ProviderMutation>(candidates.Count);
             foreach (ProviderMutation candidate in candidates)
