@@ -33,6 +33,13 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     private readonly HashSet<ulong> _snapshotBarriers = new();
     private ulong _highestReadSequence;
     private bool _disposed;
+    private long _tombstoneCandidatePagesRead;
+    private long _tombstoneApprovalBatchesAppended;
+    private long _tombstoneApprovalSpoolCommits;
+
+    public long TombstoneCandidatePagesRead => Interlocked.Read(ref _tombstoneCandidatePagesRead);
+    public long TombstoneApprovalBatchesAppended => Interlocked.Read(ref _tombstoneApprovalBatchesAppended);
+    public long TombstoneApprovalSpoolCommits => Interlocked.Read(ref _tombstoneApprovalSpoolCommits);
 
     private FldDatabaseIpcAsyncDataProvider(
         FldDatabaseIpcClient client,
@@ -422,6 +429,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 
         FldProviderSnapshotMetadataPage page = await _client.ReadSnapshotPageAsync(
             handle, afterIndex, limit, cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _tombstoneCandidatePagesRead);
         var candidates = new List<ProviderMutation>(page.Entries.Count);
         foreach (FldProviderSnapshotEntryMetadata metadata in page.Entries)
         {
@@ -488,6 +496,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 
         await _client.AppendTombstoneGcApprovalSpoolAsync(
             spoolToken, candidates, cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _tombstoneApprovalBatchesAppended);
     }
 
     public ValueTask<(int Count, byte[] Digest)> SealTombstoneGcApprovalSpoolAsync(
@@ -521,8 +530,10 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         // cancellation release Metadata writer admission while that synchronous
         // Host operation is still running.
         cancellationToken.ThrowIfCancellationRequested();
-        return await _client.CommitTombstoneGcApprovalSpoolAsync(
+        int reclaimed = await _client.CommitTombstoneGcApprovalSpoolAsync(
             spoolToken, CancellationToken.None).ConfigureAwait(false);
+        Interlocked.Increment(ref _tombstoneApprovalSpoolCommits);
+        return reclaimed;
     }
 
     public ValueTask AbortTombstoneGcApprovalSpoolAsync(
