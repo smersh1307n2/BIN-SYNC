@@ -2,7 +2,7 @@ name: BinSync.Net
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main"]
     paths:
       - "BinSync.Net/**"
       - "samples/**"
