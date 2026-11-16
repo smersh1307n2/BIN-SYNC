@@ -115,7 +115,7 @@ public sealed class AsyncStorageSyncCoordinator
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(providerGc);
-        if (limit is < 1 or > 4096)
+        if (limit is < 1 or > 256)
             throw new ArgumentOutOfRangeException(nameof(limit));
         if (_metadataStore is not StorageMetadataStore storageMetadata)
             throw new NotSupportedException("Async tombstone GC requires the durable StorageMetadataStore.");
@@ -148,46 +148,118 @@ public sealed class AsyncStorageSyncCoordinator
             if (proofSnapshot is null)
                 return 0;
 
-            IReadOnlyList<ProviderMutation> candidates =
-                await providerGc.ReadTombstoneGcCandidatesAsync(limit, ct).ConfigureAwait(false);
-            if (candidates.Count == 0)
-                return 0;
-
-            // Bound Metadata reference scratch to this candidate page. This scan is
-            // O(retained payloads) in time but O(candidate page) in additional memory;
-            // the snapshot/spool protocol will remove repeated scans across pages.
-            HashSet<RecordId> candidateRecords = candidates
-                .Select(static candidate => candidate.RecordId)
-                .ToHashSet();
-            HashSet<RecordId> liveRecordReferences;
-            lock (_metadataGate)
+            Guid spoolToken = await providerGc.BeginTombstoneGcApprovalSpoolAsync(ct).ConfigureAwait(false);
+            bool spoolCommitted = false;
+            ProviderSnapshotHandle? snapshot = null;
+            try
             {
-                if (!storageMetadata.TryFindLiveRecordReferences(
-                    scopeId, _node.NodeId, _namespaceId, candidateRecords, out liveRecordReferences))
-                    return 0; // Unknown payload or pending immutable peer reservation.
-            }
+                // One immutable provider snapshot spans every candidate page. The
+                // cursor is monotonic; no page reopens at index zero and no approved
+                // namespace-sized list is materialized in BIN-SYNC.
+                snapshot = await providerGc.OpenTombstoneGcCandidateSnapshotAsync(ct).ConfigureAwait(false);
+                int cursor = 0;
+                while (true)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    ProviderTombstoneGcCandidatePage page =
+                        await providerGc.ReadTombstoneGcCandidatePageAsync(
+                            snapshot.Token, cursor, limit, ct).ConfigureAwait(false);
+                    if (page.Candidates.Count > limit)
+                        throw new InvalidDataException("FLD tombstone candidate page exceeded its requested bound.");
 
-            var approved = new List<ProviderMutation>(candidates.Count);
-            foreach (ProviderMutation candidate in candidates)
+                    if (page.Candidates.Count != 0)
+                    {
+                        HashSet<RecordId> candidateRecords = page.Candidates
+                            .Select(static candidate => candidate.RecordId)
+                            .ToHashSet();
+                        HashSet<RecordId> liveRecordReferences;
+                        lock (_metadataGate)
+                        {
+                            if (!storageMetadata.TryFindLiveRecordReferences(
+                                scopeId, _node.NodeId, _namespaceId,
+                                candidateRecords, out liveRecordReferences))
+                                return 0; // Unknown payload or pending immutable peer reservation.
+                        }
+
+                        var approvedPage = new List<ProviderMutation>(page.Candidates.Count);
+                        foreach (ProviderMutation candidate in page.Candidates)
+                        {
+                            if ((!candidate.IsTombstone && !candidate.IsRecordTombstone) ||
+                                candidate.RecordId.IsZero || candidate.ChangeId.IsZero ||
+                                candidate.AuthorNodeId.IsZero || candidate.OriginAuthorEpoch == 0 ||
+                                candidate.OriginSequence == 0 || candidate.HlcWall == 0 ||
+                                liveRecordReferences.Contains(candidate.RecordId))
+                                continue;
+
+                            if (proofSnapshot.HasProof(
+                                candidate.AuthorNodeId, candidate.OriginAuthorEpoch,
+                                candidate.OriginSequence, candidate.HlcWall, candidate.HlcLogical))
+                                approvedPage.Add(candidate);
+                        }
+
+                        if (approvedPage.Count != 0)
+                            await providerGc.AppendTombstoneGcApprovalSpoolAsync(
+                                spoolToken, approvedPage, ct).ConfigureAwait(false);
+                    }
+
+                    if (page.IsComplete)
+                        break;
+                    if (page.NextIndex <= cursor)
+                        throw new InvalidDataException("FLD tombstone candidate snapshot cursor did not advance.");
+                    cursor = page.NextIndex;
+                }
+
+                // The provider snapshot pin must be released before the Host acquires
+                // its global GC lease and opens the final reference snapshot.
+                await providerGc.ReleaseTombstoneGcCandidateSnapshotAsync(
+                    snapshot.Token, CancellationToken.None).ConfigureAwait(false);
+                snapshot = null;
+
+                (int approvedCount, byte[] approvalDigest) =
+                    await providerGc.SealTombstoneGcApprovalSpoolAsync(
+                        spoolToken, ct).ConfigureAwait(false);
+                if (approvalDigest.Length != 32)
+                    throw new InvalidDataException("FLD approval spool returned an invalid SHA-256 digest.");
+                if (approvedCount == 0)
+                {
+                    await providerGc.AbortTombstoneGcApprovalSpoolAsync(
+                        spoolToken, CancellationToken.None).ConfigureAwait(false);
+                    spoolCommitted = true;
+                    return 0;
+                }
+
+                int reclaimed = await providerGc.CommitTombstoneGcApprovalSpoolAsync(
+                    spoolToken, scopeId, _node.NodeId, _namespaceId, ct).ConfigureAwait(false);
+                spoolCommitted = true;
+                return reclaimed;
+            }
+            finally
             {
-                if ((!candidate.IsTombstone && !candidate.IsRecordTombstone) ||
-                    candidate.RecordId.IsZero || candidate.ChangeId.IsZero ||
-                    candidate.AuthorNodeId.IsZero || candidate.OriginAuthorEpoch == 0 ||
-                    candidate.OriginSequence == 0 || candidate.HlcWall == 0 ||
-                    liveRecordReferences.Contains(candidate.RecordId))
-                    continue;
-
-                if (proofSnapshot.HasProof(
-                    candidate.AuthorNodeId, candidate.OriginAuthorEpoch,
-                    candidate.OriginSequence, candidate.HlcWall, candidate.HlcLogical))
-                    approved.Add(candidate);
-                if (approved.Count == limit)
-                    break;
+                if (snapshot is not null)
+                {
+                    try
+                    {
+                        await providerGc.ReleaseTombstoneGcCandidateSnapshotAsync(
+                            snapshot.Token, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // A lost IPC session is cleaned by the Host disconnect path.
+                    }
+                }
+                if (!spoolCommitted)
+                {
+                    try
+                    {
+                        await providerGc.AbortTombstoneGcApprovalSpoolAsync(
+                            spoolToken, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // A lost IPC session is cleaned by the Host disconnect/Host-restart path.
+                    }
+                }
             }
-
-            if (approved.Count == 0)
-                return 0;
-            return await providerGc.CompactTombstonesAsync(approved, limit, ct).ConfigureAwait(false);
         }
         finally
         {
