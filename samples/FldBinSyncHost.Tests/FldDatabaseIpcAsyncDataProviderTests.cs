@@ -831,7 +831,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var stopwatch = Stopwatch.StartNew();
 
             int reclaimed = await adapter.RunTombstoneGcPassAsync(
-                gc, trust, limit: tombstonePageSize).WaitAsync(TimeSpan.FromMinutes(3));
+                gc, trust, limit: 4_096).WaitAsync(TimeSpan.FromMinutes(3));
 
             stopwatch.Stop();
             long allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
@@ -844,9 +844,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             long spoolCommits = provider.TombstoneApprovalSpoolCommits - commitsBefore;
 
             Assert.Equal(candidateCount, reclaimed);
-            Assert.Equal(expectedPages, pagesRead);
-            Assert.Equal(expectedPages, appendBatches);
-            Assert.Equal(1, spoolCommits);
+            Assert.Equal((long)expectedPages, pagesRead);
+            Assert.Equal((long)expectedPages, appendBatches);
+            Assert.Equal(1L, spoolCommits);
             Assert.Empty(await ReadAllTombstoneCandidatesAsync(provider, tombstonePageSize));
 
             string metrics =
