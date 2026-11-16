@@ -212,14 +212,15 @@ public sealed class FldBinSyncGcOperatorPolicyTests
             FldBinSyncGcDomain domain,
             CancellationToken cancellationToken = default)
         {
-            if (ForceConflict || Current is null || Current.Binding != binding ||
-                Current.Generation != expectedGeneration || !Current.MaintenanceStarted)
+            FldBinSyncGcOperatorPolicy? current = Current;
+            if (ForceConflict || current is null || current.Binding != binding ||
+                current.Generation != expectedGeneration || !current.MaintenanceStarted)
                 return ValueTask.FromResult<IAsyncDisposable?>(null);
             bool enabled = domain switch
             {
-                FldBinSyncGcDomain.Receipt => Current.ReceiptEnabled,
-                FldBinSyncGcDomain.ChangeId => Current.ChangeIdEnabled,
-                FldBinSyncGcDomain.Tombstone => Current.TombstoneEnabled,
+                FldBinSyncGcDomain.Receipt => current.ReceiptEnabled,
+                FldBinSyncGcDomain.ChangeId => current.ChangeIdEnabled,
+                FldBinSyncGcDomain.Tombstone => current.TombstoneEnabled,
                 _ => false
             };
             if (!enabled) return ValueTask.FromResult<IAsyncDisposable?>(null);
