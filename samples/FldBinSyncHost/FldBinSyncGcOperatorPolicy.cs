@@ -62,6 +62,17 @@ public interface IFldBinSyncGcOperatorPolicyStore
         FldBinSyncGcOperatorPolicy policy,
         FldBinSyncGcOperatorAuditEntry auditEntry,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Atomically verify current generation and enabled domain, then hold a durable
+    /// per-domain lease until disposed. Policy updates that disable/change the leased
+    /// domain must wait for all such leases to drain.
+    /// </summary>
+    ValueTask<IAsyncDisposable?> TryAcquireMaintenanceLeaseAsync(
+        FldBinSyncGcOperatorPolicyBinding binding,
+        ulong expectedGeneration,
+        FldBinSyncGcDomain domain,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Application-owned authentication/authorization boundary for operator actions.</summary>
@@ -245,6 +256,51 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
             throw;
         }
         return next;
+    }
+
+    /// <summary>
+    /// Acquire a cross-process durable lease for one bounded domain pass. The returned
+    /// lease must be held until the page completes; a null result means policy is
+    /// absent, stale or does not enable this domain.
+    /// </summary>
+    public async ValueTask<IAsyncDisposable?> TryAcquireMaintenanceLeaseAsync(
+        FldBinSyncGcDomain domain,
+        CancellationToken cancellationToken = default)
+    {
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            FldBinSyncGcOperatorPolicy? policy =
+                await _store.ReadAsync(_binding, cancellationToken).ConfigureAwait(false);
+            if (policy is null)
+            {
+                _runtime.Stop();
+                return null;
+            }
+
+            ValidatePolicy(policy);
+            bool enabled = policy.MaintenanceStarted && domain switch
+            {
+                FldBinSyncGcDomain.Receipt => policy.ReceiptEnabled,
+                FldBinSyncGcDomain.ChangeId => policy.ChangeIdEnabled,
+                FldBinSyncGcDomain.Tombstone => policy.TombstoneEnabled,
+                _ => throw new ArgumentOutOfRangeException(nameof(domain))
+            };
+            if (!enabled)
+                return null;
+
+            return await _store.TryAcquireMaintenanceLeaseAsync(
+                _binding, policy.Generation, domain, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            _runtime.Stop();
+            throw;
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
     }
 
     /// <summary>Immediate local emergency brake; deliberately independent of durable audit availability.</summary>
