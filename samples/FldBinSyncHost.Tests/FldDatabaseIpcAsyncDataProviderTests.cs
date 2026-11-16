@@ -38,6 +38,49 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             _host = host;
         }
 
+        public async ValueTask<ProviderSnapshotHandle> OpenTombstoneGcCandidateSnapshotAsync(
+            CancellationToken cancellationToken = default)
+        {
+            ProviderSnapshotHandle snapshot = await ((IAsyncDataProvider)_inner)
+                .OpenSnapshotAsync(cancellationToken);
+            _host.Kill(entireProcessTree: true);
+            await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            throw new IOException("Injected host death with a provider GC snapshot pin open.");
+        }
+
+        public ValueTask<ProviderTombstoneGcCandidatePage> ReadTombstoneGcCandidatePageAsync(
+            Guid snapshotToken, int afterIndex, int limit,
+            CancellationToken cancellationToken = default)
+            => _inner.ReadTombstoneGcCandidatePageAsync(
+                snapshotToken, afterIndex, limit, cancellationToken);
+
+        public ValueTask ReleaseTombstoneGcCandidateSnapshotAsync(
+            Guid snapshotToken, CancellationToken cancellationToken = default)
+            => _inner.ReleaseTombstoneGcCandidateSnapshotAsync(snapshotToken, cancellationToken);
+
+        public ValueTask<Guid> BeginTombstoneGcApprovalSpoolAsync(
+            CancellationToken cancellationToken = default)
+            => _inner.BeginTombstoneGcApprovalSpoolAsync(cancellationToken);
+
+        public ValueTask AppendTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, IReadOnlyList<ProviderMutation> approvedCandidates,
+            CancellationToken cancellationToken = default)
+            => _inner.AppendTombstoneGcApprovalSpoolAsync(spoolToken, approvedCandidates, cancellationToken);
+
+        public ValueTask<(int Count, byte[] Digest)> SealTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, CancellationToken cancellationToken = default)
+            => _inner.SealTombstoneGcApprovalSpoolAsync(spoolToken, cancellationToken);
+
+        public ValueTask<int> CommitTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, string scopeId, NodeId localReplica, int namespaceId,
+            CancellationToken cancellationToken = default)
+            => _inner.CommitTombstoneGcApprovalSpoolAsync(
+                spoolToken, scopeId, localReplica, namespaceId, cancellationToken);
+
+        public ValueTask AbortTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, CancellationToken cancellationToken = default)
+            => _inner.AbortTombstoneGcApprovalSpoolAsync(spoolToken, cancellationToken);
+
         public async ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
             int limit, CancellationToken cancellationToken = default)
         {
@@ -69,6 +112,48 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             _inner = inner;
             _host = host;
         }
+
+        public ValueTask<ProviderSnapshotHandle> OpenTombstoneGcCandidateSnapshotAsync(
+            CancellationToken cancellationToken = default)
+            => _inner.OpenTombstoneGcCandidateSnapshotAsync(cancellationToken);
+
+        public ValueTask<ProviderTombstoneGcCandidatePage> ReadTombstoneGcCandidatePageAsync(
+            Guid snapshotToken, int afterIndex, int limit,
+            CancellationToken cancellationToken = default)
+            => _inner.ReadTombstoneGcCandidatePageAsync(
+                snapshotToken, afterIndex, limit, cancellationToken);
+
+        public ValueTask ReleaseTombstoneGcCandidateSnapshotAsync(
+            Guid snapshotToken, CancellationToken cancellationToken = default)
+            => _inner.ReleaseTombstoneGcCandidateSnapshotAsync(snapshotToken, cancellationToken);
+
+        public ValueTask<Guid> BeginTombstoneGcApprovalSpoolAsync(
+            CancellationToken cancellationToken = default)
+            => _inner.BeginTombstoneGcApprovalSpoolAsync(cancellationToken);
+
+        public ValueTask AppendTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, IReadOnlyList<ProviderMutation> approvedCandidates,
+            CancellationToken cancellationToken = default)
+            => _inner.AppendTombstoneGcApprovalSpoolAsync(spoolToken, approvedCandidates, cancellationToken);
+
+        public ValueTask<(int Count, byte[] Digest)> SealTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, CancellationToken cancellationToken = default)
+            => _inner.SealTombstoneGcApprovalSpoolAsync(spoolToken, cancellationToken);
+
+        public async ValueTask<int> CommitTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, string scopeId, NodeId localReplica, int namespaceId,
+            CancellationToken cancellationToken = default)
+        {
+            int deleted = await _inner.CommitTombstoneGcApprovalSpoolAsync(
+                spoolToken, scopeId, localReplica, namespaceId, cancellationToken);
+            _host.Kill(entireProcessTree: true);
+            await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            throw new IOException($"Injected host death after durable tombstone delete ({deleted}) and before coordinator completion.");
+        }
+
+        public ValueTask AbortTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, CancellationToken cancellationToken = default)
+            => _inner.AbortTombstoneGcApprovalSpoolAsync(spoolToken, cancellationToken);
 
         public ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
             int limit, CancellationToken cancellationToken = default)
