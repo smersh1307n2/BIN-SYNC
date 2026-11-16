@@ -743,13 +743,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             IssuedOriginSequence = (ulong)(candidateCount * 2),
                             MaxIssuedHlcWall = 100,
                             MaxIssuedHlcLogical = 1
-                        },
-                        new IssuedOriginFrontierEntry
-                        {
-                            OriginAuthorEpoch = 12,
-                            IssuedOriginSequence = (ulong)candidateCount,
-                            MaxIssuedHlcWall = 100,
-                            MaxIssuedHlcLogical = 1
                         }
                     ]
                 }, keys[0].Seed), roster);
