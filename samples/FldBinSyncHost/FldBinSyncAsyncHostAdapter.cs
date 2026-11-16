@@ -3,6 +3,32 @@ using BinSync.Storage;
 
 namespace BinSync.FldHost;
 
+/// <summary>Stable machine-readable reason why a physical-GC domain is blocked.</summary>
+public enum FldBinSyncGcBlockerCode
+{
+    Unclassified = 0,
+    NamespaceBindingUnavailable,
+    SignedRosterUnavailable,
+    RetentionCheckpointUnavailable,
+    SignedRetentionStateInvalid,
+    MetadataDiagnosticsUnavailable,
+    HostReferenceScannerUnavailable,
+    HostReferenceScanUnavailable,
+    UnpublishedDraftsPresent,
+    SnapshotPinsPresent,
+    DurableFeatureDisabled,
+    RuntimeGateDisabled,
+    OutstandingPeerReservations,
+    TombstoneProviderCapabilityUnavailable,
+    FullReplaceBaselineUnavailable,
+    FullReplaceBaselineNotInstalled
+}
+
+/// <summary>A stable blocker identifier paired with its operator-readable explanation.</summary>
+public sealed record FldBinSyncGcBlocker(
+    FldBinSyncGcBlockerCode Code,
+    string Message);
+
 /// <summary>Read-only readiness of one independent physical-GC domain.</summary>
 public sealed record FldBinSyncGcDomainReadiness(
     string Domain,
@@ -10,7 +36,47 @@ public sealed record FldBinSyncGcDomainReadiness(
     bool PrerequisitesSatisfied,
     IReadOnlyList<string> BlockedReasons)
 {
+    /// <summary>Stable codes for telemetry and automation; BlockedReasons remains for compatibility.</summary>
+    public IReadOnlyList<FldBinSyncGcBlocker> Blockers =>
+        BlockedReasons.Select(static reason => new FldBinSyncGcBlocker(
+            ClassifyBlocker(reason), reason)).ToArray();
+
     public bool ReadyForAttempt => Enabled && PrerequisitesSatisfied;
+
+    private static FldBinSyncGcBlockerCode ClassifyBlocker(string reason)
+    {
+        if (reason.StartsWith("Exact Metadata/namespace-GC/TrustStore binding is unavailable:", StringComparison.Ordinal))
+            return FldBinSyncGcBlockerCode.NamespaceBindingUnavailable;
+        if (reason == "No accepted, verifiable namespace roster is available.")
+            return FldBinSyncGcBlockerCode.SignedRosterUnavailable;
+        if (reason == "No accepted, verifiable retention checkpoint is available.")
+            return FldBinSyncGcBlockerCode.RetentionCheckpointUnavailable;
+        if (reason.StartsWith("Signed namespace retention state is invalid:", StringComparison.Ordinal))
+            return FldBinSyncGcBlockerCode.SignedRetentionStateInvalid;
+        if (reason.StartsWith("Durable Metadata reservation diagnostics are unavailable:", StringComparison.Ordinal))
+            return FldBinSyncGcBlockerCode.MetadataDiagnosticsUnavailable;
+        if (reason == "Provider does not expose the Host-owned asynchronous GC reference scanner.")
+            return FldBinSyncGcBlockerCode.HostReferenceScannerUnavailable;
+        if (reason.StartsWith("Host reference scan could not be opened:", StringComparison.Ordinal))
+            return FldBinSyncGcBlockerCode.HostReferenceScanUnavailable;
+        if (reason.StartsWith("Host reports an unpublished local draft horizon", StringComparison.Ordinal))
+            return FldBinSyncGcBlockerCode.UnpublishedDraftsPresent;
+        if (reason == "Host reports one or more active immutable provider snapshot pins.")
+            return FldBinSyncGcBlockerCode.SnapshotPinsPresent;
+        if (reason.StartsWith("Durable startup ", StringComparison.Ordinal) && reason.EndsWith(" GC option is disabled.", StringComparison.Ordinal))
+            return FldBinSyncGcBlockerCode.DurableFeatureDisabled;
+        if (reason.StartsWith("Runtime ", StringComparison.Ordinal) && reason.EndsWith(" GC gate is stopped or this domain is disabled.", StringComparison.Ordinal))
+            return FldBinSyncGcBlockerCode.RuntimeGateDisabled;
+        if (reason.StartsWith("Metadata has ", StringComparison.Ordinal) && reason.Contains(" peer reservation(s).", StringComparison.Ordinal))
+            return FldBinSyncGcBlockerCode.OutstandingPeerReservations;
+        if (reason == "Provider does not expose process-isolated tombstone candidate/delete operations.")
+            return FldBinSyncGcBlockerCode.TombstoneProviderCapabilityUnavailable;
+        if (reason == "No authoritative FULL_REPLACE generation/digest is covered by the accepted checkpoint.")
+            return FldBinSyncGcBlockerCode.FullReplaceBaselineUnavailable;
+        if (reason == "At least one Active roster member has not durably installed the exact FULL_REPLACE baseline.")
+            return FldBinSyncGcBlockerCode.FullReplaceBaselineNotInstalled;
+        return FldBinSyncGcBlockerCode.Unclassified;
+    }
 }
 
 /// <summary>
