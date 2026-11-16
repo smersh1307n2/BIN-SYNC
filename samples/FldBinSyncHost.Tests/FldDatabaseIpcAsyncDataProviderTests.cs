@@ -495,7 +495,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Path.GetTempPath(), "fld-binsync-host-tombstone-scale-" + Guid.NewGuid().ToString("N"));
         string nodeRoot = Path.Combine(
             Path.GetTempPath(), "binsync-host-tombstone-scale-" + Guid.NewGuid().ToString("N"));
-        const uint namespaceId = 0x53B;
+        const ushort namespaceId = 0x53B;
         const string scope = "fld-host-tombstone-gc-scale";
         const int seedBatchSize = 256;
         const int remoteBatchSize = 4_096;
