@@ -1,7 +1,7 @@
 {
   "source_repository": "smersh1307n2/FLD-DB",
   "source_branch": "fix/crash-consistency-outbox",
-  "source_commit": "c2da7991ddc6b8380a67a521b7671d6e34427363",
+  "source_commit": "abd6bdc79fad68dcdb9cbff890ac913df905636b",
   "source_path": "src/Fld1.Storage",
   "files": {
     "Engine/StorageBlobStore.cs": "aeb4e73bae4826f598beeb7d65c31f2e82a039ad",
@@ -9,7 +9,7 @@
     "Engine/StorageDirectorySync.cs": "e2954c8fdaf5af89e725de61497d8a2abd47feb1",
     "Engine/StorageFaultPoint.cs": "ad4f8b2e16c40b89d7eba742b540bf47499c3c65",
     "Engine/StorageSnapshotFile.cs": "1f5614304ee9bbf398c3bf9a5b080c62ae953634",
-    "Integrity/StorageChecksums.cs": "9f0a519233fde8d011f0ad4594b2e6dcf5ad5e6a",
+    "Integrity/StorageChecksums.cs": "c8f4f6393131282622c8919d21208570ef75dedd",
     "Ipc/StorageIpcConnection.cs": "24f3df422d035814f4362c040876d1ec80b0021b",
     "Ipc/StorageIpcEndpoint.cs": "daebbb48827afc94b04bd916e305a22ac008a7cf",
     "Ipc/StorageIpcOperationDispatcher.cs": "b4187df60de723b125c84d9eca82b7d4ddead656",
@@ -28,6 +28,6 @@
     "Engine/StoragePageCache.cs": "1c8656a17eb9dbd41b5f16f0000cc5d37949adba",
     "Engine/StorageGenerationPins.cs": "6bba96769869182e5d2e106a190240a7164b98e0",
     "Engine/StorageRandomAccessFile.cs": "4276b4521a6d75e129d5441e83936001fdbe5263",
-    "Engine/StorageBTreePageCodec.cs": "00daab2ec897df13cf9b2b3acdea10574b939293"
+    "Engine/StorageBTreePageCodec.cs": "52136c4ba832b78b1f78042bd6786135ad464576"
   }
 }
