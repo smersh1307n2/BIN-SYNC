@@ -271,11 +271,11 @@ public sealed class FldBinSyncAsyncHostAdapter
             }
         }
 
+        if (_requireDurableOperatorPolicy && _gcPolicyCoordinator is null)
+            common.Add("Durable GC operator policy coordinator is required but was not configured.");
         var receiptReasons = new List<string>(common);
         var changeIdReasons = new List<string>(common);
         var tombstoneReasons = new List<string>(common);
-        if (_requireDurableOperatorPolicy && _gcPolicyCoordinator is null)
-            common.Add("Durable GC operator policy coordinator is required but was not configured.");
         bool receiptRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.Receipt);
         bool changeIdRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.ChangeId);
         bool tombstoneRuntimeEnabled = _gcControl.IsEnabled(FldBinSyncGcDomain.Tombstone);
