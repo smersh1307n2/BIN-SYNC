@@ -65,8 +65,37 @@ public interface IAsyncProviderAuthorEpochClosureStore
 /// disposable snapshot; the final Host operation must revalidate exact candidate
 /// identities and its own reference/pin state atomically before deleting anything.
 /// </summary>
+public sealed record ProviderTombstoneGcCandidatePage(
+    IReadOnlyList<ProviderMutation> Candidates,
+    int NextIndex,
+    bool IsComplete);
+
 public interface IAsyncProviderTombstoneGc
 {
+    ValueTask<ProviderSnapshotHandle> OpenTombstoneGcCandidateSnapshotAsync(
+        CancellationToken cancellationToken = default);
+    ValueTask<ProviderTombstoneGcCandidatePage> ReadTombstoneGcCandidatePageAsync(
+        Guid snapshotToken, int afterIndex, int limit,
+        CancellationToken cancellationToken = default);
+    ValueTask ReleaseTombstoneGcCandidateSnapshotAsync(
+        Guid snapshotToken, CancellationToken cancellationToken = default);
+
+    ValueTask<Guid> BeginTombstoneGcApprovalSpoolAsync(
+        CancellationToken cancellationToken = default);
+    ValueTask AppendTombstoneGcApprovalSpoolAsync(
+        Guid spoolToken, IReadOnlyList<ProviderMutation> approvedCandidates,
+        CancellationToken cancellationToken = default);
+    ValueTask<(int Count, byte[] Digest)> SealTombstoneGcApprovalSpoolAsync(
+        Guid spoolToken, CancellationToken cancellationToken = default);
+    ValueTask<int> CommitTombstoneGcApprovalSpoolAsync(
+        Guid spoolToken, string scopeId, NodeId localReplica, int namespaceId,
+        CancellationToken cancellationToken = default);
+    ValueTask AbortTombstoneGcApprovalSpoolAsync(
+        Guid spoolToken, CancellationToken cancellationToken = default);
+
+    // Transitional entry points remain for existing host test doubles only. The
+    // coordinator no longer uses them; the production FLD provider uses snapshot
+    // paging and the Host-owned approval spool above.
     ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
         int limit, CancellationToken cancellationToken = default);
     ValueTask<int> CompactTombstonesAsync(
