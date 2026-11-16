@@ -15,7 +15,7 @@ MANIFEST = VENDOR / "UPSTREAM-MANIFEST.json"
 
 
 def git_blob_sha1(data: bytes) -> str:
-    header = f"blob {len(data)}\0".encode("ascii")
+    header = f"blob {len(data)}\\0".encode("ascii")
     return hashlib.sha1(header + data).hexdigest()
 
 
@@ -39,7 +39,9 @@ def main() -> int:
     for path in sorted(actual_paths - set(expected)):
         errors.append(f"unexpected: {path}")
     for path in sorted(set(expected) & actual_paths):
-        # Git stores text blobs with LF; Windows checkout may materialize CRLF.\n        data = (VENDOR / path).read_bytes().replace(b"\\r\\n", b"\\n")\n        actual_sha = git_blob_sha1(data)
+        # Git stores text blobs with LF; Windows checkout may materialize CRLF.
+        data = (VENDOR / path).read_bytes().replace(b"\\r\\n", b"\\n")
+        actual_sha = git_blob_sha1(data)
         if actual_sha != expected[path]:
             errors.append(f"modified: {path} (expected {expected[path]}, got {actual_sha})")
 
