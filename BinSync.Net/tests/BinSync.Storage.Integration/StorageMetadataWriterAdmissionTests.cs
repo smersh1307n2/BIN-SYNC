@@ -105,25 +105,22 @@ public sealed class StorageMetadataWriterAdmissionTests
             var trustStore = new TrustStore();
             metadata.AttachNamespaceGcGuard(gcStore, trustStore, scope, local);
 
-            var guardAcquired = new TaskCompletionSource<IReadOnlySet<RecordId>?>(
+            var guardAcquired = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var releaseGuard = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             Task guardOwner = Task.Run(() =>
             {
                 using IDisposable commitGuard = metadata.AcquireTombstoneGcCommitGuard(
-                    scope, local, namespaceId, gcStore, trustStore,
-                    out IReadOnlySet<RecordId>? liveReferences);
-                guardAcquired.SetResult(liveReferences);
+                    scope, local, namespaceId, gcStore, trustStore);
+                guardAcquired.SetResult();
                 releaseGuard.Task.GetAwaiter().GetResult();
             });
 
             Task? writer = null;
             try
             {
-                IReadOnlySet<RecordId>? liveReferences =
-                    await guardAcquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                Assert.NotNull(liveReferences);
+                await guardAcquired.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
                 var writerStarted = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
