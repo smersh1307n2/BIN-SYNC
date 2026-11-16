@@ -591,7 +591,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 for (int i = 0; i < count; i++)
                 {
                     int sequence = start + i + 1;
-                    BatchId changeId = BatchId.From(ScaleId(200_000 + sequence));
+                    BatchId changeId = BatchId.From(ScaleId(300_000 + sequence));
                     var payloadMutation = new ProviderMutation
                     {
                         RecordId = RecordId.From(ScaleId(1_000_000 + sequence)),
@@ -642,55 +642,73 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.NotEmpty(metadata.ReadRelay(
                 scope, local, checked((int)namespaceId), authority, 0, 16).Items);
 
-            // Seed immutable field-tombstone operations through the real FLD remote
-            // APPLY IPC in bounded batches. The signed frontier below covers every
-            // origin identity and the installed FULL_REPLACE floor covers its HLC.
+            // Seed live values and then immutable field tombstones through the real
+            // FLD remote APPLY IPC. This guarantees every candidate is a tombstone of
+            // an existing field, rather than relying on tombstones for absent records.
             byte[] previousRemoteDigest = new byte[16];
-            for (int start = 0; start < candidateCount; start += remoteBatchSize)
+            ulong remoteCursor = 0;
+            int remoteBatchIndex = 0;
+            async Task ApplyRemoteMutationStreamAsync(Func<int, ProviderMutation> createMutation)
             {
-                int count = Math.Min(remoteBatchSize, candidateCount - start);
-                var mutations = new ProviderMutation[count];
-                for (int i = 0; i < count; i++)
+                for (int start = 0; start < candidateCount; start += remoteBatchSize)
                 {
-                    int sequence = start + i + 1;
-                    mutations[i] = new ProviderMutation
-                    {
-                        RecordId = RecordId.From(ScaleId(sequence)),
-                        FieldId = 1,
-                        AuthorNodeId = authority,
-                        KeyEpoch = 0,
-                        Value = Array.Empty<byte>(),
-                        ChangeId = BatchId.From(ScaleId(100_000 + sequence)),
-                        OriginAuthorEpoch = 8,
-                        OriginSequence = (ulong)sequence,
-                        HlcWall = 100,
-                        HlcLogical = 1,
-                        IsTombstone = true
-                    };
-                }
+                    int count = Math.Min(remoteBatchSize, candidateCount - start);
+                    var mutations = new ProviderMutation[count];
+                    for (int i = 0; i < count; i++)
+                        mutations[i] = createMutation(start + i + 1);
 
-                int batchIndex = start / remoteBatchSize;
-                byte[] batchDigest = ScaleId(800_000 + batchIndex);
-                var remoteBatch = new ProviderRemoteBatchCommit(
-                    Guid.NewGuid(),
-                    authority,
-                    senderTransportEpoch: 10,
-                    namespaceId: namespaceId,
-                    authority,
-                    issuerEpoch: 8,
-                    BatchId.From(ScaleId(700_000 + batchIndex)),
-                    cursorStart: (ulong)start + 1,
-                    cursorEnd: (ulong)(start + count),
-                    previousRemoteDigest,
-                    batchDigest,
-                    ScaleId(900_000 + batchIndex),
-                    protocolStateDelta: Array.Empty<byte>(),
-                    mutations);
-                ProviderApplyReceipt applied = await remoteApply.ApplyRemoteBatchAsync(remoteBatch);
-                Assert.Equal(remoteBatch.ApplyToken, applied.ApplyToken);
-                Assert.False(applied.IsDuplicate);
-                previousRemoteDigest = batchDigest;
+                    byte[] batchDigest = ScaleId(800_000 + remoteBatchIndex);
+                    var remoteBatch = new ProviderRemoteBatchCommit(
+                        Guid.NewGuid(),
+                        authority,
+                        senderTransportEpoch: 10,
+                        namespaceId: namespaceId,
+                        authority,
+                        issuerEpoch: 8,
+                        BatchId.From(ScaleId(700_000 + remoteBatchIndex)),
+                        cursorStart: remoteCursor + 1,
+                        cursorEnd: remoteCursor + (ulong)count,
+                        previousRemoteDigest,
+                        batchDigest,
+                        ScaleId(900_000 + remoteBatchIndex),
+                        protocolStateDelta: Array.Empty<byte>(),
+                        mutations);
+                    ProviderApplyReceipt applied = await remoteApply!.ApplyRemoteBatchAsync(remoteBatch);
+                    Assert.Equal(remoteBatch.ApplyToken, applied.ApplyToken);
+                    Assert.False(applied.IsDuplicate);
+                    remoteCursor += (ulong)count;
+                    previousRemoteDigest = batchDigest;
+                    remoteBatchIndex++;
+                }
             }
+
+            await ApplyRemoteMutationStreamAsync(sequence => new ProviderMutation
+            {
+                RecordId = RecordId.From(ScaleId(sequence)),
+                FieldId = 1,
+                AuthorNodeId = authority,
+                KeyEpoch = 0,
+                Value = [0x33],
+                ChangeId = BatchId.From(ScaleId(100_000 + sequence)),
+                OriginAuthorEpoch = 8,
+                OriginSequence = (ulong)sequence,
+                HlcWall = 99,
+                HlcLogical = 1
+            });
+            await ApplyRemoteMutationStreamAsync(sequence => new ProviderMutation
+            {
+                RecordId = RecordId.From(ScaleId(sequence)),
+                FieldId = 1,
+                AuthorNodeId = authority,
+                KeyEpoch = 0,
+                Value = Array.Empty<byte>(),
+                ChangeId = BatchId.From(ScaleId(200_000 + sequence)),
+                OriginAuthorEpoch = 8,
+                OriginSequence = (ulong)(candidateCount + sequence),
+                HlcWall = 100,
+                HlcLogical = 1,
+                IsTombstone = true
+            });
 
             var authorityReport = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
                 new AppliedOriginFrontierReport
@@ -707,7 +725,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
-                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
                         }
                     ],
                     IssuedOrigins =
@@ -715,7 +733,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         new IssuedOriginFrontierEntry
                         {
                             OriginAuthorEpoch = 8,
-                            IssuedOriginSequence = (ulong)candidateCount,
+                            IssuedOriginSequence = (ulong)(candidateCount * 2),
                             MaxIssuedHlcWall = 100,
                             MaxIssuedHlcLogical = 1
                         }
