@@ -4095,3 +4095,14 @@ cover default-stop, independent domain enables, in-flight cancellation, emergenc
 stop and restart fail-closed behavior. README operator instructions are updated
 in commit `0904519`. CI is pending. This is a safety control, not authorization
 to enable physical GC in production. Ghost GC remains excluded.
+
+
+#### 1.173 — Emergency-stop race closure and next operator-control milestone — 2026-11-16
+
+- [x T/CI] Exact BIN-SYNC HEAD `fd434bc12338c1f800a38eba11bb6f1199f71965` passed BinSync.Net run [43779869510](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43779869510): Linux and Windows .NET tests, v3.1 signed control-plane golden vectors, fuzz/lab, and FLD Host adapter builds on Ubuntu and Windows all succeeded.
+- [x T/CI] The same exact HEAD passed durable FLD Storage Integration run [43779869509](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43779869509) on Ubuntu, Windows and macOS 15.
+- [x C/T] Runtime emergency-stop cancellation now rotates the cancellation generation before invoking callbacks outside the control lock. Regression coverage verifies callback re-entry and a concurrent explicit restart while callbacks from the stopped generation are still executing; the new generation remains live and independently gated.
+- [!] This proves the process-local emergency brake and exact-head CI only. It is not a durable operator policy, authenticated audit trail, or production authorization. The in-process control remains fail-closed after restart; startup feature options remain a separate immutable gate.
+- [ ] Next implementation block: add a durable, authenticated per-namespace operator policy/audit contract. Persist intent before opening Start/domain-enable gates; make emergency Stop fail-safe even if audit persistence is unavailable; bind every record to namespace, scope, local replica, policy generation, actor, action, affected domains, reason and monotonic sequence. Reject stale/replayed policy generations and fail closed on missing/corrupt policy. Keep process-local Stop as an unconditional local brake that never depends on remote policy availability.
+- [ ] In parallel, replace free-form-only readiness diagnostics with stable machine-readable blocker codes while retaining human-readable details. Export one immutable per-domain readiness snapshot and bounded-pass result suitable for application logging/metrics; never include secret material or treat telemetry as candidate authorization.
+- [ ] Add restart/replay, audit-store unavailable/corrupt, concurrent operator update, per-domain independence and emergency-stop-under-audit-failure tests. Document operator identity/authentication responsibility, retention, backup/restore, rollback and staged canary. Do not enable any physical-GC flag; Ghost GC remains excluded. Windows NTFS power-loss evidence remains an independent release gate.
