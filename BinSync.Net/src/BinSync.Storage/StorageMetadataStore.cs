@@ -1424,7 +1424,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             ThrowIfDisposed();
             ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
             var candidateSet = candidates as HashSet<RecordId> ?? new HashSet<RecordId>(candidates);
-            liveRecords = new HashSet<RecordId>();
+            var referencedCandidates = new HashSet<RecordId>();
+            liveRecords = referencedCandidates;
             if (candidateSet.Count == 0 ||
                 !TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
                 return true;
@@ -1439,7 +1440,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 {
                     RecordId recordId = ProviderMutationCodec.Decode(payload).RecordId;
                     if (candidateSet.Contains(recordId))
-                        liveRecords.Add(recordId);
+                        referencedCandidates.Add(recordId);
                     return true;
                 }
                 catch (Exception exception) when (exception is InvalidDataException or
