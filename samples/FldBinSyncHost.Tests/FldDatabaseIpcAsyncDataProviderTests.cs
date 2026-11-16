@@ -745,7 +745,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     RosterGeneration = 1,
                     RosterDigest = NamespaceRosterProtocol.ComputeDigest(roster),
                     MemberNodeId = relayPeer,
-                    MemberTransportPeerEpoch = 12,
+                    MemberTransportEpoch = 12,
                     ReportSequence = 1,
                     Entries =
                     [
@@ -3604,6 +3604,37 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             _inner.ReceiveAsync(ct);
 
         public ValueTask DisposeAsync() => _inner.DisposeAsync();
+    }
+
+    private static async Task<(int CandidateCount, int Pages)> CountTombstoneCandidatesAndPagesAsync(
+        IAsyncProviderTombstoneGc provider, int pageSize)
+    {
+        ProviderSnapshotHandle snapshot =
+            await provider.OpenTombstoneGcCandidateSnapshotAsync();
+        int candidateCount = 0;
+        int pages = 0;
+        try
+        {
+            int cursor = 0;
+            while (true)
+            {
+                ProviderTombstoneGcCandidatePage page =
+                    await provider.ReadTombstoneGcCandidatePageAsync(
+                        snapshot.Token, cursor, pageSize);
+                candidateCount = checked(candidateCount + page.Candidates.Count);
+                pages++;
+                if (page.IsComplete)
+                    break;
+                if (page.NextIndex <= cursor)
+                    throw new InvalidDataException("Tombstone candidate snapshot cursor did not advance.");
+                cursor = page.NextIndex;
+            }
+            return (candidateCount, pages);
+        }
+        finally
+        {
+            await provider.ReleaseTombstoneGcCandidateSnapshotAsync(snapshot.Token);
+        }
     }
 
     private static async Task<IReadOnlyList<ProviderMutation>> ReadAllTombstoneCandidatesAsync(
