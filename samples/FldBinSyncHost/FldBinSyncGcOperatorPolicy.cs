@@ -279,18 +279,21 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
             }
 
             ValidatePolicy(policy);
-            bool enabled = policy.MaintenanceStarted && domain switch
+            bool enabled = policy.MaintenanceStarted && (domain switch
             {
                 FldBinSyncGcDomain.Receipt => policy.ReceiptEnabled,
                 FldBinSyncGcDomain.ChangeId => policy.ChangeIdEnabled,
                 FldBinSyncGcDomain.Tombstone => policy.TombstoneEnabled,
                 _ => throw new ArgumentOutOfRangeException(nameof(domain))
-            };
+            });
             if (!enabled)
                 return null;
 
-            return await _store.TryAcquireMaintenanceLeaseAsync(
+            IAsyncDisposable? lease = await _store.TryAcquireMaintenanceLeaseAsync(
                 _binding, policy.Generation, domain, cancellationToken).ConfigureAwait(false);
+            if (lease is null)
+                _runtime.Stop();
+            return lease;
         }
         catch
         {
