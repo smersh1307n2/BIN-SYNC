@@ -515,8 +515,11 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             return 0;
         }
 
+        // Once the Host-wide GC lease and final reference snapshot are active,
+        // do not let caller cancellation release the Metadata writer-admission lease
+        // while the synchronous Host Manifest publication is still running.
         return await _client.CommitTombstoneGcApprovalSpoolAsync(
-            spoolToken, cancellationToken).ConfigureAwait(false);
+            spoolToken, CancellationToken.None).ConfigureAwait(false);
     }
 
     public ValueTask AbortTombstoneGcApprovalSpoolAsync(
