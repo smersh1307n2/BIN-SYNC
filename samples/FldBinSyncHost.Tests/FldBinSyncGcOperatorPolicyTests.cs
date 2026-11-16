@@ -99,11 +99,33 @@ public sealed class FldBinSyncGcOperatorPolicyTests
         Assert.Empty(store.Audit);
     }
 
+
+    [Fact]
+    public async Task Cross_process_generation_conflict_stops_stale_local_runtime()
+    {
+        var store = new TestPolicyStore();
+        using var runtime = new FldBinSyncGcMaintenanceControl();
+        var coordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+            Binding(), store, new AllowAllAuthorizer(), runtime);
+        await coordinator.UpdateAsync(new(Binding(), 0, "operator-1", "enable receipt",
+            true, true, false, false));
+        store.ForceConflict = true;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await coordinator.UpdateAsync(new(Binding(), 1, "operator-1", "change domains",
+                true, false, true, false)));
+
+        Assert.False(runtime.IsRunning);
+        Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.Receipt));
+        Assert.Empty(store.Audit.Skip(1));
+    }
+
     private sealed class TestPolicyStore : IFldBinSyncGcOperatorPolicyStore
     {
         public FldBinSyncGcOperatorPolicy? Current { get; private set; }
         public List<FldBinSyncGcOperatorAuditEntry> Audit { get; } = new();
         public bool ThrowOnRead { get; set; }
+        public bool ForceConflict { get; set; }
 
         public ValueTask<FldBinSyncGcOperatorPolicy?> ReadAsync(
             FldBinSyncGcOperatorPolicyBinding binding,
@@ -119,7 +141,7 @@ public sealed class FldBinSyncGcOperatorPolicyTests
             FldBinSyncGcOperatorAuditEntry auditEntry,
             CancellationToken cancellationToken = default)
         {
-            if ((Current?.Generation ?? 0) != expectedGeneration)
+            if (ForceConflict || (Current?.Generation ?? 0) != expectedGeneration)
                 return ValueTask.FromResult(false);
             Assert.Equal(policy.Generation, auditEntry.PolicyGeneration);
             Assert.Equal(policy.AuditSequence, auditEntry.Sequence);
