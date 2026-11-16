@@ -660,8 +660,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     byte[] batchDigest = ScaleId(800_000 + remoteBatchIndex);
                     var remoteBatch = new ProviderRemoteBatchCommit(
                         Guid.NewGuid(),
-                        authority,
-                        senderTransportEpoch: 10,
+                        relayPeer,
+                        senderTransportEpoch: 12,
                         namespaceId: namespaceId,
                         authority,
                         issuerEpoch: 8,
