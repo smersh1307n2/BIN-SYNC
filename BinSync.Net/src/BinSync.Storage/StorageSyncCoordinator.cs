@@ -22,6 +22,7 @@ public sealed class TombstoneGcCommitLease : IDisposable
     private readonly string _scopeId;
     private readonly NodeId _localReplica;
     private readonly int _namespaceId;
+    private readonly int _ownerThreadId;
 
     internal TombstoneGcCommitLease(
         IDisposable inner, StorageMetadataStore metadataStore,
@@ -32,15 +33,19 @@ public sealed class TombstoneGcCommitLease : IDisposable
         _scopeId = scopeId;
         _localReplica = localReplica;
         _namespaceId = namespaceId;
+        _ownerThreadId = Environment.CurrentManagedThreadId;
     }
 
     /// <summary>
     /// Exact fail-closed lookup while the lease holds the Metadata writer and transaction
     /// gates. This deliberately trades repeated payload scans for bounded memory.
+    /// The lookup must run on the acquiring thread because the lease owns Monitor gates.
     /// </summary>
     public bool HasLiveRecordReference(RecordId recordId)
     {
         ObjectDisposedException.ThrowIf(_inner is null, this);
+        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+            throw new InvalidOperationException("Tombstone-GC reference lookups must run on the lease-acquiring thread.");
         return _metadataStore.HasLiveRecordReference(
             _scopeId, _localReplica, _namespaceId, recordId);
     }
