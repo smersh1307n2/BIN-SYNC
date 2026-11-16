@@ -270,7 +270,23 @@ jobs:
           dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
-            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=fld-host-integration.trx" \
+            --results-directory "$RUNNER_TEMP/fld-host-integration-test-results" \
+            --blame-hang-timeout 5m \
+            --blame-hang-dump-type mini
+
+      - name: Upload Host adapter test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fld-host-integration-diagnostics-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/fld-host-integration-test-results
+            ${{ runner.temp }}/composed-host-metadata-gc-scale-${{ matrix.os }}*.md
+          retention-days: 14
+          if-no-files-found: ignore
       - name: Persist composed Host GC scale measurements
         if: always()
         shell: bash
