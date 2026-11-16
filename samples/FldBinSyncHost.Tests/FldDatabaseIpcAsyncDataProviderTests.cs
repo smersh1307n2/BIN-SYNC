@@ -755,7 +755,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
-                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
+                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 3)
                         }
                     ]
                 }, keys[2].Seed), roster);
@@ -774,7 +774,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
-                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
+                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 3)
                         }
                     ],
                 }, keys[1].Seed), roster);
