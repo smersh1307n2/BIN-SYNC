@@ -1364,48 +1364,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// retained payloads fail closed. A pending immutable peer reservation blocks
     /// conservatively because it may retain a payload copy no longer in the live page.
     /// </summary>
-    internal bool TryBuildLiveRecordReferenceSet(
-        string scopeId, NodeId localReplica, int namespaceId,
-        out HashSet<RecordId> liveRecords)
-    {
-        lock (_gate)
-        {
-            ThrowIfDisposed();
-            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
-            liveRecords = new HashSet<RecordId>();
-            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
-                return true;
-
-            if (state.PeerStreams.Any(pair =>
-                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
-                return false;
-
-            foreach (PendingApplyValue pending in state.PendingApplies.Values)
-            {
-                if (pending.Batch.NamespaceId != namespaceId)
-                    continue;
-                foreach (MetadataOperation operation in pending.Batch.Operations)
-                    if (!TryAddPayloadRecordReference(operation.Payload, liveRecords))
-                        return false;
-            }
-            foreach (var stream in state.Relay)
-            {
-                if (stream.Key.NamespaceId != namespaceId) continue;
-                foreach (var item in stream.Value)
-                    if (!TryAddPayloadRecordReference(item.Payload, liveRecords))
-                        return false;
-            }
-            foreach (var stream in state.Outbound)
-            {
-                if (stream.Key.NamespaceId != namespaceId) continue;
-                foreach (var item in stream.Value)
-                    if (!TryAddPayloadRecordReference(item.Payload, liveRecords))
-                        return false;
-            }
-            return true;
-        }
-    }
-
     /// <summary>
     /// Find only references to a bounded candidate page. Unlike
     /// TryBuildLiveRecordReferenceSet this does not materialize every referenced
@@ -1509,20 +1467,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
             return new MetadataGcReservationDiagnostics(
                 pendingApplies, outstandingPeerReservations, relayPayloads, outboundPayloads);
-        }
-    }
-
-    private static bool TryAddPayloadRecordReference(byte[] payload, HashSet<RecordId> records)
-    {
-        try
-        {
-            records.Add(ProviderMutationCodec.Decode(payload).RecordId);
-            return true;
-        }
-        catch (Exception exception) when (exception is InvalidDataException or
-            ArgumentException or EndOfStreamException or IndexOutOfRangeException)
-        {
-            return false;
         }
     }
 
@@ -1675,8 +1619,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// </summary>
     public IDisposable AcquireTombstoneGcCommitGuard(
         string scopeId, NodeId localReplica, int namespaceId,
-        StorageNamespaceGcStore gcStore, TrustStore trustStore,
-        out IReadOnlySet<RecordId>? liveRecordReferences)
+        StorageNamespaceGcStore gcStore, TrustStore trustStore)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero)
@@ -1699,10 +1642,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 throw new InvalidOperationException(
                     "Tombstone GC namespace state is not bound to the exact Metadata Store scope and local replica.");
 
-            liveRecordReferences = TryBuildLiveRecordReferenceSet(
-                scopeId, localReplica, namespaceId, out HashSet<RecordId> liveRecords)
-                ? liveRecords
-                : null;
+            // Exact candidate lookups are performed under this held transaction and
+            // writer-admission lease. Do not materialize every live RecordId in the
+            // namespace merely to authorize a bounded/streamed Tombstone sweep.
             return new FullReplaceCommitLease(_gate, writerAdmission);
         }
         catch
