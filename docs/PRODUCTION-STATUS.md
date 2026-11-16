@@ -237,3 +237,12 @@
 - Roadmap §1.28 records this C-pass. Exact-head builds, fault-injection and conformance tests were intentionally not run during this code-first pass. Previous red CI evidence remains red and does not validate the new source.
 - Additional C-pass hardening: FLD legacy Run mirror publication now fails closed on Unix directory fsync errors, and durable provider snapshot generation creation/overlay/manifest publication/release/prune flush directory entries through `StorageDirectorySync`. This protects the v3.1 sender restart token and Run pins. Windows directory-entry durability remains unclaimed.
 
+
+## 2026-11-16 — GC runtime emergency-stop hardening
+
+- Exact-head CI is green for `45adca6e0658b96f7bc9c85b263d8e8b47833d79`: BinSync.Net run `43777803511` and FLD Storage Integration run `43777803495` succeeded.
+- Exact-head CI is green for `1c8a23440a04f52276e02240ef5354c8385d1268`: BinSync.Net runs `43777814895` and `43777810225`, plus FLD Storage Integration run `43777814868`, succeeded.
+- `FldBinSyncGcMaintenanceControl.Stop/Dispose` now rotate/close the active cancellation generation under the state lock but invoke cancellation callbacks only after releasing it. This avoids executing arbitrary callback code while holding the control's synchronization lock; concurrent restart receives a distinct token generation.
+- Added a regression that registers a cancellation callback which reads `IsRunning` on another task and asserts it can complete while Stop is cancelling. The test and all existing runtime-control tests pass in the exact-head workflows above.
+- Reconciled the host operator procedure: durable startup flags remain independent from the process-local emergency brake; documentation no longer claims the brake is absent and fixes the Tombstone enable-call example.
+- This closes a runtime-locking/documentation issue only. It does not provide durable authenticated operator policy, audit history, telemetry, staged canary, Windows NTFS power-loss proof, or deployment-scale retention evidence. Physical GC remains disabled; no production deletion is authorized by these test results.
