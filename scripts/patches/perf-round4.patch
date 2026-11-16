@@ -1,0 +1,94 @@
+--- a/BinSync.Net/src/BinSync.Core/Ops.cs
++++ b/BinSync.Net/src/BinSync.Core/Ops.cs
+@@ -200,30 +200,32 @@ private static bool FieldWriteConsumesExact(byte[] data, int pos, bool full)
+     {
++        // Zero-alloc framing probe (no Reader/Take) — runs on every FieldWrite decode.
+         try
+         {
+-            var r = new Reader(data, pos);
++            int p = pos;
++            int rem = data.Length - p;
+             if (full)
+             {
+-                if (r.Remaining < 16) return false;
+-                r.B128();
++                if (rem < 16) return false;
++                p += 16;
+             }
+             else
+             {
+-                if (r.Remaining < 2) return false;
+-                r.U16();
++                if (rem < 2) return false;
++                p += 2;
+             }
+-            int len = checked((int)r.Varint());
+-            if (len < 0 || r.Remaining < len) return false;
+-            if (len > 0) r.Raw(len);
+-            return r.Eof();
++            var (ulen, p2) = Codec.DecodeVarint(data, p);
++            p = p2;
++            if (ulen > (ulong)int.MaxValue) return false;
++            int len = (int)ulen;
++            if (len < 0 || data.Length - p < len) return false;
++            p += len;
++            return p == data.Length;
+         }
+         catch
+         {
+             return false;
+         }
+     }
+
+--- a/BinSync.Net/src/BinSync.Core/Digests.cs
++++ b/BinSync.Net/src/BinSync.Core/Digests.cs
+@@ -28,10 +28,12 @@ public static class Digests
+     public static byte[] Blake3(byte[] data, int len = 32)
+     {
+-        var full = Blake3Core.Hash256(data);
+-        if (len >= full.Length) return full;
++        Span<byte> full = stackalloc byte[32];
++        Blake3Core.Hash256(data, full);
++        if (len >= 32) return full.ToArray();
+         var r = new byte[len];
+-        Array.Copy(full, r, len);
++        full[..len].CopyTo(r);
+         return r;
+     }
+
+@@ -66,7 +68,8 @@ public static byte[] RecordDigest(Record rec)
+         var parts = new List<byte[]>();
+         var allFields = new List<(ushort, FieldState)>(rec.State.Select(kv => (kv.Key, kv.Value)));
+-        foreach (var t in rec.FieldTombs) allFields.Add((t.Key, t.Value));
++        if (rec.HasFieldTombs)
++            foreach (var t in rec.FieldTombs) allFields.Add((t.Key, t.Value));
+
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -1568,12 +1568,16 @@ internal static Record Clone(Record rec)
+     {
+-        var r = new Record(rec.RecordId, rec.NamespaceId)
++        var r = new Record(rec.RecordId, rec.NamespaceId, rec.State.Count)
+         {
+-            State = new(rec.State),
++            State = new Dictionary<ushort, FieldState>(rec.State),
+             LifecycleHlc = rec.LifecycleHlc,
+             LifecycleAuthor = rec.LifecycleAuthor,
+             LifecycleValue = rec.LifecycleValue,
+-            FieldTombs = new(rec.FieldTombs),
+         };
++        // Preserve laziness: only copy tombs when present.
++        if (rec.HasFieldTombs)
++            r.FieldTombs = new Dictionary<ushort, FieldState>(rec.FieldTombs);
+         return r;
+     }
+
+@@ -1620,7 +1624,8 @@ public static byte[] ComputeBatchDigest(byte[] batchId, int namespaceId, byte[] i
+         int issuerEpoch, long cursorStart, long cursorEnd, byte[] recordsRoot, byte[] prevBatchDigest)
+     {
+-        var w = new Writer();
++        // Fixed upper bound: domain + 4×b128 + u16 + u32 + 2×u64 ≈ 120 bytes.
++        var w = new Writer(Domains.DomainBatch.Length + 128);
+         w.Raw(Domains.DomainBatch).B128(batchId).U16((ushort)namespaceId).B128(issuerNode);
+         w.U32((uint)issuerEpoch).U64((ulong)cursorStart).U64((ulong)cursorEnd);
+         w.B128(recordsRoot).B128(prevBatchDigest);

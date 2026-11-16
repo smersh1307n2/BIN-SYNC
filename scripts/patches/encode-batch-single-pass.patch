@@ -1,0 +1,57 @@
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -1097,16 +1097,22 @@ internal void AdvanceStreamInternal(byte[] targetPeer, int namespaceId, Batch ba
+ 
+ internal byte[] EncodeBatchPayloadInternal(Batch batch)
+     {
+-        var records = batch.EncodeRecords();
+-        var w = new Writer();
++        // Single-pass encode: no intermediate records[] buffer.
++        // Capacity ≈ fixed header (~100B) + per-entry (16+1+varint+payload).
++        int est = 128;
++        var entries = batch.Entries;
++        for (int i = 0; i < entries.Count; i++)
++            est += 24 + entries[i].Payload.Length;
++
++        var w = new Writer(est);
+         w.U16((ushort)batch.NamespaceId).U16((ushort)batch.SchemaId).U16((ushort)batch.SchemaVersion);
+         w.U8((byte)batch.MergePolicy).U8((byte)batch.Flags);
+         w.B128(batch.IssuerNodeId).U32((uint)batch.IssuerEpoch);
+         w.U64((ulong)batch.CursorStart).U64((ulong)batch.CursorEnd);
+-        w.Varint((ulong)batch.Entries.Count);
++        w.Varint((ulong)entries.Count);
+         w.B128(batch.BatchId).B128(batch.PrevBatchDigest);
+         w.B128(batch.RecordsRoot).B128(batch.BatchDigest);
+-        w.Raw(records);
++        WriteRecordsArray(w, entries);
+         return w.Value();
+     }
+ 
+@@ -1551,12 +1557,24 @@ internal int OutboxSizeInternal(int namespaceId)
+ 
+     /// Canonical records array: count varint, then per entry:
+     /// recordId b128 | opKind u8 | payloadLen varint | payload.
+-    public static byte[] EncodeRecordsArray(List<OutboxEntry> entries)
++    /// <summary>Write canonical records array into an existing Writer (no intermediate buffer).</summary>
++    public static void WriteRecordsArray(Writer w, List<OutboxEntry> entries)
+     {
+-        var w = new Writer();
+         w.Varint((ulong)entries.Count);
+-        foreach (var e in entries)
++        for (int i = 0; i < entries.Count; i++)
++        {
++            var e = entries[i];
+             w.B128(e.RecordId).U8(e.OpKind).Varint((ulong)e.Payload.Length).Raw(e.Payload);
++        }
++    }
++
++    public static byte[] EncodeRecordsArray(List<OutboxEntry> entries)
++    {
++        int est = 8;
++        for (int i = 0; i < entries.Count; i++)
++            est += 24 + entries[i].Payload.Length;
++        var w = new Writer(est);
++        WriteRecordsArray(w, entries);
+         return w.Value();
+     }
+ 

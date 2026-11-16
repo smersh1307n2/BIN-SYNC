@@ -1,0 +1,111 @@
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -1234,23 +1234,38 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
+             throw new SyncException("BATCH_TRANSACTION_FAILED", batch.BatchId);
+         // STEP 4: atomic application [T1] — all-or-nothing on a copy-on-write staging
+         var nsStore = Ns(batch.NamespaceId);
+-        var staged = new Dictionary<byte[], Record>(BA.Instance);
++        // Capacity hint: existing records + incoming entries (cold path ≈ entry count).
++        var staged = new Dictionary<byte[], Record>(
++            Math.Max(4, nsStore.Count + batch.Entries.Count), BA.Instance);
+         foreach (var (rid, rec) in nsStore) staged[rid] = Clone(rec);
+         int applied = 0;
+-        var changedIdx = new List<int>();   // indices of entries that actually changed state
+-        for (int idx = 0; idx < batch.Entries.Count; idx++)
++        int nEnt = batch.Entries.Count;
++        // Decode once — reused by apply loop and relay (avoids 2× DecodeOp per entry).
++        var decodedOps = new object[nEnt];
++        var changedFlags = new bool[nEnt];
++        var changedIdx = new List<int>(nEnt);
++        long nowWall = Clock.Now();
++        long skewLimit = nowWall + Clock.MaxSkewUs;
++        for (int idx = 0; idx < nEnt; idx++)
+         {
+             var e = batch.Entries[idx];
+             var op = Ops.DecodeOp(e.Payload).Op;
++            decodedOps[idx] = op;
+             var opAuthor = ResolveAuthor(op);   // [А2]; unknown → raise
+             // clock skew clamp on incoming HLC wall (§5.3)
+-            long now = Clock.Now();
+-            if ((long)WallOf(op) > now + Clock.MaxSkewUs)
++            if ((long)WallOf(op) > skewLimit)
+                 throw new SyncException("CLOCK_DRIFT", batch.BatchId);
+             byte[] recId = op is OpRecordTombstone rt ? rt.RecordId : e.RecordId;
+-            if (!staged.TryGetValue(recId, out var rec)) staged[recId] = rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
+-            bool changed = ApplyOp(rec, op, opAuthor);
+-            if (changed) { applied++; changedIdx.Add(idx); }
++            if (!staged.TryGetValue(recId, out var rec))
++                staged[recId] = rec = new Record(e.RecordId, (ushort)batch.NamespaceId);
++            // ApplyOpInternal: already under _gate (re-entrant public ApplyOp would re-enter lock).
++            bool changed = ApplyOpInternal(rec, op, opAuthor);
++            if (changed)
++            {
++                applied++;
++                changedFlags[idx] = true;
++                changedIdx.Add(idx);
++            }
+         }
+         // commit atomically (rollback path: exceptions above leave storage untouched [Т1])
+         Storage[batch.NamespaceId] = staged;
+@@ -1272,17 +1287,16 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
+         // provenance-based relay eligibility — FULL rationale in the Python port).
+         if (!batch.IssuerNodeId.AsSpan().SequenceEqual(NodeId))
+         {
+-            var batchOps = batch.Ops();
+-            for (int idx = 0; idx < batch.Entries.Count; idx++)
++            for (int idx = 0; idx < nEnt; idx++)
+             {
+                 var e = batch.Entries[idx];
+                 byte[] cid = e.ChangeId.AsSpan().SequenceEqual(Zero128) ? Guid.NewGuid().ToByteArray() : e.ChangeId;
+                 var ck = (senderPeer, batch.NamespaceId, cid);
+                 bool known = SeenChanges.Contains(ck);
+                 SeenChanges.Add(ck);
+-                if (!known && !changedIdx.Contains(idx))
++                if (!known && !changedFlags[idx])
+                 {
+                     bool relayOk = true;
+-                    var rop = batchOps[idx];
++                    var rop = decodedOps[idx];
+                     ushort? rfid = rop switch { OpFieldWrite x => x.FieldId, OpFieldTomb x => x.FieldId, _ => (ushort?)null };
+                     if (rfid is not null)
+                     {
+@@ -1293,13 +1307,17 @@ internal BatchResult ApplyBatchInternal(Batch batch, byte[] senderPeer)
+                             OwnQueueHolds(batch.NamespaceId, e.RecordId, rop))
+                             relayOk = false;   // own durable state echoed back [E2]/[Ш2]
+                     }
+-                    if (relayOk) changedIdx.Add(idx);     // new provenance ⇒ relay even as loser
++                    if (relayOk)
++                    {
++                        changedFlags[idx] = true;
++                        changedIdx.Add(idx);     // new provenance ⇒ relay even as loser
++                    }
+                 }
+             }
+             foreach (var idx in changedIdx)
+             {
+                 var e = batch.Entries[idx];
+-                var op = batchOps[idx];
++                var op = decodedOps[idx];
+                 if (GetAuthor(op) is not null) continue;   // full-author mode keeps durable author
+                 var resolved = ResolveAuthor(op);
+                 // BUGFIX (scenario 23): the relay keeps the op payload VERBATIM (§13.5 [Р1]/[И4]).
+@@ -1587,8 +1605,17 @@ internal int OutboxSizeInternal(int namespaceId)
+     }
+ 
+     /// recordsRoot = BLAKE3-128 over the canonical records array.
+-    public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries) =>
+-        Digests.Blake3(Domains.Cat(Domains.DomainRecords, EncodeRecordsArray(entries)), 16);
++    public static byte[] ComputeRecordsRoot(List<OutboxEntry> entries)
++    {
++        // Single buffer: domain tag + records (no Domains.Cat intermediate).
++        int est = Domains.DomainRecords.Length + 8;
++        for (int i = 0; i < entries.Count; i++)
++            est += 24 + entries[i].Payload.Length;
++        var w = new Writer(est);
++        w.Raw(Domains.DomainRecords);
++        WriteRecordsArray(w, entries);
++        return Digests.Blake3(w.Value(), 16);
++    }
+ }
+ 
+ public sealed class BatchResult

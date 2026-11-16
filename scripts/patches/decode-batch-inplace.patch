@@ -1,0 +1,42 @@
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -1118,20 +1118,24 @@ internal Batch DecodeBatchPayloadInternal(byte[] data)
+         byte[] batchId = r.B128();
+         byte[] prev = r.B128();
+         byte[] root = r.B128();
+         byte[] digest = r.B128();
+-        byte[] recordsData = r.Raw(data.Length - r.Pos);
+-        var rawEntries = DecodeRecordsArray(recordsData);
+-        if (rawEntries.Count != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
+-        var entries = new List<OutboxEntry>();
+-        foreach (var (rid, kind, payload) in rawEntries)
++        // In-place records parse — no intermediate recordsData[] + tuple list.
++        int n = (int)r.Varint();
++        if (n != count) throw new SyncException("BATCH_TRANSACTION_FAILED");
++        var entries = new List<OutboxEntry>(count);
++        for (int i = 0; i < n; i++)
++        {
++            byte[] rid = r.B128();
++            byte kind = r.U8();
++            byte[] payload = r.Bytes();
+             entries.Add(new OutboxEntry
+             {
+                 NamespaceId = ns, Seq = 0, ChangeId = Zero128, RecordId = rid,
+                 OpKind = kind, Payload = payload, AuthorNodeId = issuer, CreatedAt = 0,
+             });
++        }
+         return new Batch(ns, schemaId, schemaVer, policy, flags, issuer, epoch,
+                          cstart, cend, batchId, prev, root, digest, entries);
+     }
+
+--- a/BinSync.Net/src/BinSync.Core/Node.cs
++++ b/BinSync.Net/src/BinSync.Core/Node.cs
+@@ -1580,7 +1580,7 @@ public static List<(byte[] Rid, byte Kind, byte[] Payload)> DecodeRecordsArray(b
+     {
+         var r = new Reader(data);
+         int n = (int)r.Varint();
+-        var outp = new List<(byte[], byte, byte[])>();
++        var outp = new List<(byte[], byte, byte[])>(n);
+         for (int i = 0; i < n; i++)
+         {
+             byte[] rid = r.B128();

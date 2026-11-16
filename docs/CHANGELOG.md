@@ -1,0 +1,789 @@
+## Unreleased
+
+## Unreleased — v3.1 C-pass
+
+- Added the typed, scope/local-replica/namespace/GC-store/trust-bound `IFullReplaceCommitLease` contract and made `StorageFullReplaceReceiver` reject ordinary `IDisposable` guards or a lease for another namespace. `StorageSyncCoordinator.AcquireFullReplaceCommitGuard` composes the Metadata Store PendingApply/reservation proof with the Node, host FLD/WAL and provider gates; the sample FLD host exposes the required factory.
+- Added the RPM3 durable relay provenance map in `BinSync.Storage`: atomic JournalSeq↔OutboxSeq mapping (ChangeId remains in the global ledger), per-author scan/ACK cursor, SHA-256/XOR mapping-set checksum, OutboxSeq-ordered recovery and O(log N) safe-ACK translation. Mapping pruning remains strictly after durable FLD relay ACK.
+- Added `StorageSyncCoordinator.AppendRelayProvenancePage` to resolve transient FLD ChangeIds through the global Node ledger before persisting only JournalSeq↔OutboxSeq pairs. Added a persisted-row golden sample and source-derived metadata byte inventory for Outbox, ApplyJournal, Micro-WAL, Manifest, Run and Fld1.Storage.
+- Added explicit broadcast of one accepted retention checkpoint to multiple members without minting a checkpoint sequence per destination; authority verification and durable checkpoint revalidation are serialized under the coordinator gate.
+- Added v3.1 host orchestration and FLD integration sequencing guidance. No background scheduler or premature direct Node↔FldDatabase bridge is introduced.
+- Validation remains pending on the current C-pass head. This entry does not claim test/build success; physical ChangeId and tombstone/Ghost GC remain disabled.
+
+
+- Made the Metadata Store reference adapter's outbound freeze operation idempotent for exact full-batch retries: a retry returns the original sequence assignments without appending duplicate entries.
+- Conflicting payload/author reuse and partially overlapping retries fail closed without advancing the outbound high watermark.
+- Added conformance coverage for exact retry, stable sequence reuse, and partial-overlap rejection. This is a semantic reference-model improvement; durable adapter and PendingLocal/source-feed atomic handoff remain separate implementation gates.
+
+# Changelog — BinSync.Core
+
+## Unreleased — 2026-11-07
+
+- Normative protocol specification advanced to BIN-SYNC CORE v2.4.19 FINAL. E-24 defines route-independent ChangeId identity/equivocation rejection; E-25 keeps tombstone/ghost GC fail-closed until a durable membership/safe-frontier and stale-peer recovery proof exists. No frame layout change is introduced by these errata.
+- Added provider-independent Metadata Store semantic conformance contract and volatile reference fixture (20 semantic tests plus a durability-profile assertion).
+- Added Data Provider semantic contract and volatile reference conformance fixture (six semantic tests plus a durability-profile assertion).
+- Added cross-repository storage documentation map and clarified the two-DLL FLD boundary. This documentation/test-only work does not ship a production Metadata Store/Data Provider API.
+- Optimized `ChangeIdentity.Fingerprint`: write canonical FULL_AUTHOR operation bytes directly into one writer, hash its written span, and handle zero/one causal dependencies without intermediate operation buffers or a dependency set. Multi-dependency normalization now uses one array with in-place sort/dedup instead of `HashSet` + LINQ + `ToArray`. Added parity coverage for field write/tombstone/record tombstone. Allocation/throughput benchmark remains a validation gate; no measured speedup is claimed.
+
+
+## 3.0.0 — 2026-11-06
+
+- Apply causal timeout only while parents remain missing; a batch requeued after a normal stream-gate failure stays retryable once its dependencies are already known.
+
+- Continue causal draining after successful applies so batches unlocked by a parent within the same drain call are retried immediately; stop when a pass makes no progress.
+
+- Reject zero ChangeIds and causal dependency IDs at CausalTracker public entry points, preventing invalid identities from entering known/lost/pending state outside the batch API.
+
+- Validate non-zero, unique ChangeIds before the causal gate; malformed batches can no longer poison the pending graph before normal apply validation.
+
+- Raise `SchemaRegistered` only when a new schema version is published; idempotent republication no longer emits a false change event.
+
+- Make schema versions immutable in the local Register API as well as SCHEMA_MAP learning; identical republication is idempotent, while policy/field-set changes require a new version.
+
+- Validate the first CRDT field payload when no local value exists; malformed initial CounterG/CounterPn/SetOr/SeqFractional/BlobRef data can no longer bypass merge-codec validation.
+
+- Reject SET_OR merges when the same add dot identifies different elements across replicas; classify the conflict as invalid remote data before canonical encoding.
+
+- Define SEQ_FRACTIONAL `orderKey` ordering as unsigned UTF-8 scalar order and use the same allocation-free comparison in the engine; add a supplementary-Unicode regression test.
+
+**Public API hardening and cleanup.**
+
+- Reject peer HELLO incarnation epochs below the stored peer-wide watermark before alias-map exchange; preserve the in-process stale-epoch path used to test data-plane rejection.
+- Reject malformed lifecycle field operations (empty/multi-byte/invalid values, nonzero key epoch, and lifecycle tombstones) before batch state or WAL publication; generic local field mutation cannot target the lifecycle field.
+- ApplyBatch clock-drift checks compare the full unsigned HLC wall value against the sampled unsigned skew limit.
+
+- Keep HLC send ticks monotonic when restored wall values exceed Int64 and validate non-negative wall-clock sources.
+- Bound length-prefixed reader allocations by remaining input and reject malformed UTF-8 instead of silently substituting replacement characters.
+- Return receive-window credit independently of caller cancellation once a frame has been dequeued; validate WINDOW_UPDATE sequence monotonicity atomically with credit application.
+
+- Negotiated per-stream Flow Control: additive payload credits, canonical four-byte LE WINDOW_UPDATE, inline update dispatch, and strict over-credit rejection.
+- Oversized flow-controlled frames are automatically fragmented and reassembled by typed receive paths; fragment memory and queued receive memory have explicit bounds.
+- Flow-control send waiters are awakened on peer/session failure; the send fast path reserves credit without allocating wait state when the window is available.
+
+- Removed standalone `NextOutboxSeq`; sequence allocation is committed only with its Outbox mutation.
+- Removed untyped public `SeenState`; internal merge logic uses the gated internal accessor.
+- Replaced `PushOutbox(object, ...)` and the legacy `byte[]` author overload with typed operation overloads (`OpFieldWrite`, `OpFieldTomb`, `OpRecordTombstone`); the Node supplies its own author identity.
+- Public read methods return detached snapshots; `PushOutbox` returns a detached entry and does not mutate the caller's operation DTO.
+- `Ops.TryCloneWithOrigin` always returns an owned payload; the engine uses a separate internal zero-copy path for its own Outbox buffers.
+- Loopback routing dictionaries are no longer public mutable state.
+- Package version advanced to `3.0.0` for the breaking API cleanup.
+- Relay alias propagation is post-commit and best-effort; disposed peers cannot turn an accepted batch into an apparent failure, and duplicate alias work is deduplicated per batch.
+- Snapshot apply validates namespace and `MaxRecords` before publication; decoder-owned receive transfers avoid a redundant deep clone.
+- Snapshot chunk packing runs after the consistent storage copy releases Node gates; STATE_DIGEST hashes the storage dictionary directly without a temporary record-map copy.
+- WAL replay marks a Node unusable if semantic replay fails after mutation, preventing accidental use of partially restored state.
+- Observer exceptions are isolated per subscriber and traced; event callbacks run outside engine gates and cannot change committed operation results.
+- HLC logical overflow is checked before increment in both send and receive paths.
+- Field tombstones participate in per-field version ordering; stale writes cannot resurrect a newer tombstone, and stale tombstones cannot erase newer values.
+- Record digests use BIN-SYNC/RECORD/v2 with an explicit live/tombstone kind byte; empty values no longer collide with tombstones.
+- CanonicalB128 now always returns exactly 16 bytes, including long-input domain-hash normalization.
+- ApplyBatch rejects merge policies not supported by the runtime; legacy policy 0 normalizes to LWW_FIELD for schema gating.
+- All three public samples were aligned to the current session API and are built/executed in CI.
+- Canonicalize and harden CRDT payload decoding: reject duplicate/unsorted author components, duplicate SET_OR dots, impossible counts and trailing bytes; detect arithmetic overflow.
+- Reject conflicting immutable SEQ_FRACTIONAL/BLOB_REF identities rather than making merge results operand-order dependent.
+- Harden SCHEMA_MAP against duplicate versions/field IDs, noncanonical field order, active/retired overlap and malformed learned descriptors.
+- Normative protocol specification advanced to v2.4.17; §§8.4–8.8 and §18.4 now define the canonical CRDT and schema-map payload contracts.
+- Causal tracking now remembers lost IDs and transitively drops dependent pending changes; CCD1 trailers use footer-length framing, canonical dependency order and atomic validation without scanning user payload bytes.
+- Causal batches now resolve dependencies on earlier members atomically, reject forward references/duplicate ChangeIds, and reject attempts to reapply a permanently lost ChangeId.
+- Causal apply now preserves the durable Inbox duplicate fast path: duplicate batches are ACKed before optional dependency evaluation, and replay payloads cannot inject ChangeIds into process-local causal state.
+- PN-counter value calculation now accumulates unsigned components before narrowing, allowing large positive/negative totals to cancel while still rejecting an out-of-range final Int64 value.
+
+---
+
+
+## 2.6.5 — 2026-11-04
+
+**Outbox compaction (safe)**
+
+- `CompactOutbox` after `ProcessAck`: drop entries acked by every interested peer (session / alias / PeerState)
+- Peers without a `PeerState` yet still need the entry (relay-safe)
+- Self-echo suppression: self-authored field already in storage is never re-queued ([E2]/[Ш2]) — works after compact
+- Tests: durable `OutboxSeqRef` continuity after restart (CursorEnd is gap-norm for new peers)
+
+---
+
+## 2.6.4 — 2026-11-04
+
+**Docs + samples aligned with public API.**
+
+- `samples/ScenarioHarness` uses `NodeBuilder` / `RecordId` / `TryGetField` (no Storage)
+- `samples/README.md` and root README sample section updated
+- Tests: 276 passed
+
+---
+
+## 2.6.3 — 2026-11-04
+
+**Perf regression fixes**
+
+- `EncodeBatchPayload` / `DecodeBatchPayload` are **lock-free** (operate on snapshot / buffer only)
+- Skip `BatchApplied` event on pure idempotent replay (`Duplicate && Applied==0`)
+- `SignBatchForInternal`: `Guid.TryWriteBytes` (no `ToByteArray` alloc)
+- Encode: `Array.Resize` instead of second full copy when estimate overshoots
+- Note: outbox still retained after ACK (compact helper present, off by default — multi-peer/relay safety)
+
+Root cause of inflated CreateDelta times in prior comparison: repeated write+ack without outbox compaction left O(history) scans. Fair one-shot CreateDelta is back ~350 µs / 64 KB at N=500.
+
+---
+
+## 2.6.2 — same as 2.6.1 (retag after protected tag)
+
+## 2.6.1 — 2026-11-04
+
+**Samples + query API restore + DurableId span write.**
+
+- Restored public `TryGetRecord` / `TryGetField` / `GetRecordCount` / `GetOutboxCount` / `RegisterLoopbackPeer` on Node
+- `WriteDurableId(Span<byte>)` — zero-alloc durable identity write
+- `ResolveAlias` returns `NodeId` without intermediate `ToArray`
+- Samples `TwoNodeLoopback` / `TwoNodeTcp` use `NodeBuilder`, events, `TryGetField`
+
+---
+
+## 2.6.0 — 2026-11-04
+
+**Membership / key-rotation events and typed cleanup.**
+
+- `MembershipEntry.NodeId` and `KeyRotationNotice.NodeId` are **`NodeId`**
+- Events: `MembershipApplied`, `KeyRotationApplied`
+- `Node.ApplyKeyRotation(notice, store)` raises key-rotation event
+- `TcpSyncSession.ReceiveKeyRotationAsync(store, local, …)` optional node for events
+- E2EE: `WriteFieldSealed` / `ReadFieldOpen` / `TryOpenField` primary on **`RecordId`**
+- `ApplyRemoteField` primary on **`RecordId` + `NodeId`**
+- `PushOutbox` primary on **`NodeId` author**
+
+---
+
+## 2.5.0 — 2026-11-04
+
+**API polish: builder, typed trust/schema, AckProcessed, internal Writer pool.**
+
+- `NodeBuilder` fluent construction
+- `TrustPeer` / `RevokeTrust` / `VerifyAndApplyBatch` / `ApplyBatchWithSchema` primary on `NodeId`
+- Event `AckProcessed`
+- `Writer.Rent` / `ReturnPool` / `ToArrayReturn` are **internal** (hosts use `new Writer`)
+
+---
+
+## 2.4.0 — 2026-11-04
+
+**Usability: events, dispose, error codes, construction.**
+
+- `Node` implements `IDisposable` (clears maps, detaches events)
+- Events: `BatchApplied`, `FieldWritten` (raised outside engine locks)
+- `SyncErrorCode` enum + `SyncException.ErrorCode` + `SyncErrorCodes` helpers
+- `NodeOptions` + `ResourceLimits` in constructor
+- Removed public `Gate` (use `EnterAllGates`)
+- `ProcessAck(NodeId, …)` primary; ExportDelta ACK/stream advance fixed
+- Docs / version stamps → 2.4.0
+
+---
+
+## 2.3.0 — 2026-11-04
+
+**Performance + public query API.**
+
+### Performance
+- **CRC32C**: SSE4.2 / ARM CRC32 hardware path with table fallback (portable)
+- **Reader**: `ReadNodeId` / `ReadRecordId` / `ReadBatchId` / `ReadDigest16` (no `byte[16]` per id)
+- **FrameStream**: `ValidateFrame` — no discarded `ParseFrame` payload copy
+- **Ids**: `EqualsBytes` compares two `ulong`s (no stack copy + SequenceEqual)
+- **IBLT**: cells pack key as `KeyLo`/`KeyHi` (one array of cells, no per-cell `byte[16]`)
+- **CRDT SetOr/Counters**: binary keys / comparers instead of `Convert.ToHexString`
+- **Digests**: `Blake3Digest16`; **ChangeId** via `Guid.TryWriteBytes`
+
+### Public API
+- `TryGetRecord` / `TryGetField` / `GetRecordCount` / `GetOutboxCount` / `RegisterLoopbackPeer`
+- `Node.Zero128` returns a defensive copy
+- `FrameCodec.ValidateFrame`
+
+### Docs
+- Removed archived `docs/RELEASE-*.md` (history remains in git + CHANGELOG)
+- PUBLIC-API aligned with 2.3.0
+
+---
+
+## 2.2.23 — 2026-11-03
+
+**BatchResult is a struct (zero heap result on ApplyBatch).**
+
+- Public API: `class BatchResult` → `struct BatchResult`
+- Idempotent replay no longer allocates a result object on the heap
+- `DeliverBatch` still returns `BatchResult?` (nullable value type)
+- `docs/PUBLIC-API.md` aligned with the 2.2.23 surface (typed ids, internal collections, session `NodeId`)
+
+---
+
+## 2.2.22 — 2026-11-03
+
+**CreateDeltaBatch speed (no alloc regression).**
+
+- Call AliasOfInternal / EnsureAliasInternal / SignBatchForInternal under existing gates (no re-entrant lock per entry)
+- Cache self-alias once for the common all-self-authored path
+- AliasOfInternal uses EmptyAliasMap / EmptyRevAlias instead of new empty Dictionary on miss
+
+N=500 CreateDelta: ~280 µs / 64 KB (was ~480 µs after 2.2.21; baseline ~359 µs / 554 KB)
+
+---
+
+## 2.2.21 — 2026-11-03
+
+**Fix encode latency regression (ArrayPool double-copy).**
+
+Root cause: EncodeBatchPayload/EncodeOp/EncodeRecordsArray rented a pool buffer then **always** copied into a new exact-sized byte[]. That added an extra full-payload memcpy on every encode vs the prior path which returned the estimate buffer when the size matched.
+
+- byte[] encode path: allocate estimate once; return as-is when exact
+- Span encode path: Writer.Rent scratch → one copy into destination
+- EmptyAliasMap static to avoid empty Dictionary alloc in CreateDeltaBatch
+
+---
+
+## 2.2.20 — 2026-11-03
+
+**PeerState.PeerNodeId is NodeId; residual hex sorts cleaned.**
+
+- PeerState.PeerNodeId typed as NodeId
+- DrainAndRetryCausal dedupes by HashSet<BatchId> (no ToHexString)
+- GcNotice / Membership member sort via span compare (no hex alloc)
+
+---
+
+## 2.2.19 — 2026-11-03
+
+**Transport PeerNodeId is NodeId; session API typed.**
+
+- ISyncTransport / PipeTransport / StreamSyncTransport / TcpSyncSession.PeerNodeId → NodeId
+- ApplyAliasMap / BuildAliasMapTable take NodeId peer
+
+---
+
+## 2.2.18 — 2026-11-03
+
+**HelloPayload / AliasMapEntry use NodeId.**
+
+- Session wire structs carry typed NodeId (no bare byte[] on the session control plane)
+- MergeAliasMap uses HashSet<NodeId> (no hex-string keys)
+
+---
+
+## 2.2.17 — 2026-11-03
+
+**SessionWire ArrayPool encode; FragmentReassembler BatchId keys.**
+
+- EncodeHello/HelloAck/AliasMap/Error rent payload buffers from ArrayPool
+- FragmentReassembler keys by BatchId (no Convert.ToHexString on hot path)
+
+---
+
+## 2.2.16 — 2026-11-03
+
+**KeyRotation + fragments on pooled send path.**
+
+- SendKeyRotationAsync uses SendFrameAsync (ArrayPool frame)
+- SendFragmentedAsync splits and sends via SendFrameAsync with FLAG_FRAGMENT
+- FragmentCodec.EncodeOne / Split: no intermediate body copy; ArrayPool encode buffer
+- SendFrameAsync accepts flags
+
+---
+
+## 2.2.15 — 2026-11-03
+
+**ReadFrame pooled header; PipeTransport uninit copy; TcpSync SendFrameAsync everywhere.**
+
+- FrameStream.ReadFrameAsync rents header from ArrayPool
+- PipeTransport uses GC.AllocateUninitializedArray for channel ownership copies
+- Reconcile/GC/IBLT/Membership/Schema send via SendFrameAsync (ArrayPool frames)
+
+---
+
+## 2.2.14 — 2026-11-03
+
+**TcpSync pooled frames; StreamSync zero-copy send; EncodeAck pool.**
+
+- FrameStream.WriteFrameAsync accepts ReadOnlyMemory (no forced copy)
+- StreamSyncTransport.SendAsync no longer ToArray()s the packet
+- TcpSync Push/Receive builds frames into ArrayPool buffers
+- EncodeAck uses ArrayPool + typed BatchId/NodeId (no dual ToArray)
+
+---
+
+## 2.2.13 — 2026-11-03
+
+**FieldState.Value is ReadOnlyMemory<byte>.**
+
+- Avoids forcing owned byte[] on every field in storage when the source is already a slice
+- Merge/digests/compare operate on spans
+- Snapshot branch: main-copy-2.2.12
+
+---
+
+## 2.2.12 — 2026-11-03
+
+**In-process DeliverBatch without frame tax; HeldCausalBatch typed.**
+
+- Transport.DeliverBatch applies payload and ACK body directly (no BuildFrame/ParseFrame for loopback)
+- HeldCausalBatch.SenderPeer is NodeId; ApplyBatchCausal(NodeId) overload
+
+---
+
+## 2.2.11 — 2026-11-03
+
+**CausalDeps typed; BuildFrame Span API.**
+
+- OutboxEntry.CausalDeps is List<BatchId>
+- CausalWire / persistence encode B128(BatchId) without CanonicalB128 copies
+- ApplyBatchCausal no longer converts deps at the gate
+- FrameCodec.BuildFrame accepts ReadOnlySpan and can write into a caller Span
+
+---
+
+## 2.2.10 — 2026-11-03
+
+**CausalTracker on BatchId keys; EncodeRecordsArray ArrayPool.**
+
+- CausalTracker known/pending/edges use HashSet/Dictionary of BatchId (no hex-string keys on hot path)
+- PendingCausalOp.ChangeId/Deps are BatchId
+- EvaluateBatch typed overload; Node.ApplyBatchCausal uses it
+- EncodeRecordsArray rents scratch from ArrayPool
+
+---
+
+## 2.2.9 — 2026-11-03
+
+**ArrayPool encode path + CausalTracker typed ids.**
+
+- EncodeBatchPayloadInternal / EncodeOp rent scratch from ArrayPool; return exact-sized byte[]
+- CausalTracker.Key/NoteApplied/EnqueuePending overloads for BatchId (stackalloc hex key)
+- Snapshot branch: main-copy-2.2.8 on GitHub
+
+---
+
+## 2.2.8 — 2026-11-03
+
+**OutboxEntry.RecordId / ChangeId are value types.**
+
+- RecordId is RecordId; ChangeId is BatchId
+- MaterializeEntries only copies Payload (ids/authors already owned as structs)
+- WriteRecordsArray / persistence write B128(RecordId/BatchId) without ToArray
+- OwnQueueHolds / SeenChanges use typed equality
+
+---
+
+## 2.2.7 — 2026-11-03
+
+**Digest16 + OutboxEntry.AuthorNodeId as NodeId.**
+
+- New Digest16 value type for PrevBatchDigest / RecordsRoot / BatchDigest and chain maps
+- LastBatchDigest / LastStreamDigest / PeerState.Ids prev store Digest16
+- OutboxEntry.AuthorNodeId is NodeId (no ROM/byte[] on author hot path)
+- CreateDeltaBatch stream selection uses NodeId dictionaries
+
+---
+
+## 2.2.6 — 2026-11-03
+
+**Author stream + ACKs typed.**
+
+- Batch.AuthorStreamNodeId / DurableAuthor are NodeId
+- BatchResult.DurableAuthor is NodeId
+- LastStreamAuthor values are NodeId
+- AcksOut is List<BatchId> (no ToArray on apply)
+- ApplyBatch ResolveAuthor / ApplyOpInternal use NodeId end-to-end
+- EncodeAck overload for BatchId + NodeId
+
+---
+
+## 2.2.5 — 2026-11-03
+
+**Batch.IssuerNodeId / Batch.BatchId are typed (NodeId / BatchId).**
+
+- In-memory batch DTO no longer carries byte[] identities for issuer and batch id
+- BatchResult.BatchId is BatchId; SyncException accepts BatchId
+- ComputeBatchDigest / encode use stackalloc B128(NodeId/BatchId)
+- Digests (prev/root/batch) remain byte[16] (wire BLAKE3 truncated)
+
+---
+
+## 2.2.4 — 2026-11-02
+
+**FieldState.AuthorNodeId and Record.LifecycleAuthor are NodeId.**
+
+- LWW / merge / digests compare authors as value types (no byte[] content compare)
+- HlcOps.CompareHlc(NodeId) overload
+- Persistence and op-encoding convert at the boundary only
+
+---
+
+## 2.2.3 — 2026-11-02
+
+**More hot-path typed ids.**
+
+- `Record.RecordId` is `RecordId` (no duplicate byte[] of the storage key)
+- `PeerState.Ids` keyed by `(NodeId, start, end)` with `BatchId` values
+- `AuthorStreamId()` for zero-alloc id-cache lookup; digests write RecordId via stackalloc
+- LocalWrites `new Record(recordId)` without `.ToArray()`
+
+---
+
+## 2.2.2 — 2026-11-02
+
+**Typed map keys on the apply/sync hot path (allocation cut).**
+
+- Inbox / LastBatchDigest / LastStreamDigest / SeenChanges / ReceivedStreams use NodeId/BatchId
+- ApplyBatch no longer allocates senderPeer.ToArray() for session maps
+- Persistence updated; wire still b128
+
+---
+
+## 2.2.1 — 2026-11-02
+
+**Hot-path allocation hygiene.**
+
+- `ApplyBatch`: lazy `senderPeer.ToArray()` only when byte[]-keyed maps need it; use `NodeId` for session maps
+- `LocalWrites` / `OwnQueueHolds`: span compares (`RecordId.EqualsBytes`, `NodeId.EqualsBytes`) instead of `ToArray` on every scan
+- `CreateDeltaBatch`: avoid extra `Mem.ToArray` when forming `NodeId` for alias lookup
+- Allocation regression tests: ApplyBatch duplicate replay + WriteField steady-state budgets
+
+Remaining `ToArray` on ownership boundaries (Record ctor, SeenChanges keys, crypto APIs) is intentional.
+
+---
+
+## 2.2.0 — 2026-11-02
+
+**Breaking: engine state encapsulation + limits + TCP read timeout.**
+
+- `Storage`, `Outbox`, `Inbox`, alias maps, `PeerStates`, `SeenChanges`, digests, quarantine, etc. are **`internal`** (tests/samples via `InternalsVisibleTo`)
+- Public query API: `TryGetRecord`, `TryGetField`, `GetRecordCount`, `GetOutboxCount`, `RegisterLoopbackPeer`
+- `Node.Limits` (`ResourceLimits?`) enforced on outbox enqueue / seen-set / storage writes
+- `StreamSyncTransport.ReadTimeout` + `TcpSyncSession.ReadTimeout` for idle/stuck peers
+- Bare `catch` in E-13 outbox scans documented (skip corrupt payloads)
+- `Ns()` is internal
+
+Hosts that mutated `node.Storage` / `node.Outbox` directly must use engine APIs or request InternalsVisibleTo.
+
+---
+
+## 2.1.13 — 2026-11-02
+
+**XML-doc: finish remaining thin summaries.**
+
+- Replaced leftover template/humanize/`Name: words` summaries across Codec, Digests, Merge, Model, Production (IBLT, Reconcile, TcpSync, Trust, WAL, …)
+- Non-Crypto public surface: no `Represents X` / single-token / colon-humanize stubs left
+
+---
+
+## 2.1.12 — 2026-11-02
+
+**XML-doc text quality pass.**
+
+- Replaced ~650 template summaries (`Represents X` / `Name.`) with meaningful descriptions
+- Codec, Writer/Reader, Ids, Node, Batch, Transport, Ops, Frame, HLC, Production surface covered
+- Weak template count on non-Crypto public surface: 0
+
+---
+
+## 2.1.11 — 2026-11-02
+
+**Public API XML-doc coverage + exception hygiene.**
+
+- Nearly complete `/// <summary>` on non-Crypto public surface (~980 members)
+- `WatermarkGate` documented; empty `InvalidOperationException` messages filled
+- Style policy unchanged (`docs/STYLE.md`)
+
+---
+
+## 2.1.10 — 2026-11-02
+
+**Review follow-up: exceptions, StyleCop honesty, docs.**
+
+- `SyncException` / `FrameException`: standard `(code)`, `(code, message)`, `(code, message, inner)` constructors; properties documented
+- Empty `catch (SyncException)` in relay-eligibility: explicit comment (must not fail the batch)
+- StyleCop: high-signal rules kept live (`SA1107`); layout/order/`this.`/member-doc noise listed in `docs/STYLE.md` — no “fake strict” claim
+- XML-doc: type-level + more DTO members; CS1591 still allowed for incomplete members
+- `nodeId` length → `ArgumentException`
+
+---
+
+## 2.1.9 — 2026-11-02
+
+**StyleCop.Analyzers + public API XML-doc anchors.**
+
+- PackageReference `StyleCop.Analyzers` + `stylecop.json` + `.editorconfig`
+- SA* suppressed in build (TreatWarningsAsErrors) — enable rules incrementally
+- Vendored `Crypto/**` excluded from StyleCop restyle
+- Type-level docs: `Node`, `Batch`, `Transport`, `Ops`, `NodeId`/`RecordId`/`BatchId`, DTOs
+- `PublicApiDocs.cs` partials for IntelliSense; CS1591 still allowed for incomplete members
+
+---
+
+## 2.1.8 — 2026-11-02
+
+**API hygiene + docs/CI (code review).**
+
+- `NodeId` / `Clock` init-only; `Epoch` internal set; remove public `Storage` wholesale setter
+- Dictionary surface (`Outbox`, aliases, `PeerStates`, …) is get-only (mutate in place)
+- `Gate` marked `[Obsolete]` → use `EnterAllGates()`
+- README / PRODUCTION-STATUS → 2.1.8; DecodeAck catch documented
+- CI: test timeout 25m; optional coverage line-rate ≥50% gate
+- `AllowUnsafeBlocks` false (no unsafe outside stackalloc)
+
+---
+
+## 2.1.7 — 2026-11-01
+
+**Fix duplicate-apply ACK author stream (hang / test host abort).**
+
+- On idempotent replay (`Inbox` hit), `BatchResult.DurableAuthor` is filled from
+  `LastStreamAuthor` (or batch durable author) so `ProcessAck` advances the correct
+  per-author watermark (Errata E-4).
+- Without this, lost-ACK replay + `SyncRound` never drained → hang → testhost crash
+  after ~257 tests (17 `InvariantsAndAdvanced` never finished).
+
+274 tests green.
+
+---
+
+## 2.1.6 — 2026-11-01
+
+**Safe decode by default.**
+
+- Public `DecodeBatchPayload` always `MaterializeEntries()` (owned buffers; no frame lifetime)
+- `ApplyBatchPayload(byte[], NodeId)` — zero-copy decode+apply; batch does not escape
+- Transport / Loopback / TcpSync use `ApplyBatchPayload`
+- `BatchResult` carries `CursorEnd`, `NamespaceId`, `DurableAuthor` for ACK
+
+274 tests green.
+
+---
+
+## 2.1.5 — 2026-11-01
+
+**OutboxEntry on ReadOnlyMemory — decode without per-entry copies.**
+
+- `OutboxEntry.Payload/RecordId/ChangeId/AuthorNodeId` → `ReadOnlyMemory<byte>`
+- `DecodeBatchPayload` slices into the frame buffer (`B128Memory` / `BytesMemory`)
+- `Mem.ToArray` when ownership is required; `NodeId`/`RecordId` accept Memory
+- Lifetime: keep the frame alive while using decoded `Batch.Entries` slices
+
+274 tests green.
+
+---
+
+## 2.1.4 — 2026-11-01
+
+**Reader / DecodeOp / EncodeOp on Span & ReadOnlyMemory (wire unchanged).**
+
+- `Reader` over `ReadOnlyMemory<byte>`; `TakeSpan` / `B128Span` / `BytesSpan`
+- `Codec.DecodeVarint(ReadOnlySpan<byte>)`
+- `DecodeBatchPayload(ReadOnlyMemory<byte>)`
+- `DecodeOp(ReadOnlyMemory<byte>)`
+- `EstimateEncodeOpSize` + `EncodeOp(..., Span<byte>)`; `byte[] EncodeOp` uses exact-sized buffer
+
+274 tests green.
+
+---
+
+## 2.1.3 — 2026-11-01
+
+**Span / ArrayPool for encode + CreateDelta (wire unchanged).**
+
+- `EncodeBatchPayload(Batch, Span<byte>)` + `EstimateBatchPayloadSize`
+- `byte[] EncodeBatchPayload` writes into exact-sized buffer (fixed Writer, no growth)
+- `Writer` fixed-buffer / `ArrayPool` rent support
+- `CreateDeltaBatch` reuses outbox entries when origin already matches (no second entry list)
+- `ComputeRecordsRoot` / `ComputeBatchDigest` via ArrayPool (no steady LOH)
+
+274 tests green.
+
+---
+
+## 2.1.2 — 2026-11-01
+
+**Perf (decode + CreateDeltaBatch), wire unchanged.**
+
+- `DecodeBatchPayload`: no tail `Raw` + no intermediate tuple list — one copy into `OutboxEntry`
+- `ComputeRecordsRoot`: incremental BLAKE3 (no full records buffer)
+- `TryCloneWithOrigin`: share outbox payload when origin already matches
+- Local outbox stamps `origin=1` (self alias) so the common session path avoids payload clones
+
+274 tests green.
+
+---
+
+## 2.1.1 — 2026-11-01
+
+Performance patch. Wire format and public API unchanged. **274** tests green.
+
+- `CreateDeltaBatch`: stamp compact-op `origin` by cloning the payload instead of decode/encode
+- `Writer` uses a byte buffer; exact-sized encodes skip the extra copy
+- `EncodeBatchPayload` / `recordsRoot` sized exactly
+
+---
+
+## 2.1.0 — 2026-10-31
+
+Completes the **2.0 API-shape** migration (still wire-compatible with 1.x).
+
+### Breaking (source vs 2.0.0)
+- `Node.NodeId` is **`NodeId`** (not `byte[]`)
+- Session/maps: `PeerStates`, `KnownEpochs`, `LastStreamAuthor`, `_outboxSeq` keyed by **`NodeId`**
+- `CreateDeltaBatch` / `SignBatchFor` / `AdvanceStream` / `AuthorEpoch` / `NextOutboxSeq` take **`NodeId`**
+- Alias APIs already on `NodeId` (full path)
+
+### Helpers
+- `NodeId.EqualsBytes` / `RecordId.EqualsBytes` for wire compares without alloc
+
+### Tests
+- **274** green
+
+---
+
+## 2.0.0 — 2026-10-31
+
+**Major (API shape only).** Wire protocol unchanged vs 1.0.1.
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `2.0.0` · **Tag:** `v2.0.0`
+
+### Breaking (source)
+- Public **fields → properties** on DTOs and `Node` maps (`OutboxEntry`, `Batch`, `PeerState`, `BatchResult`, `Record`, …)
+- `WriteField` / related local-write APIs take **`RecordId`** (implicit from `byte[]`)
+- `ApplyBatch` sender parameter is **`NodeId`** (implicit from `byte[]`)
+- New **`BatchId`** struct (alongside `NodeId` / `RecordId`); `Writer.B128` overloads for typed ids
+
+### Non-breaking
+- Same batch wire layout; 274 tests green; samples still work via implicit conversions
+
+### Migration
+- Recompile consumers; replace field initializers only if using reflection on fields
+- Prefer `RecordId` / `NodeId` at call sites; `byte[16]` still accepted via implicit conversion
+
+---
+
+## 1.0.1 — 2026-10-31
+
+**Patch release** on top of `1.0.0`. **No public API breaks.**
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `1.0.1` · **Tag:** `v1.0.1`
+
+### Hygiene / structure
+- Node engine split into partials (`Alias`, `LocalWrites`, `DeltaBatch`, `ApplyBatch`, `BatchCodec`, `Helpers`, …)
+- Dead diagnostic `Diag` harness removed; duplicate byte-array comparers unified
+- `dotnet format` on engine partials + tests; test project warnings-as-errors
+
+### Engine (internal, wire-compatible)
+- ApplyBatch: copy-on-write overlays for touched records; single `DecodeOp` pass; leaner digests
+- Fewer `ToArray` on digest / writer span paths (encode-friendly)
+
+### Repo / CI
+- CI: XPlat Code Coverage (cobertura artifact `coverage`)
+- Sample: `samples/TwoNodeLoopback` (MakeSession + SyncRound)
+- Tests: **274** green
+
+### Unchanged contract
+- Same public surface as `1.0.0` / [PUBLIC-API.md](PUBLIC-API.md)
+- Wire-compatible with 1.0.0 / rc.2 / rc.1
+
+---
+
+## 1.0.0 — 2026-10-31
+
+**First stable release.** Public API frozen as in [PUBLIC-API.md](PUBLIC-API.md).
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `1.0.0` · **Branch:** `main`
+
+### Product
+- Promoted from `1.0.0-rc.2` without API breaks
+- 277 tests green; CI `BinSync.Net` workflow green on the RC tip
+
+### Engine (from rc.2 / post-alpha.7 main)
+- Domain sub-gates + `EnterAllGates`; alias maps on `NodeId`
+- Hot-path encode/decode/apply optimisations
+- Full Merge §8, opt-in E2EE / causal / schema, TrustStore TOFU/PreShared/CA-as-nodeId
+
+### Unchanged contract
+- Wire-compatible with rc.1 / rc.2 / alpha.6 / alpha.7
+- Full X.509 path validation remains out of scope
+
+### Optional next
+- nuget.org publish
+- Post-1.0: X.509 PKI (if needed)
+
+---
+
+## 1.0.0-rc.2 — 2026-10-30
+
+**Second release candidate.** Same API freeze as rc.1; engine hardening only.
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `1.0.0-rc.2` · **Branch:** `main`
+
+### Engine
+- Domain sub-gates (`_lockStorage` → `_lockOutbox` → `_lockMeta`) + `EnterAllGates` / `AllGateScope`
+- Alias maps migrated to `NodeId` keys and `(NodeId Id, int Epoch)` values
+- Persistence snapshots under `EnterAllGates`; Diag/Hardening updated
+- 277 tests green; batch hot-path benches show no regression vs pre-migration tip
+
+### Unchanged contract
+- Public API same as `1.0.0-rc.1` / `PUBLIC-API.md`
+- Wire-compatible with alpha.6/alpha.7 and rc.1
+
+### Next
+- Soak as `v1.0.0-rc.2` → promote to **`1.0.0`** without further API breaks
+
+---
+
+## 1.0.0-rc.1 — 2026-10-29
+
+**First release candidate toward 1.0.** API surface frozen as documented in [PUBLIC-API.md](PUBLIC-API.md).
+
+**Target:** `net10.0` · **Package:** `BinSync.Core` `1.0.0-rc.1` · **Branch:** `main`
+
+### Product
+- SemVer policy and public API freeze for the 1.x line
+- Docs aligned: PRODUCTION-STATUS, PUBLIC-API, README, this changelog
+
+### Engine (carried from post-alpha.7 main)
+- Domain sub-gates (`_lockStorage` → `_lockOutbox` → `_lockMeta`) + `EnterAllGates`; alias maps on `NodeId`
+- EncodeBatchPayload single-pass + Writer capacity / zero-alloc Varint write
+- DecodeBatchPayload in-place records; Reader fixed-width zero-alloc reads
+- ApplyBatch decode-once + O(1) change flags; ComputeRecordsRoot single buffer
+- Lazy `FieldTombs`; State capacity hint; Blake3 truncated digest without extra 32-byte heap hop
+- Zero-alloc FieldWrite framing probe in `Ops`
+
+### Unchanged contract
+- Protocol wire compatible with alpha.6/alpha.7
+- Trust CA mode remains node-id allow-list (not full X.509)
+- Causal / E2EE / schema / signature gates remain **opt-in**
+
+### Next
+- Soak as `v1.0.0-rc.1` → promote to **`1.0.0`** without further API breaks
+
+---
+
+## 0.1.0-alpha.7 — 2026-10-28
+
+Packaging / release hygiene cut on `main` (engine same as alpha.6 performance pass).
+**Target:** `net10.0` · **Package:** `BinSync.Core` `0.1.0-alpha.7`
+
+### Package
+- Version bump `0.1.0-alpha.6` → `0.1.0-alpha.7`
+- PRODUCTION-STATUS / release notes aligned with tagged alpha.6 engine tip
+- One-shot CI path for annotated tag + GitHub prerelease
+
+### Engine
+- No protocol changes vs alpha.6 (comparers, zero-alloc codec, HLC µs remain)
+
+### Package id
+```
+PackageId: BinSync.Core
+Version:   0.1.0-alpha.7
+```
+Single external dependency: `Blake3.Managed` 1.10.0.
+
+## 0.1.0-alpha.6 — 2026-10-28
+
+Production performance pass on `main` after alpha.5 protocol surface.
+**Target:** `net10.0` · **Package:** `BinSync.Core` `0.1.0-alpha.6`
+
+### Engine / hot paths
+- Shared comparer singletons; `HashCode.AddBytes`; Codec WriteVarint / stackalloc; HLC µs
+
+## 0.1.0-alpha.5 — 2026-10-24
+
+Production-hardening cut. See prior release notes under `docs/RELEASE-alpha.5.md`.

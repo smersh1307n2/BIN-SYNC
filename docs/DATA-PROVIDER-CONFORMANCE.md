@@ -1,0 +1,195 @@
+# BIN-SYNC Data Provider Semantic Contract and Conformance Plan
+
+**Status:** semantic contract plus executable conformance. Six provider-independent semantic tests run against a volatile reference adapter and the durable `StorageDataProvider` implementation. The Storage provider passes restart, feed paging/ACK fencing, snapshot/feed barrier, remote apply idempotency and origin-separation integration tests. Public C# signatures remain intentionally small.  
+**Related architecture:** [Metadata Storage and External Data Provider Architecture](METADATA-STORAGE-ARCHITECTURE.md).  
+**Related metadata contract:** [Metadata Store Semantic Contract and Conformance Plan](METADATA-STORE-CONFORMANCE.md).  
+**Change lifecycle:** [Change Staging, Coalescing, and Metadata Retention](CHANGE-STAGING-AND-RETENTION.md).  
+**Protocol baseline:** BIN-SYNC v3.0.0 DRAFT; this document defines the durable provider-side contract and does not change wire format.
+
+## 1. Purpose and boundary
+
+A Data Provider adapts an application-owned source of user data to the canonical BIN-SYNC record/field model. It owns user-data identity and application semantics; it is not the BIN-SYNC protocol runtime, Metadata Store or physical Storage engine.
+
+The four roles remain separate:
+
+- **Data Provider:** stable source-to-canonical mapping, source change capture, consistent source snapshots, provider validation and idempotent application of accepted remote changes.
+- **Metadata Store:** durable BIN-SYNC receipts, ChangeId ledger, peer/author progress, frozen outbound payloads, relay retention and pending-apply recovery state.
+- **BIN-SYNC Runtime:** wire/protocol interpretation, canonical validation, merge/relay decisions, ACK aggregation and generation of metadata commands.
+- **Physical Storage:** generic atomic byte transactions, durability, recovery, snapshots, ordered scans and storage-native commit identifiers.
+
+This is an observable semantic contract, not a prescribed interface, serialization format or provider schema. A provider may be SQL, file-based, array-backed, embedded, or application-specific.
+
+## 2. Stable canonical mapping
+
+The provider must define stable mappings:
+
+- source entity/item identity → canonical 16-byte `RecordId`;
+- source property/field identity → canonical `FieldId`;
+- source value and tombstone → canonical operation payload;
+- source schema/version → canonical namespace/schema/merge-policy mapping where applicable.
+
+Mappings must survive provider reopen and schema evolution. They must not depend on process memory addresses, object hash codes, row positions, mutable array indexes or iteration order. A mapping collision or incompatible remap fails closed; it must not silently alias two source entities or fields.
+
+The provider must document whether identifiers are deterministic derivations or durable allocated mappings, how migrations preserve them, and how deleted/retired source identities are handled.
+
+## 3. Local source change capture
+
+A local source change must remain recoverable until the corresponding canonical operation is durably represented in pending staging or the frozen Outbox.
+
+Preferred mechanisms:
+
+1. a durable ordered change feed with stable source tokens and immutable payloads/references;
+2. a transactional source hook that writes source state and pending-change metadata atomically;
+3. a snapshot/diff mechanism with a stable snapshot token and a matching change-feed watermark or write barrier.
+
+A transient callback/event is notification only. It is not a durable feed and cannot be the sole record that a source change occurred.
+
+A feed consumer must be able to:
+
+- read bounded pages from a stable continuation token;
+- repeat a page after interruption and receive the same logical changes;
+- acknowledge only a contiguous prefix that has already been durably staged/frozen;
+- resume after the acknowledged prefix without gaps or duplicates;
+- retain payload bytes or exact-version references until the runtime confirms durable transfer.
+
+The provider's feed token is not a BIN-SYNC author OutboxSeq, peer StreamOffset, HLC, WAL CommitSeq or Storage CommitSeq. Translation is explicit at the adapter/runtime boundary.
+
+Each `ProviderChange` also carries a stable, non-zero 128-bit `ChangeId`. The provider-local `Sequence` is only the feed cursor; it is not the protocol Outbox sequence. The same feed entry must return the same `ChangeId` after repeated reads and process reopen. `StorageDataProvider` stores the identity as a 16-byte suffix in the existing local-feed row, so it adds no second metadata row and is removed automatically when that feed row is acknowledged. Its `BSP3` format marker is mandatory; an unmarked partition containing provider-owned rows is rejected. Every v3 feed row must contain exactly one nonzero identity suffix. Missing, zero, truncated or extra identity bytes fail closed; the provider MUST NOT synthesize an identity during read/recovery. A provider that cannot durably assign identity before exposing a feed entry is not eligible for Metadata-Store-owned publication.
+
+For state-only providers with no durable feed, snapshot comparison can preserve final-state LWW differences only. It cannot preserve intermediate events or local operations overwritten before observation. That limitation must be an explicit provider capability, not silently presented as event-history synchronization.
+
+## 4. Snapshot and feed barrier
+
+Opening a source snapshot must atomically bind:
+
+- a stable source snapshot token/version;
+- a change-feed watermark (or equivalent write-barrier generation);
+- the namespace/schema context needed to interpret the snapshot.
+
+The snapshot view must remain stable while later source mutations occur, for its documented lifetime. The runtime reads the snapshot and then consumes the feed strictly after the captured watermark. Together they must cover every source change exactly once logically: no gap between snapshot and tail and no duplicate change caused by an unrelated cursor sample.
+
+A provider that cannot expose a native MVCC snapshot plus feed watermark must implement an equivalent write barrier or durable journal. A current-state snapshot and an independently sampled feed cursor are not a valid baseline.
+
+Snapshot installation is not a peer ACK. It does not authorize Outbox/relay compaction, ChangeId-ledger GC, tombstone GC or removal of pending/frozen operations. Those require the protocol's own per-author cut and completion/fencing proof (currently not defined for these retention purposes).
+
+## 4.1. Authoritative FULL_REPLACE provider capability
+
+The optional `IProviderFullReplace` capability is distinct from merge `SNAPSHOT_CHUNK`. The caller must authenticate the authoritative roster/snapshot certificate, serialize the switch against remote APPLY, and prove that no unresolved PendingApply, relay reservation, provider intent or reader pin still depends on the old generation. The provider API does not establish membership authority and does not authorize ChangeId or tombstone GC.
+
+The Storage-backed implementation provides:
+
+- `BeginFullReplace(generation, sourceFeedWatermark, expectedCount, digest)`: durable, idempotent staging manifest bound to the active base generation;
+- `StageFullReplacePage`: contiguous, strictly canonical pages (maximum 4096 entries), duplicate record/field identities rejected;
+- `CommitFullReplace`: streaming digest verification (1024-row scan pages), stale-base fence, then one atomic active-generation pointer switch;
+- `AbortFullReplace`: resumable bounded deletion of uncommitted staging rows;
+- old generations remain physically retained. No generation reclamation is exposed until the cross-store reader/apply/relay/roster safe-GC proof exists.
+
+All provider adapters share the canonical `BinSync.ProviderMutationCodec` (BinSync.Core assembly) for validation, byte encoding/decoding and ordering; adapters must not reimplement divergent mutation layouts. The digest is SHA-256 over the domain `BIN-SYNC/FULL-REPLACE/v1`, canonical 16-byte RFC-4122 network-order generation id, source feed watermark (u64 LE), canonical ProviderMutation bytes sorted lexicographically by the canonical 16-byte RecordId representation, record tombstone before fields, then FieldId, and entry count (i32 LE). `ProviderFullReplaceDigestBuilder` computes this incrementally from bounded snapshot pages; `ComputeFullReplaceDigest` is the convenience materializing/sorting helper. The source snapshot token and feed watermark must come from one `OpenSnapshot` barrier; the signed certificate binds the resulting generation/digest. A normal merge snapshot or peer ACK is not a FULL_REPLACE proof.
+
+## 5. Applying remote changes
+
+The provider must apply one accepted remote batch as an atomic source-data effect, or expose an equivalent recoverable transaction.
+
+For separate provider and metadata stores:
+
+1. BIN-SYNC persists a pending intent with a stable apply token and sufficient canonical input or a durable payload reference.
+2. The provider applies the batch and records the token plus a durable idempotency receipt atomically with the data effect.
+3. Metadata Store finalizes receipt, receive cursor, dedup/provenance, relay and protocol state.
+4. After both sides are durable, raw intent payload is removed; only compact receipts and materialized metadata remain.
+5. Recovery retries or queries the same token. The provider returns the prior durable result without reapplying the source effect.
+
+Required token behavior:
+
+- same token + same canonical input → return the original durable result without repeating the effect;
+- same token + different canonical input → reject as equivocation;
+- invalid batch → reject atomically, with no partial source mutation and no durable success receipt;
+- successful receipt → prove the provider data effect is durable, not merely queued in memory.
+
+A process-local set of completed tokens is insufficient. Provider idempotency state must survive the provider's documented restart/recovery boundary.
+
+## 6. Local versus remote origin
+
+A remote apply must not be recaptured as a new local-origin change. Provider adapters must distinguish local source writes from remote protocol application even when the underlying database emits the same generic row-changed notification for both.
+
+This may use transaction origin metadata, a durable apply token, a dedicated change-capture suppression scope, or a provider-native mechanism. It must remain correct across process restart; a transient boolean flag is not enough.
+
+The provider does not generate or rewrite BIN-SYNC ChangeId, original author, HLC, author-stream sequence or peer cursor during remote apply. Those are supplied/owned by the protocol runtime and preserved in the canonical mutation.
+
+## 7. Transaction modes
+
+### 7.1 Shared transaction domain
+
+When Data Provider and Metadata Store share one transactional engine, the source data mutation and all required metadata transitions should commit atomically. This is the preferred model.
+
+### 7.2 Separate stores
+
+Use the pending-apply protocol in §5. Do not claim a cross-store atomic transaction. Provider-side idempotency receipt and Metadata Store pending intent must be independently durable and recoverable.
+
+### 7.3 Weak mode
+
+Best-effort or at-least-once operation may be offered only as an explicitly weaker mode. It must not emit an ACK that implies durable exactly-once acceptance.
+
+## 8. Provider-independent conformance matrix
+
+| Area | Required test | Failure prevented |
+|---|---|---|
+| Mapping | Same source keys map to same canonical IDs; distinct keys do not alias; reopen/migration preserves mappings | Identity drift or record/field collision |
+| Feed replay | Read the same page repeatedly before ACK | Lost or mutated source change |
+| Feed paging | Bounded pages resume exactly after the last consumed token | Gaps, duplicates or unbounded reads |
+| Feed ACK | Reject ACK beyond the durably exposed/consumed prefix; reject backward ACK | Source discards a change before durable staging |
+| Payload ownership | Mutating caller buffers after append/read does not mutate retained change | Borrowed-buffer lifetime bug |
+| Snapshot barrier | Snapshot token and feed watermark captured atomically; all later writes appear in tail | Snapshot-to-feed gap or duplicate |
+| Snapshot lifetime | Snapshot remains stable while source writes/apply/checkpoint proceed; release fences future reads | Mixed-generation or use-after-reclaim |
+| FULL_REPLACE staging | Inactive generation remains invisible; ordered pages resume after reopen; digest mismatch/stale base cannot switch; abort is bounded | Partial replacement, lost staging cursor or stale generation overwrite |
+| FULL_REPLACE retention | Old generation remains until external safe-GC authorization; provider alone cannot reclaim | PendingApply/relay/snapshot resurrection or use-after-reclaim |
+| Remote apply | Atomic batch effect and durable receipt | Partial source mutation |
+| Apply idempotency | Same token/input retry returns original result and does not repeat effect | Duplicate remote application |
+| Apply equivocation | Same token/different input rejects without mutation | Ambiguous recovery identity |
+| Origin separation | Remote apply does not appear in local change feed | Echo loops and false local authorship |
+| Recovery | Reopen after feed append/ACK, snapshot creation and provider apply boundaries | Lost feed, mapping, snapshot or idempotency receipt |
+| Bounds | Bounded page/batch/count/payload and explicit overflow behavior | Unbounded allocation or integer overflow |
+
+Crash tests must inject deterministic failures at provider durability boundaries. For each failure, assert recovered source data, feed position, provider receipt and whether Metadata Store finalization/ACK is permitted.
+
+## 9. Relationship to Metadata Store conformance
+
+The Metadata Store contract owns pending-apply intent and metadata finalization. This provider contract owns the actual user-data effect, provider-side token receipt, source feed and source snapshot.
+
+Neither test suite substitutes for the other:
+
+- Metadata Store tests must prove pending intent remains available until provider receipt is accepted and metadata finalization completes.
+- Data Provider tests must prove the source effect and provider receipt are atomic/idempotent and that local/remote change capture is separated.
+- An end-to-end adapter test must inject crashes between the two stores and verify recovery using the same token.
+
+The volatile reference provider is for semantic testing only. A durable provider must add reopen/fault-injection tests against its actual persistence engine.
+
+## 10. Implementation gates
+
+1. **Completed:** provider guarantees are expressed as neutral contracts; `IDataProvider` and the optional `IProviderPublicationMode` are implemented.
+2. **Completed:** provider-independent conformance suite and volatile reference adapter are implemented.
+3. **Completed for the current Storage adapter slice:** mapping, durable-feed paging/ACK, snapshot/feed barrier, remote apply idempotency, origin separation and reopen behavior have conformance/integration coverage.
+4. **Ownership distinction remains binding:** a separate generic provider owns its durable source feed. In the Storage-backed provider-authoritative mode, the Metadata Store owns immutable published payloads and outbound sequence; provider feed ACK follows metadata freeze. FLD Database, acting as both provider and metadata owner, must own its FLD-specific PendingLocal/freeze protocol inside the Database transaction. Storage-only mode has no user-data PendingLocal.
+5. **Partially complete:** neutral provider interfaces and Storage adapters are implemented. Full BIN-SYNC Node/Transport authority migration and the FLD synchronized-Database provenance adapter remain separate gates.
+6. Validate shared-transaction and separate-store adapters independently, including deterministic crash injection. Keep the FLD synchronized-database provenance adapter as a separate integration gate.
+
+
+## 11. Initial executable conformance status (2026-11-07)
+
+The test-only contract and inherited suite are implemented in `BinSync.Net/tests/BinSync.MetadataStore.Conformance`; `VolatileDataProviderAdapter` is a reference model only. Six semantic tests cover stable item/field mappings, bounded and resumable local feed pages, source-feed cursor/ACK fencing, input/output payload ownership, the snapshot/feed watermark barrier, snapshot lifetime across local/remote writes, idempotent remote apply, token equivocation and atomic rejection. A separate test asserts that the reference provider does not claim restart durability.
+
+GitHub Actions run `42359566433` passed the full BIN-SYNC Release build/tests, public samples and fuzz/lab hardening at commit `b9adbd3749e689b2019f48f8b500881293d5cc2c`: 637 tests passed, line coverage 72.5%. The follow-up feed-gap/input-ownership assertion is in the subsequent commit and is being revalidated separately.
+
+**Still open:** cross-page durable PendingLocal staging/coalescing, end-to-end proof that source-feed ACK follows durable canonical staging rather than the transitional Node checkpoint + Metadata mirror, and a broader crash matrix around source feed → Node/Metadata publication. The durable StorageDataProvider does provide actual reopen, feed paging/ACK, snapshot/feed barrier and idempotent remote-apply evidence; the volatile reference provider itself still makes no restart-durability claim.
+
+
+## 12. Durable Storage provider and outbound authority status (2026-11-08)
+
+The durable `StorageDataProvider` implementation passes the inherited provider conformance suite against real `Fld1.Storage`, including process-reopen tests for stable mappings, local feed state, remote apply receipts and current array state. Its local feed rows carry stable 128-bit ChangeIds and preserve them across reopen until the feed row is acknowledged.
+
+`StorageSyncCoordinator.PublishLocalChanges` drains the complete currently-pending provider feed across pages and coalesces repeated unpublished LWW changes by canonical record/field identity, with record lifecycle tombstones handled separately. It validates every source entry and preserves original HLC/author. Before the explicit authority cutover, selected winners enter Node Outbox and are frozen into Metadata Store. After cutover, selected winners are frozen directly into Metadata Store; Node Outbox allocation is fenced and Node is rebuilt from a stable provider snapshot as an application-data cache.
+
+The cutover requires an empty/acknowledged provider feed and aligned Node/Metadata Store outbound high-watermarks. The provider persists the immutable cutover watermark. The coordinator consults the global ChangeId fingerprint ledger on replay: if a metadata freeze committed but provider ACK failed, already-frozen ChangeIds are retained and only the later unfrozen suffix is coalesced. This preserves the immutability boundary when newer local edits arrive before retry.
+
+Latest exact-green BIN-SYNC head `7cfddd45dec342f916a08f77a9521c831f6f8af7`: Core 665/665; Storage Integration 168/168 on Ubuntu/Windows/macOS; Fuzz/Lab 31/31; coverage threshold (>=50%) passed; in-process, real-TCP, ScenarioHarness, StorageArraySync and StorageArrayTcpSync samples pass. Durable Metadata Bench completed at the preceding code head `3b9db5b`; the one-million-row freeze case measured 218.1 µs / 7.77 KB (measurement only; earlier run was 196.9 µs / 7.77 KB). The current head additionally refreshes the complete 13-file Storage vendor snapshot from FLD-DB commit `a3abab3e0197f98aac12e9fdafcbfa204d9fbd77`; all 13 source/project files were verified byte-identical and exact-head CI passed again. Provider cutover clears Node Outbox payload projections (local and relay), clears the duplicate Node GlobalChangeLedger authority, fences legacy Node-owned receive, and exercises metadata-authoritative receive after cutover. Startup reconciliation replaces stale Node checkpoints from the authoritative provider snapshot while retaining only the distinct sequence/WAL replay fence.
+
+Provider and Metadata adapters attached to one `StorageDatabase` now share a transaction gate, so concurrent provider appends and metadata freezes serialize rather than racing on stale WAL commit sequences. `StorageDatabase.Open` also acquires a named OS-managed single-writer Mutex before snapshot/WAL recovery; same-process aliases are rejected by canonical identity, another process cannot open the partition, and the manager thread releases the Mutex on disposal from any caller thread. This remains a **provider-feed publication slice**, not the final FLD Database PendingLocal implementation. The source feed is a durable provider journal; it does not yet implement FLD's atomic StageSeq snapshot/freeze-intent promotion protocol from the cross-repository roadmap §7.22. True physical Storage power-loss/I/O fault injection, multi-process provider feed concurrency, FLD JournalSeq→ChangeId→OutboxSeq provenance, signed namespace roster/applied-origin frontiers, ChangeId GC and tombstone/ghost GC remain open. Receipt retirement is now fenced by transport epoch, PendingApply state, exact stale-reservation ACK or same-author-epoch replacement baseline coverage; dedicated conformance tests pass. FULL_REPLACE provider staging/switch is implemented, but signed roster installation and cross-store old-generation reclamation remain disabled. Deterministic on-disk WAL/snapshot crash-state tests pass in the Storage Integration suite.

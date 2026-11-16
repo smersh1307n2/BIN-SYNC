@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <PropertyGroup>
+    <Fld1RepositoryRoot Condition="'$(Fld1RepositoryRoot)' == ''">$(MSBuildThisFileDirectory)../../../FLD-DB</Fld1RepositoryRoot>
+    <Fld1DatabaseHostProject Condition="'$(Fld1DatabaseHostProject)' == ''">$(Fld1RepositoryRoot)/src/Fld1.Database.Host/Fld1.Database.Host.csproj</Fld1DatabaseHostProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="Fld1RepositoryRoot" Value="$(Fld1RepositoryRoot)" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FldBinSyncHost/FldBinSyncHost.csproj" />
+    <ProjectReference Include="$(Fld1DatabaseHostProject)" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

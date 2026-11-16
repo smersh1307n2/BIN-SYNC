@@ -1,0 +1,53 @@
+# StorageRelayProvenanceMap v3 golden row vector
+
+**Status:** deterministic storage-layout vector for T-pass verification; not a v3.1 wire-protocol vector.
+
+## Fixture
+
+- ScopeId UTF-8: `relay-provenance-sample`
+- LocalReplica: `A1 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00`
+- NamespaceId: 7
+- Original author: same NodeId as LocalReplica
+- Pre-resolved sequence pairs (ChangeId resolution is held in BIN-SYNC's global ChangeId ledger and is deliberately not duplicated here):
+  - JournalSeq=1 → OutboxSeq=1
+  - JournalSeq=1 → OutboxSeq=2
+  - JournalSeq=2 → OutboxSeq=3
+- Cursor: ScannedThroughJournalSeq=3, AckedThroughOutboxSeq=0, AckedThroughJournalSeq=0
+
+## Expected root and rows
+
+All hex is byte-for-byte, no separators.
+
+- Root (49 bytes):  
+  `6d9e6faca73b9c79895fbe1b4bd8cbcac70bf72ae6ec45dc4f1e7fb7f60d82c00aa1000000000000000000000000000000`
+
+- Cursor key (68 bytes):  
+  `6d9e6faca73b9c79895fbe1b4bd8cbcac70bf72ae6ec45dc4f1e7fb7f60d82c00aa1000000000000000000000000000000010700a1000000000000000000000000000000`
+
+- Cursor value (60 bytes; RPM3 + three u64 watermarks + XOR/SHA-256 mapping-set digest):  
+  `52504d3303000000000000000000000000000000000000000000000095b59cbf02ea5372b465383eed641ea73f41bbde625f3a34022e0b757339a172`
+
+- Mapping 1 key/value (76/8 bytes; OutboxSeq=1):  
+  Key: `6d9e6faca73b9c79895fbe1b4bd8cbcac70bf72ae6ec45dc4f1e7fb7f60d82c00aa1000000000000000000000000000000020700a10000000000000000000000000000000000000000000001`  
+  Value: `0100000000000000`
+
+- Mapping 2 key/value (76/8 bytes; OutboxSeq=2):  
+  Key: `6d9e6faca73b9c79895fbe1b4bd8cbcac70bf72ae6ec45dc4f1e7fb7f60d82c00aa1000000000000000000000000000000020700a10000000000000000000000000000000000000000000002`  
+  Value: `0100000000000000`
+
+- Mapping 3 key/value (76/8 bytes; OutboxSeq=3):  
+  Key: `6d9e6faca73b9c79895fbe1b4bd8cbcac70bf72ae6ec45dc4f1e7fb7f60d82c00aa1000000000000000000000000000000020700a10000000000000000000000000000000000000000000003`  
+  Value: `0200000000000000`
+
+## Required assertions
+
+1. Cursor and mapping keys share the same 49-byte root.
+2. Cursor kind is `01`; mapping kind is `02`.
+3. NamespaceId is little-endian u16.
+4. OutboxSeq is big-endian u64 in the mapping key, so prefix-cursor order is destination sequence order.
+5. Mapping value is only little-endian JournalSeq[8]. ChangeId is not copied into this table: the caller must resolve each FLD ChangeId through BIN-SYNC's durable global ChangeId ledger before calling `AppendPage`.
+6. Cursor marker is ASCII `RPM3`, followed by scanned JournalSeq, ACKed OutboxSeq, ACKed JournalSeq (little-endian u64 each), then the 32-byte mapping-set digest.
+7. Mapping-set digest is the XOR of SHA-256(`key || value`) for every retained mapping row. Append and prune update rows and digest in the same Storage write batch; restart recomputes it from bounded prefix pages and compares in constant time.
+8. No ChangeId, OriginSequence, payload, fingerprint or peer-specific ACK is duplicated in a mapping row.
+
+T-pass must compare these bytes against actual persisted rows produced by the sample and reject any mismatch.
