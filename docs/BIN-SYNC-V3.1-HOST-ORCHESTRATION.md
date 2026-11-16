@@ -154,3 +154,12 @@ The process-isolated sample adapter `FldBinSyncAsyncHostAdapter` exposes:
 Readiness is deliberately weaker than candidate authorization. The compactor still validates each Receipt's retired transport epoch and receive-chain fence; each ChangeId's signed origin frontier and all Metadata/Host references; and each field/record tombstone's signed origin proof, installed FULL_REPLACE generation, exact provider identity and Host reference/pin state. A readiness report must never be used to turn on a feature flag.
 
 All three `StorageNamespaceGcFeatureOptions` switches remain false by default. The embedding application owns cadence, scheduling, logging, retention policy and the operator kill switch. The sample performs one bounded round only; it does not create a background timer or silently enable GC.
+
+
+### Stable blocker codes and durable operator policy contract
+
+`FldBinSyncGcDomainReadiness.Blockers` provides stable `FldBinSyncGcBlockerCode` identifiers paired with the human-readable `BlockedReasons`. Existing string consumers remain supported. Unknown messages map to `Unclassified`; consumers must preserve the message and must not interpret the code as candidate authorization.
+
+The optional Host sample defines `IFldBinSyncGcOperatorPolicyStore`, `IFldBinSyncGcOperatorAuthorizer` and `FldBinSyncGcOperatorPolicyCoordinator`. A host implementation must atomically compare-and-swap the policy generation and append its audit entry in one durable transaction. The policy is bound to Metadata scope, local replica and namespace; generations and audit sequences are monotonic; actor, action, reason and independently selected domains are recorded. The authorizer is application supplied. Call `RestoreAsync` before scheduling maintenance. Missing/corrupt/unavailable state fails closed. Policy commits before runtime gates open and can never override false startup GC feature options.
+
+`EmergencyStop()` remains an unconditional process-local action and does not depend on the durable policy/audit store. This sample deliberately does not provide a production store adapter, identity provider or remote admin API. Multi-process CAS, concrete durable reopen/corruption/backup tests and Windows power-loss evidence remain open. All physical-GC flags remain false by default; Ghost GC remains excluded.
