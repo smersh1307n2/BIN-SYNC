@@ -1,5 +1,38 @@
 # Production status — BinSync.Net vs BIN-SYNC CORE
 
+# Current stabilization and production-readiness checkpoint — 2026-11-16
+
+**Current direction:** freeze new protocol features; stabilize exact-head CI, eliminate FLD Storage source drift, finish Option B, then implement bounded-memory disk-backed Storage/Run access. This is the active cross-repository priority, not a protocol redesign. See [BIN-SYNC Roadmap v3 — Current engineering direction](BIN-SYNC-ROADMAP-v3.md).
+
+## Exact-head CI failure and corrective test change
+
+- BIN-SYNC exact HEAD eccadf1e91ad1832c7b30f017338d1b49f444a4e had a real failed BinSync.Net workflow: [run 43797658868](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43797658868). Both Ubuntu and Windows FLD Host Adapter jobs hung in FldBinSyncGcOperatorPolicyTests.Emergency_stop_wins_against_policy_restore_that_is_applying; the blame-hang timeout fired. This was not merely a cancelled run.
+- The test was changed to use a controllably blocked policy-store read, then invoke EmergencyStop() while RestoreAsync() is suspended. Change: 5a3b08c92c0c7cd02305998de8a4b54cb9c5aaea (test(gc): make emergency restore race deterministic). This makes the intended race cut deterministic rather than blocking inside a cancellation callback.
+- Exact-head BinSync.Net run [43799025146](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43799025146) and FLD Storage Integration run [43799025173](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43799025173) were in progress at the time of this update. The fix is not yet T-pass/CI-pass until both workflows complete successfully on this exact SHA. Older green runs do not validate this head.
+
+## Confirmed storage and integration gaps
+
+- FLD-DB/src/Fld1.Storage/Engine/StorageDatabase.cs retains all values in an in-memory Dictionary<StorageKey, byte[]>; snapshots are not a disk-paged index with a bounded cache. Large databases therefore require RAM proportional to the resident key/value set, with additional snapshot/index overhead.
+- FLD-DB/src/Fld1.Database/Fld1.Engine/Db/FldDatabase.cs EnsureRunCached reads whole Run files into byte arrays and retains them in _runs. Run access is not yet bounded/streaming.
+- FLD Database has both the generic StorageBlobStore path and legacy .fld1 Run mirrors. Option B is not a completed single-engine/single-write-path cutover; compatibility mirrors remain part of the current implementation.
+- BIN-SYNC external/Fld1.Storage is a vendored copy and has diverged from FLD-DB src/Fld1.Storage: the authoritative FLD tree contains StorageBlobStore and Ipc sources that are absent from the vendored copy, and the StorageDatabase source revisions differ. storage-integration.yml currently builds/tests the vendored copy. Therefore a green BIN-SYNC Storage Integration workflow alone does not prove conformance against current FLD-DB Storage.
+- BinSync.Core.Node still has its own _storage/NodePersistence path. Provider-authoritative operation must be audited for duplicate residency and authority boundaries before claiming a single source of truth.
+- The policy/audit interface and test doubles are not a concrete production durable IFldBinSyncGcOperatorPolicyStore. Cross-process CAS/leases, durable audit retention, backup/restore and corruption recovery remain open.
+
+## Ordered release work
+
+1. Deterministic exact-head CI on both workflows and all matrix jobs.
+2. One reproducible FLD Storage source of truth: pinned package/source revision or temporary vendoring with enforced byte-for-byte provenance/drift checks.
+3. Finish Option B: remove legacy Run mirrors only after format compatibility, restart/recovery and rollback tests.
+4. Disk-paged Storage index and bounded cache; streaming Run readers; explicit RAM budget and representative peak-RSS measurements.
+5. Audit and reduce duplicate Node/Metadata/Provider data residency in provider-authoritative mode.
+6. Concrete durable GC policy/audit/lease store; keep all physical GC flags default-off until independent release gates pass.
+7. Promote Host adapter to a production library/package and decompose large classes incrementally.
+
+**Non-negotiable release gates:** Windows NTFS hardware power-loss evidence; 100k–1M+ long-history tests with p95/p99 and honest peak RSS; signed-proof and retention correctness; process-reopen/fault-injection tests; operator-visible blocked reasons; rollback and staged canary. Process restart is not hardware power-loss evidence. Physical Receipt/ChangeId/Tombstone GC stays disabled by default; Ghost GC stays excluded.
+
+
+
 ## Exact-head FLD integration gate — 2026-11-11
 
 - BIN-SYNC commit 2d65688a passed workflow run 42963323793: Linux and Windows .NET jobs each passed 678/678; benchmark build, samples, fuzz/lab, coverage threshold and v3.1 vectors passed.
