@@ -1360,14 +1360,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
-    /// Check BIN-SYNC-owned pending work for any operation on a record. Malformed
-    /// retained payloads fail closed. A pending immutable peer reservation blocks
-    /// conservatively because it may retain a payload copy no longer in the live page.
-    /// </summary>
-    /// <summary>
     /// Find only references to a bounded candidate page. Unlike
-    /// TryBuildLiveRecordReferenceSet this does not materialize every referenced
-    /// RecordId in the namespace; retained payloads are decoded once and only matches
+    /// Unlike namespace-wide reference-set materialization, this does not retain every
+    /// referenced RecordId; retained payloads are decoded once and only matches
     /// against the supplied candidate page are retained. A pending peer reservation
     /// or malformed payload keeps the whole page fail-closed.
     /// </summary>
