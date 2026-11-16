@@ -92,12 +92,10 @@ public sealed class FldBinSyncHostAdapter
     /// final fail-closed switch.
     /// </summary>
     public int CompactTombstones(
-        StorageNamespaceGcStore gcStore, TrustStore trustStore, int limit = 256)
+        StorageNamespaceGcStore gcStore, TrustStore trustStore)
     {
         ArgumentNullException.ThrowIfNull(gcStore);
         ArgumentNullException.ThrowIfNull(trustStore);
-        if (limit <= 0 || limit > 4096)
-            throw new ArgumentOutOfRangeException(nameof(limit));
         if (!_coordinator.UsesNamespaceGcStore(gcStore) ||
             !_coordinator.UsesNamespaceGcTrustStore(trustStore))
             throw new InvalidOperationException(
@@ -107,10 +105,6 @@ public sealed class FldBinSyncHostAdapter
 
         using TombstoneGcCommitLease commitLease =
             _coordinator.AcquireTombstoneGcCommitGuard(_database.AcquireCommitGuard);
-        IReadOnlySet<RecordId>? liveRecordReferences = commitLease.LiveRecordReferences;
-        if (liveRecordReferences is null)
-            return 0; // Unknown payloads or a pending immutable peer reservation block the pass.
-
         using FldReferenceSnapshot references = _database.OpenReferenceSnapshot();
         FldDraftHorizon draftHorizon = references.UnpublishedLocalDraftHorizon;
         if (references.HasSnapshotPin || draftHorizon.Count != 0 ||
@@ -136,7 +130,7 @@ public sealed class FldBinSyncHostAdapter
                 return false;
 
             RecordId recordId = RecordId.From(candidate.RecordId.Span);
-            if (liveRecordReferences.Contains(recordId) ||
+            if (commitLease.HasLiveRecordReference(recordId) ||
                 references.HasChangeIdReference(candidate.ChangeId.Span) ||
                 references.HasRecordReference(candidate.RecordId.Span, candidate.ChangeId.Span))
                 return false;
@@ -146,7 +140,7 @@ public sealed class FldBinSyncHostAdapter
                 roster, trustStore, author, candidate.OriginAuthorEpoch,
                 candidate.OriginSequence, candidate.HlcWall, candidate.HlcLogical,
                 generation, digest);
-        }, limit);
+        });
     }
 
     /// <summary>
@@ -178,7 +172,7 @@ public sealed class FldBinSyncHostAdapter
         int receipts = _metadataStore.CompactReceipts(
             _scopeId, localReplica, namespaceId, limit,
             acquireMetadataGcLease, scanner);
-        int tombstones = CompactTombstones(gcStore, trustStore, limit);
+        int tombstones = CompactTombstones(gcStore, trustStore);
 
         return new FldBinSyncGcPassResult(
             changeIds, receipts, tombstones,
