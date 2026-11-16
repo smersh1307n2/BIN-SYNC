@@ -81,25 +81,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Guid spoolToken, CancellationToken cancellationToken = default)
             => _inner.AbortTombstoneGcApprovalSpoolAsync(spoolToken, cancellationToken);
 
-        public async ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
-            int limit, CancellationToken cancellationToken = default)
-        {
-            // Leave a durable provider snapshot pin open, then kill the Host before
-            // candidate enumeration or physical deletion. Reopen must discard the stale
-            // process-owned pin while preserving the tombstone.
-            var provider = (IAsyncDataProvider)_inner;
-            ProviderSnapshotHandle snapshot = await provider.OpenSnapshotAsync(cancellationToken);
-            if (snapshot.Token == Guid.Empty)
-                throw new InvalidDataException("Crash probe did not obtain a durable provider snapshot.");
-            _host.Kill(entireProcessTree: true);
-            await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
-            throw new IOException("Injected host death with a provider GC snapshot pin open.");
-        }
-
-        public ValueTask<int> CompactTombstonesAsync(
-            IReadOnlyList<ProviderMutation> approvedCandidates,
-            int limit, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("The pre-delete crash cut must not compact candidates.");
     }
 
     private sealed class CrashAfterTombstoneDelete : IAsyncProviderTombstoneGc
@@ -155,20 +136,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Guid spoolToken, CancellationToken cancellationToken = default)
             => _inner.AbortTombstoneGcApprovalSpoolAsync(spoolToken, cancellationToken);
 
-        public ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
-            int limit, CancellationToken cancellationToken = default)
-            => _inner.ReadTombstoneGcCandidatesAsync(limit, cancellationToken);
-
-        public async ValueTask<int> CompactTombstonesAsync(
-            IReadOnlyList<ProviderMutation> approvedCandidates,
-            int limit, CancellationToken cancellationToken = default)
-        {
-            int deleted = await _inner.CompactTombstonesAsync(
-                approvedCandidates, limit, cancellationToken);
-            _host.Kill(entireProcessTree: true);
-            await _host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
-            throw new IOException($"Injected host death after durable tombstone delete ({deleted}) and before coordinator completion.");
-        }
     }
     private sealed class BlockingAsyncGcReferenceScanner : IAsyncApplicationGcReferenceScanner
     {
