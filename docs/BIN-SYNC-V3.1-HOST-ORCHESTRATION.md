@@ -171,10 +171,22 @@ For production composition, construct `FldBinSyncAsyncHostAdapter` with the dura
 
 
 
-### FLD Tombstone GC sweep contract (implementation pending)
 
-The per-domain bounded-page description above continues to apply to Metadata Receipt and ChangeId compactors. FLD physical Tombstone GC is a different storage operation: candidate-count paging must not trigger a full namespace rewrite for every page. The target FLD contract is one logical namespace sweep with one ordered source scan, bounded per-record state, chunked immutable Run output and one Manifest publication. BIN-SYNC's Tombstone policy lease and Metadata writer-admission/maintenance lease remain held through candidate enumeration, proof evaluation, approval transfer and final sweep. The provider snapshot is released before the FLD Host-wide GC lease is acquired for the final Host reference scan and Manifest publication. Do not release the proof/Metadata fences between candidate pages.
+### FLD Tombstone GC sweep contract (first implementation block landed)
 
-The FLD API and this adapter's Tombstone call path must be migrated together. Candidate discovery must use one snapshot-scoped sequential page cursor; approved exact identities must be streamed in bounded IPC batches to a Host-owned temporary spool, sealed with count/digest validation, and consumed by the one FLD sweep after the provider snapshot is released. Do not materialize a namespace-sized candidate/approved list or keep a compatibility loop that repeatedly invokes full FLD compaction. The spool is disposable scratch, never a recovery journal; Host restart discards it. Receipt/ChangeId bounded pages and their durable cursors are unchanged. The exact algorithm, failure model and acceptance tests are in the [FLD Tombstone GC Single-Sweep ADR](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/FLD-TOMBSTONE-GC-SINGLE-SWEEP-ADR.md).
+FLD physical Tombstone GC is one logical namespace sweep, not a bounded deletion quota. The adapter limit argument is the provider metadata page size (1..256); the coordinator reads the entire immutable snapshot to exhaustion and commits all currently proof-approved candidates in one Host operation. Receipt and ChangeId Metadata GC keep their independent bounded-page/cursor semantics.
 
-Until that implementation and exact-head cross-repository validation pass, keep every physical-GC flag false by default. This note does not authorize production GC.
+The implemented process-isolated flow is:
+
+1. BIN-SYNC acquires the Tombstone policy lease and Metadata writer-admission lease for the complete logical operation.
+2. The FLD provider opens one immutable candidate snapshot. The coordinator advances one monotonic page cursor, checks the existing signed proof and Metadata references page by page, and streams only approved exact identities to the Host-owned approval spool in bounded batches.
+3. The candidate snapshot is released before the Host-wide GC lease is acquired.
+4. The provider opens a Tombstone-specific Host reference scan. The Host seals committed WAL before capturing that final reference snapshot. A failed seal, outstanding provider snapshot pin or unpublished draft fails closed.
+5. The Host commit requires the lease owner and active reference scan, reuses that same post-seal snapshot for exact ChangeId/RecordId reference checks, consumes the ordered approval spool during one FLD compaction, and publishes the replacement Runs through one Manifest update.
+6. The Host lease fence and database commit guard remain held through Manifest publication. The final synchronous commit is not interrupted by caller cancellation once it starts; cancellation before that boundary aborts the spool and releases admission.
+
+The Host spool is temporary scratch, not a journal or resume source. It validates strict RecordId/FieldId order and uniqueness, seals count + SHA-256, is bound to one IPC client/session, is capped at 2M entries and four active sessions, and is deleted on commit, abort, disconnect, lease cleanup and Host startup. No candidate-array compatibility loop remains in the provider interface or FLD IPC client/dispatcher.
+
+The two-Host regression uses page size 1 with two safe tombstones and verifies that one logical pass reclaims both on each Host, then restarts both Hosts and verifies the complete sweep remains durable.
+
+**Remaining gates:** Metadata reference payloads are currently rescanned once per candidate page, so CPU may grow with page count; overlay snapshot residency and peak managed heap/RSS are not yet measured; no composed 1M Tombstone candidate benchmark has run. Direct Metadata writer-bypass fencing, concrete durable operator policy/audit storage, Windows NTFS power-loss evidence, retention/rollback policy and staged canary remain open. All physical-GC flags remain default-off; Ghost GC remains excluded.
