@@ -2653,7 +2653,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 started.Reset();
                 Task ackTask;
                 using (metadataA.AcquireTombstoneGcCommitGuard(
-                    scope, nodeA.NodeId, namespaceId, gcA, trust, out _))
+                    scope, nodeA.NodeId, checked((int)namespaceId), gcA, trust))
                 {
                     ackTask = Task.Run(() =>
                     {
