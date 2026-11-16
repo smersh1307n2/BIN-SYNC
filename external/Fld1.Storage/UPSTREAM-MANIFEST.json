@@ -1,7 +1,7 @@
 {
   "source_repository": "smersh1307n2/FLD-DB",
   "source_branch": "fix/crash-consistency-outbox",
-  "source_commit": "8a78251c4b22d5274728a00fa199a3f8ec1173bd",
+  "source_commit": "6b35acd4a3c5b53c611a27e253edf874f226dbff",
   "source_path": "src/Fld1.Storage",
   "files": {
     "Engine/StorageBlobStore.cs": "aeb4e73bae4826f598beeb7d65c31f2e82a039ad",
@@ -28,6 +28,6 @@
     "Engine/StoragePageCache.cs": "4a7a764db242180c096788945a3234c070e160b6",
     "Engine/StorageGenerationPins.cs": "6bba96769869182e5d2e106a190240a7164b98e0",
     "Engine/StorageRandomAccessFile.cs": "4276b4521a6d75e129d5441e83936001fdbe5263",
-    "Engine/StorageBTreePageCodec.cs": "b70b57e9d78c1470c56291f16de65863f8234f6d"
+    "Engine/StorageBTreePageCodec.cs": "d57fa20812e46c4f8dd749cb7ff572be8907a70a"
   }
 }
