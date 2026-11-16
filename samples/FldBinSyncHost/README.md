@@ -267,11 +267,13 @@ Operational rules:
    authority. Do not treat process-restart tests as Windows NTFS power-loss
    durability evidence.
 
-The current switches are startup configuration, not an emergency in-process
-kill switch. A production rollout still needs an operator-owned stop mechanism,
-durable configuration/audit trail, blocked-reason telemetry, rollback exercise,
-retention policy and staged canary. Until those are implemented and the
-remaining V3 release gates pass, physical GC stays disabled.
+The durable feature switches are startup configuration; the process-local
+emergency stop API below is an additional in-process brake, not a substitute
+for durable operator policy. A production rollout still needs an authenticated
+operator control plane, durable configuration/audit trail, blocked-reason
+telemetry, a demonstrated rollback exercise, retention policy and staged
+canary. Until those controls and the remaining V3 release gates pass, physical
+GC stays disabled.
 
 ### Runtime emergency stop API
 
@@ -283,7 +285,7 @@ The control is process-local and starts with all three domains disabled. Hosts m
 - Call `Start()` to open the global maintenance gate.
 - Call `SetEnabled(FldBinSyncGcDomain.Receipt, true)`,
   `SetEnabled(FldBinSyncGcDomain.ChangeId, true)` or
-  `SetEnabled(FldBinSyncGcDomain.Tombstone, true` only for individually approved
+  `SetEnabled(FldBinSyncGcDomain.Tombstone, true)` only for individually approved
   domains. The corresponding durable `StorageNamespaceGcFeatureOptions` switch
   must also have been enabled when the GC store was constructed.
 - Call `Stop()` for an emergency stop. It closes all domain gates and cancels
