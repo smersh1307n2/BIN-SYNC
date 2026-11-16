@@ -456,6 +456,15 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 scope, local, namespaceId, out HashSet<RecordId> pendingReferences));
             Assert.Contains(pendingMutation.RecordId, pendingReferences);
 
+            RecordId unrelatedCandidate = Mutation(0x33, 0x47, 3).RecordId;
+            Assert.True(store.TryFindLiveRecordReferences(
+                scope, local, namespaceId,
+                new[] { pendingMutation.RecordId, unrelatedCandidate },
+                out HashSet<RecordId> boundedPendingReferences));
+            Assert.Contains(pendingMutation.RecordId, boundedPendingReferences);
+            Assert.DoesNotContain(unrelatedCandidate, boundedPendingReferences);
+            Assert.Single(boundedPendingReferences);
+
             ProviderMutation outboundMutation = Mutation(0x32, 0x45, 2);
             store.FreezeOutbound(scope, local, 8, author, new[]
             {
@@ -471,6 +480,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 scope, local, 8, out HashSet<RecordId> outboundReferences));
             Assert.Contains(outboundMutation.RecordId, outboundReferences);
             Assert.DoesNotContain(outboundMutation.RecordId, pendingReferences);
+            Assert.True(store.TryFindLiveRecordReferences(
+                scope, local, 8, new[] { outboundMutation.RecordId },
+                out HashSet<RecordId> boundedOutboundReferences));
+            Assert.Contains(outboundMutation.RecordId, boundedOutboundReferences);
 
             CompleteBaseline(store, scope, local, peer, 1, namespaceId, author);
             store.ReserveOutboundBatch(scope, local, peer, 1, namespaceId, author,
@@ -486,6 +499,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 });
             Assert.False(store.TryBuildLiveRecordReferenceSet(
                 scope, local, namespaceId, out _));
+            Assert.False(store.TryFindLiveRecordReferences(
+                scope, local, namespaceId, new[] { pendingMutation.RecordId }, out _));
 
             store.FreezeOutbound(scope, local, 9, author, new[]
             {
@@ -499,6 +514,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             });
             Assert.False(store.TryBuildLiveRecordReferenceSet(
                 scope, local, 9, out _));
+            Assert.False(store.TryFindLiveRecordReferences(
+                scope, local, 9, new[] { pendingMutation.RecordId }, out _));
         }
         finally
         {
