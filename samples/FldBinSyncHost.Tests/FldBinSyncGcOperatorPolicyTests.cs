@@ -151,6 +151,14 @@ public sealed class FldBinSyncGcOperatorPolicyTests
         Assert.False(runtime.IsRunning);
         Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.Receipt));
         Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.ChangeId));
+
+        // Restore must not clear an emergency latch. Only a new explicit,
+        // authorized policy update may reopen maintenance.
+        await coordinator.RestoreAsync();
+        Assert.False(runtime.IsRunning);
+        await coordinator.UpdateAsync(new(Binding(), 1, "operator-1", "explicitly resume after emergency stop",
+            true, true, false, false));
+        Assert.True(runtime.IsEnabled(FldBinSyncGcDomain.Receipt));
     }
 
 
