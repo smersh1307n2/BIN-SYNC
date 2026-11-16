@@ -75,8 +75,7 @@ public sealed class FldDatabaseWalSealRecoveryTests
                 }
 
                 // No reference snapshot may remain pinned during physical deletion.
-                Assert.Equal(1, reopened.CompactTombstones(
-                    _ => true, limit: 1));
+                Assert.Equal(1, reopened.CompactTombstones(_ => true));
                 Assert.False(reopened.TryResolve(recordId, 7, out _));
             }
 
