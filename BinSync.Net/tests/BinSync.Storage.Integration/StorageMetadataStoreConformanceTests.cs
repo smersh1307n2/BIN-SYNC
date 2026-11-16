@@ -452,9 +452,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             };
             store.BeginPendingApply(incoming, Guid.Parse("a4540000-0000-0000-0000-000000000001"));
 
-            Assert.True(store.TryBuildLiveRecordReferenceSet(
-                scope, local, namespaceId, out HashSet<RecordId> pendingReferences));
-            Assert.Contains(pendingMutation.RecordId, pendingReferences);
+            Assert.True(store.HasLiveRecordReference(
+                scope, local, namespaceId, pendingMutation.RecordId));
 
             RecordId unrelatedCandidate = Mutation(0x33, 0x47, 3).RecordId;
             Assert.True(store.TryFindLiveRecordReferences(
@@ -476,10 +475,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     OriginAuthorEpoch = 1
                 }
             });
-            Assert.True(store.TryBuildLiveRecordReferenceSet(
-                scope, local, 8, out HashSet<RecordId> outboundReferences));
-            Assert.Contains(outboundMutation.RecordId, outboundReferences);
-            Assert.DoesNotContain(outboundMutation.RecordId, pendingReferences);
+            Assert.False(store.HasLiveRecordReference(
+                scope, local, namespaceId, outboundMutation.RecordId));
+            Assert.True(store.HasLiveRecordReference(
+                scope, local, 8, outboundMutation.RecordId));
             Assert.True(store.TryFindLiveRecordReferences(
                 scope, local, 8, new[] { outboundMutation.RecordId },
                 out HashSet<RecordId> boundedOutboundReferences));
@@ -497,8 +496,6 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     BatchDigest = Enumerable.Repeat((byte)0x48, 16).ToArray(),
                     Payload = pendingPayload
                 });
-            Assert.False(store.TryBuildLiveRecordReferenceSet(
-                scope, local, namespaceId, out _));
             Assert.False(store.TryFindLiveRecordReferences(
                 scope, local, namespaceId, new[] { pendingMutation.RecordId }, out _));
 
@@ -512,8 +509,6 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     OriginAuthorEpoch = 1
                 }
             });
-            Assert.False(store.TryBuildLiveRecordReferenceSet(
-                scope, local, 9, out _));
             Assert.False(store.TryFindLiveRecordReferences(
                 scope, local, 9, new[] { pendingMutation.RecordId }, out _));
         }
@@ -606,22 +601,22 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             }
 
             using var recovered = new StorageMetadataStore(directory, 455, deleteOnDispose: true);
-            Assert.True(recovered.TryBuildLiveRecordReferenceSet(
-                scope, local, pendingNamespace, out HashSet<RecordId> pendingReferences));
-            Assert.Contains(pendingMutation.RecordId, pendingReferences);
-            Assert.True(recovered.TryBuildLiveRecordReferenceSet(
-                scope, local, outboundNamespace, out HashSet<RecordId> outboundReferences));
-            Assert.Contains(outboundMutation.RecordId, outboundReferences);
-            Assert.DoesNotContain(outboundMutation.RecordId, pendingReferences);
-            Assert.DoesNotContain(pendingMutation.RecordId, outboundReferences);
+            Assert.True(recovered.HasLiveRecordReference(
+                scope, local, pendingNamespace, pendingMutation.RecordId));
+            Assert.True(recovered.HasLiveRecordReference(
+                scope, local, outboundNamespace, outboundMutation.RecordId));
+            Assert.False(recovered.HasLiveRecordReference(
+                scope, local, pendingNamespace, outboundMutation.RecordId));
+            Assert.False(recovered.HasLiveRecordReference(
+                scope, local, outboundNamespace, pendingMutation.RecordId));
             var peerState = recovered.GetPeerStreamState(scope, local, sender, 1, 9, author);
             var reservation = Assert.IsType<MetadataOutboundBatchReservation>(peerState.PendingBatch);
             Assert.Equal(Batch(0x67), reservation.BatchId);
             Assert.Equal(1UL, reservation.CursorStart);
             Assert.Equal(1UL, reservation.CursorEnd);
             Assert.Equal(ProviderMutationCodec.Encode(reservedMutation), reservation.Payload);
-            Assert.False(recovered.TryBuildLiveRecordReferenceSet(
-                scope, local, 9, out _)); // Recovered immutable reservation blocks the entire GC proof.
+            Assert.True(recovered.HasLiveRecordReference(
+                scope, local, 9, reservedMutation.RecordId)); // Recovered immutable reservation blocks every candidate conservatively.
         }
         finally
         {
