@@ -51,7 +51,13 @@ public sealed class TombstoneGcCommitLease : IDisposable
     }
 
     public void Dispose()
-        => Interlocked.Exchange(ref _inner, null)?.Dispose();
+    {
+        if (_inner is null)
+            return;
+        if (Environment.CurrentManagedThreadId != _ownerThreadId)
+            throw new InvalidOperationException("Tombstone-GC commit leases must be disposed on the acquiring thread.");
+        Interlocked.Exchange(ref _inner, null)?.Dispose();
+    }
 }
 
 /// <summary>
