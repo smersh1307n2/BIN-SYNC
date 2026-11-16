@@ -300,3 +300,16 @@ durable, authenticated operator control plane and audit trail. A cancellation
 requested after a page's durable commit may stop only the next operation; it
 cannot roll back an already committed page. Always inspect durable state and
 readiness after stopping or restarting.
+
+
+### Durable operator policy contract and readiness blocker codes
+
+The sample now defines `IFldBinSyncGcOperatorPolicyStore`, `IFldBinSyncGcOperatorAuthorizer` and `FldBinSyncGcOperatorPolicyCoordinator`. This is an application integration contract, not a built-in durable store or identity provider. The host must supply a store that atomically compare-and-swaps the policy generation and appends the corresponding audit entry in one durable transaction. A store implementation must reject corrupt records and mismatched (scope, local replica, namespace) bindings.
+
+Each committed update carries a strictly increasing policy generation and audit sequence, actor identity, action, reason, affected domains and UTC audit timestamp. The timestamp is audit metadata only; it is never a GC horizon or deletion criterion. The coordinator authenticates/authorizes the actor through the host-supplied authorizer, rejects stale expected generations, commits the policy/audit pair before opening runtime gates, and serializes updates/restores within one coordinator instance. The durable store's atomic compare-and-swap remains mandatory across multiple processes.
+
+On startup, call `RestoreAsync` before scheduling any maintenance. Missing policy leaves the runtime stopped; corrupt, mismatched or unavailable policy also stops it and propagates the error. A persisted policy can only restrict the independent startup `StorageNamespaceGcFeatureOptions`; it cannot override a false startup flag. The runtime emergency brake remains separate: `EmergencyStop()` calls the local `Stop()` directly and does not consult the policy or audit store, so it remains available during a durable-store outage. A later policy restore/update is required to reopen domains.
+
+`FldBinSyncGcDomainReadiness.Blockers` exposes stable `FldBinSyncGcBlockerCode` identifiers alongside the existing human-readable `BlockedReasons` strings. Unknown future messages map to `Unclassified` rather than being silently treated as a known condition. Consumers should alert on the stable code and retain the message for operator context; neither a blocker code nor a readiness snapshot authorizes candidate deletion.
+
+No concrete production policy-store adapter, identity provider, remote admin endpoint, retention/backup implementation or power-loss durability claim is included yet. Until those application-owned pieces and the remaining V3 release gates are implemented and validated, keep all physical-GC startup flags false and Ghost GC excluded.
