@@ -523,23 +523,6 @@ public sealed class StorageNamespaceGcStoreTests
             return ValueTask.CompletedTask;
         }
 
-        public ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
-            int limit, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            ReadCalls++;
-            return ValueTask.FromResult<IReadOnlyList<ProviderMutation>>(_candidates.Take(limit).ToArray());
-        }
-
-        public ValueTask<int> CompactTombstonesAsync(
-            IReadOnlyList<ProviderMutation> approvedCandidates,
-            int limit, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            CompactCalls++;
-            Approved = approvedCandidates.ToArray();
-            return ValueTask.FromResult(Approved.Count);
-        }
     }
 
     [Theory]
