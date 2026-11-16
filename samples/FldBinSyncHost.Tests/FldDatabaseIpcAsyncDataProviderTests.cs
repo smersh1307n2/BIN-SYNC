@@ -597,20 +597,20 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     {
                         RecordId = RecordId.From(ScaleId(1_000_000 + sequence)),
                         FieldId = 7,
-                        AuthorNodeId = authority,
+                        AuthorNodeId = relayPeer,
                         KeyEpoch = 0,
                         Value = [0x5A],
                         ChangeId = changeId,
-                        OriginAuthorEpoch = 8,
+                        OriginAuthorEpoch = 12,
                         OriginSequence = (ulong)sequence,
                         HlcWall = 100,
                         HlcLogical = 1
                     };
                     operations[i] = new MetadataOperation
                     {
-                        AuthorNodeId = authority,
+                        AuthorNodeId = relayPeer,
                         ChangeId = changeId,
-                        OriginAuthorEpoch = 8,
+                        OriginAuthorEpoch = 12,
                         OriginSequence = (ulong)sequence,
                         Fingerprint = ScaleId(300_000 + sequence),
                         Payload = ProviderMutationCodec.Encode(payloadMutation),
@@ -627,7 +627,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     SenderPeer = authority,
                     SenderEpoch = 8,
                     TransportPeerEpoch = 1,
-                    AuthorStreamNodeId = authority,
+                    AuthorStreamNodeId = relayPeer,
                     NamespaceId = checked((int)namespaceId),
                     BatchId = BatchId.From(ScaleId(400_000 + batchIndex)),
                     CursorStart = (ulong)start + 1,
@@ -641,7 +641,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 previousMetadataDigest = batchDigest;
             }
             Assert.NotEmpty(metadata.ReadRelay(
-                scope, local, checked((int)namespaceId), authority, 0, 16).Items);
+                scope, local, checked((int)namespaceId), relayPeer, 0, 16).Items);
 
             // Seed live values and then immutable field tombstones through the real
             // FLD remote APPLY IPC. This guarantees every candidate is a tombstone of
@@ -727,6 +727,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
                             ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
+                        },
+                        new AppliedOriginFrontierEntry
+                        {
+                            OriginAuthorNodeId = relayPeer,
+                            OriginAuthorEpoch = 12,
+                            ContiguousAppliedOriginSequence = (ulong)candidateCount
                         }
                     ],
                     IssuedOrigins =
@@ -735,6 +741,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorEpoch = 8,
                             IssuedOriginSequence = (ulong)(candidateCount * 2),
+                            MaxIssuedHlcWall = 100,
+                            MaxIssuedHlcLogical = 1
+                        },
+                        new IssuedOriginFrontierEntry
+                        {
+                            OriginAuthorEpoch = 12,
+                            IssuedOriginSequence = (ulong)candidateCount,
                             MaxIssuedHlcWall = 100,
                             MaxIssuedHlcLogical = 1
                         }
@@ -756,6 +769,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
                             ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
+                        },
+                        new AppliedOriginFrontierEntry
+                        {
+                            OriginAuthorNodeId = relayPeer,
+                            OriginAuthorEpoch = 12,
+                            ContiguousAppliedOriginSequence = (ulong)candidateCount
                         }
                     ]
                 }, keys[2].Seed), roster);
@@ -775,6 +794,22 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
                             ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
+                        },
+                        new AppliedOriginFrontierEntry
+                        {
+                            OriginAuthorNodeId = relayPeer,
+                            OriginAuthorEpoch = 12,
+                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                        }
+                    ],
+                    IssuedOrigins =
+                    [
+                        new IssuedOriginFrontierEntry
+                        {
+                            OriginAuthorEpoch = 12,
+                            IssuedOriginSequence = (ulong)candidateCount,
+                            MaxIssuedHlcWall = 100,
+                            MaxIssuedHlcLogical = 1
                         }
                     ]
                 }, keys[1].Seed), roster);
