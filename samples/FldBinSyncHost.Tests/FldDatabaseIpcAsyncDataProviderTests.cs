@@ -1403,7 +1403,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
-    public async Task Async_two_host_signed_gc_waits_for_peer_acks_then_reclaims_tombstone_on_both_hosts()
+    public async Task Async_two_host_signed_gc_waits_for_peer_acks_then_reclaims_all_proven_tombstones_on_both_hosts()
     {
         string hostRootA = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-a-" + Guid.NewGuid().ToString("N"));
         string hostRootB = Path.Combine(Path.GetTempPath(), "fld-binsync-two-host-gc-b-" + Guid.NewGuid().ToString("N"));
@@ -2247,14 +2247,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 fullReplaceGeneration, fullReplaceDigest),
                 "Host A provider tombstone identity must match the accepted signed proof.");
 
-            Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
-            Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
-            Assert.Single(await ReadAllTombstoneCandidatesAsync(providerA, 16));
-            Assert.Single(await ReadAllTombstoneCandidatesAsync(providerB, 16));
+            // limit=1 is the provider snapshot page size, not a delete quota:
+            // one logical sweep consumes both pages and publishes once per Host.
+            Assert.Equal(2, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
+            Assert.Equal(2, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
+            Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerA, 16));
+            Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerB, 16));
 
-            // WAL is now sealed on both Hosts. Receipt GC can advance independently
-            // from the remaining physical tombstone page. Commit one bounded receipt
-            // page, restart both real Hosts, then resume the remaining pages.
+            // Receipt GC advances independently after the physical Tombstone sweep.
+            // Commit one bounded receipt page, restart both real Hosts, then resume.
             Assert.Equal(1, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
 
             await relayInitiator.DisposeAsync(); relayInitiator = null;
@@ -2275,30 +2276,23 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.True(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate,
                 "The current transport epoch's receipt must remain a durable replay proof.");
             // The Host's committed prefix is now sealed and its transient
-            // ChangeId references are released. The ChangeId horizon can advance
-            // independently even though one physical tombstone remains on each Host.
+            // ChangeId references are released. ChangeId GC advances independently
+            // from the already-completed physical Tombstone sweep.
             Assert.Equal(2, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
             Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
             Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
             Assert.Throws<InvalidDataException>(
                 () => metadataA.AcceptIncomingBatch(replacementReceiptBatch));
-            Assert.NotEqual(
-                await providerA.ReadCurrentAsync(record, 0x0951) is null,
-                await providerA.ReadCurrentAsync(record, 0x0952) is null);
-            Assert.NotEqual(
-                await providerB.ReadCurrentAsync(record, 0x0951) is null,
-                await providerB.ReadCurrentAsync(record, 0x0952) is null);
+            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
+            Assert.Null(await providerA.ReadCurrentAsync(record, 0x0952));
+            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
+            Assert.Null(await providerB.ReadCurrentAsync(record, 0x0952));
 
             // Both Hosts were restarted between the bounded Receipt-GC pages above.
-            // The remaining physical tombstone page now resumes from those reopened Hosts.
-
-            Assert.Single(await ReadAllTombstoneCandidatesAsync(providerA!, 16));
-            Assert.Single(await ReadAllTombstoneCandidatesAsync(providerB!, 16));
-            Assert.Equal(1, await adapterA.RunTombstoneGcPassAsync(gcA, trust, 1));
-            Assert.Equal(1, await adapterB.RunTombstoneGcPassAsync(gcB, trust, 1));
-            Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerA, 16));
-            Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerB, 16));
+            // The complete physical Tombstone sweep remains durable after restart.
+            Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerA!, 16));
+            Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerB!, 16));
             Assert.Null(await providerA.ReadCurrentAsync(record, 0x0951));
             Assert.Null(await providerA.ReadCurrentAsync(record, 0x0952));
             Assert.Null(await providerB.ReadCurrentAsync(record, 0x0951));
@@ -2325,8 +2319,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Throws<InvalidDataException>(
                 () => metadataA.AcceptIncomingBatch(replacementReceiptBatch));
 
-            // Tombstone page two also completes after Host restart, independently
-            // of the already-reclaimed ChangeId ledger identities.
+            // The full physical Tombstone sweep and the independent ChangeId
+            // ledger compaction both survive Host and Metadata-store restart.
             Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
