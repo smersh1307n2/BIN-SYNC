@@ -409,7 +409,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     {
         ThrowIfUnavailable(cancellationToken);
         if (snapshotToken == Guid.Empty || afterIndex < 0 ||
-            limit is < 1 or > FldDatabaseIpcProtocol.MaxSnapshotPageEntries)
+            limit is < 1 or > IAsyncProviderTombstoneGc.MaximumCandidatePageSize)
             throw new ArgumentOutOfRangeException(nameof(limit));
 
         FldDatabaseIpcSnapshotHandle handle;
