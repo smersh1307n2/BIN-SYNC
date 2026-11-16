@@ -93,14 +93,6 @@ public interface IAsyncProviderTombstoneGc
     ValueTask AbortTombstoneGcApprovalSpoolAsync(
         Guid spoolToken, CancellationToken cancellationToken = default);
 
-    // Transitional entry points remain for existing host test doubles only. The
-    // coordinator no longer uses them; the production FLD provider uses snapshot
-    // paging and the Host-owned approval spool above.
-    ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
-        int limit, CancellationToken cancellationToken = default);
-    ValueTask<int> CompactTombstonesAsync(
-        IReadOnlyList<ProviderMutation> approvedCandidates,
-        int limit, CancellationToken cancellationToken = default);
 }
 
 /// <summary>Asynchronous authenticated authoritative FULL_REPLACE capability.</summary>
