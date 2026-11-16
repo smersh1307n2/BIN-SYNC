@@ -4168,3 +4168,6 @@ FLD-DB has recorded the accepted correction in [FLD Tombstone GC Single-Sweep AD
 - Physical-GC feature switches remain false by default. Ghost GC remains excluded.
 
 **Status:** documentation/algorithm decision recorded; FLD implementation, Host adapter migration, crash/concurrency/complexity tests, composed scale benchmark and exact-head CI are pending. This entry does not authorize physical GC or production enablement.
+
+
+The process-isolated handoff is also being changed as part of this correction: do not send a namespace-sized approved-candidate array to FLD. The provider must expose one snapshot-scoped sequential candidate scan; BIN-SYNC applies its existing proof and Metadata-reference checks page by page and streams approved exact identities to a Host-owned temporary spool in bounded IPC batches. The Host seals the sorted spool (count/digest) and consumes it during one FLD sweep after the provider snapshot is released. The spool is disposable scratch, never a recovery journal. This avoids moving the unbounded candidate list from FLD to BIN-SYNC. The current Metadata `TryBuildLiveRecordReferenceSet` HashSet remains a separate memory-cost gate to measure and bound; no end-to-end bounded-memory claim is made until that is addressed.
