@@ -475,7 +475,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (host is not null)
                 await StopDatabaseHostAsync(host);
             if (ownerId != Guid.Empty)
-                StorageIpcEndpoint.DeleteIfOwned(hostRoot, hostProcessId, ownerId);
+                StorageIpcEndpoint.DeleteIfOwned(hostRoot, checked((ulong)hostProcessId), ownerId);
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
         }
     }
