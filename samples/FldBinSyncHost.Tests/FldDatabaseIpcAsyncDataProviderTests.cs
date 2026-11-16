@@ -640,7 +640,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 previousMetadataDigest = batchDigest;
             }
             Assert.NotEmpty(metadata.ReadRelay(
-                scope, local, checked((int)namespaceId), relayPeer, 0, 16).Items);
+                scope, local, checked((int)namespaceId), authority, 0, 16).Items);
 
             // Seed immutable field-tombstone operations through the real FLD remote
             // APPLY IPC in bounded batches. The signed frontier below covers every
