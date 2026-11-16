@@ -37,7 +37,7 @@ public sealed class FldBinSyncGcOperatorPolicyTests
     }
 
     [Fact]
-    public async Task Stale_generation_is_rejected_without_mutating_runtime_or_audit()
+    public async Task Stale_generation_is_rejected_and_stops_runtime_without_mutating_audit()
     {
         var store = new TestPolicyStore();
         using var runtime = new FldBinSyncGcMaintenanceControl();
@@ -51,7 +51,8 @@ public sealed class FldBinSyncGcOperatorPolicyTests
                 true, false, true, false)));
 
         Assert.Single(store.Audit);
-        Assert.True(runtime.IsEnabled(FldBinSyncGcDomain.Receipt));
+        Assert.False(runtime.IsRunning);
+        Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.Receipt));
         Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.ChangeId));
     }
 
@@ -164,6 +165,8 @@ public sealed class FldBinSyncGcOperatorPolicyTests
             true, false, true, false));
 
         Assert.Null(await coordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.Receipt));
+        Assert.True(runtime.IsEnabled(FldBinSyncGcDomain.ChangeId));
+        Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.Receipt));
         IAsyncDisposable? lease =
             await coordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.ChangeId);
         Assert.NotNull(lease);
