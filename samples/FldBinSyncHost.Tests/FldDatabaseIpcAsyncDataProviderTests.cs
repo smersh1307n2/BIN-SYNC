@@ -559,16 +559,16 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     },
                     new NamespaceRosterMember
                     {
-                        NodeId = local,
+                        NodeId = relayPeer,
                         PublicKey = keys[1].PublicKey,
-                        TransportPeerEpoch = 11,
+                        TransportPeerEpoch = 12,
                         Status = NamespaceMemberStatus.Active
                     },
                     new NamespaceRosterMember
                     {
-                        NodeId = relayPeer,
+                        NodeId = local,
                         PublicKey = keys[2].PublicKey,
-                        TransportPeerEpoch = 12,
+                        TransportPeerEpoch = 11,
                         Status = NamespaceMemberStatus.Active
                     }
                 ]
@@ -757,7 +757,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             ContiguousAppliedOriginSequence = (ulong)candidateCount
                         }
                     ]
-                }, keys[1].Seed), roster);
+                }, keys[2].Seed), roster);
             var relayReport = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
                 new AppliedOriginFrontierReport
                 {
@@ -776,7 +776,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             ContiguousAppliedOriginSequence = (ulong)candidateCount
                         }
                     ]
-                }, keys[2].Seed), roster);
+                }, keys[1].Seed), roster);
 
             Guid fullReplaceGeneration = Guid.Parse("23456789-2345-6789-abcd-ef0123456789");
             byte[] fullReplaceDigest = SHA256.HashData("composed Tombstone GC FULL_REPLACE baseline"u8);
