@@ -754,7 +754,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
-                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
                         }
                     ]
                 }, keys[2].Seed), roster);
@@ -773,7 +773,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
-                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
                         }
                     ]
                 }, keys[1].Seed), roster);
@@ -1031,7 +1031,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
-                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
                         }
                     ],
                     IssuedOrigins =
@@ -1060,7 +1060,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
-                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
                         }
                     ]
                 }, keys[1].Seed), roster);
