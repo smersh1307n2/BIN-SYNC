@@ -800,7 +800,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     }, keys[memberIndex].Seed), roster);
             }
             var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
-                roster, 1, new byte[32], new[] { authorityReport, localReport, relayReport },
+                roster, 1, new byte[32], new[] { authorityReport, relayReport, localReport },
                 fullReplaceGeneration, fullReplaceDigest,
                 fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 1);
             gc.AcceptRetentionCheckpoint(
