@@ -153,9 +153,9 @@ public sealed class AsyncStorageSyncCoordinator
             if (candidates.Count == 0)
                 return 0;
 
-            // Bound the Metadata reference index to this candidate page. Building a
-            // namespace-wide HashSet<RecordId> here made transient memory grow with
-            // every retained relay/outbound/pending payload, even when the page was tiny.
+            // Bound Metadata reference scratch to this candidate page. This scan is
+            // O(retained payloads) in time but O(candidate page) in additional memory;
+            // the snapshot/spool protocol will remove repeated scans across pages.
             HashSet<RecordId> candidateRecords = candidates
                 .Select(static candidate => candidate.RecordId)
                 .ToHashSet();
