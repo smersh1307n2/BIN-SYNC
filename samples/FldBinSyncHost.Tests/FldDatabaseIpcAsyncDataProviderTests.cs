@@ -415,6 +415,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         byte[] changeId = Id(0x71);
         byte[] batchId = Id(0x52);
         Guid ownerId = Guid.Empty;
+        int hostProcessId = 0;
         Process? host = null;
         FldDatabaseIpcAsyncDataProvider? provider = null;
 
@@ -2551,11 +2552,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // keeps physical reclamation fail-closed.
             metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
             using (metadataA.AcquireTombstoneGcCommitGuard(
-                scope, nodeA.NodeId, namespaceId, gcA, trust,
-                out IReadOnlySet<RecordId>? referencesA))
+                scope, nodeA.NodeId, checked((int)namespaceId), gcA, trust))
             {
-                Assert.NotNull(referencesA);
-                Assert.Empty(referencesA);
+                // The current guard deliberately exposes no namespace-sized RecordId set.
+                // Exact live-reference checks are streamed by the Host candidate scan.
             }
 
             // Deterministic lock cuts: a new outbound reservation and its ACK
@@ -2581,7 +2581,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             {
                 Task<MetadataOutboundBatchReservation> reserveTask;
                 using (metadataA.AcquireTombstoneGcCommitGuard(
-                    scope, nodeA.NodeId, namespaceId, gcA, trust, out _))
+                    scope, nodeA.NodeId, checked((int)namespaceId), gcA, trust))
                 {
                     reserveTask = Task.Run(() =>
                     {
