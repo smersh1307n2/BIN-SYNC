@@ -396,7 +396,10 @@ public sealed class FldBinSyncAsyncHostAdapter
         if (linked is null) return 0;
 
         if (_requireDurableOperatorPolicy && _gcPolicyCoordinator is null)
+        {
+            _gcControl.SetEnabled(domain, false);
             return 0;
+        }
 
         await using IAsyncDisposable? policyLease = _gcPolicyCoordinator is null
             ? null
@@ -404,7 +407,8 @@ public sealed class FldBinSyncAsyncHostAdapter
                 domain, linked.Token).ConfigureAwait(false);
         if (_gcPolicyCoordinator is not null && policyLease is null)
         {
-            _gcControl.Stop();
+            // A domain-disabled policy must not disable the other independent domains.
+            _gcControl.SetEnabled(domain, false);
             return 0;
         }
 
