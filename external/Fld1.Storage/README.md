@@ -1,10 +1,13 @@
 # Vendored Fld1.Storage source
 
-This directory is a source snapshot copied from the private FLD-DB repository.
+This directory is a source snapshot copied from the authoritative FLD-DB project.
 
 - Source repository: https://github.com/smersh1307n2/FLD-DB
 - Source branch: `fix/crash-consistency-outbox`
-- Source commit: `a3abab3e0197f98aac12e9fdafcbfa204d9fbd77`
+- Pinned source commit: `2690c256da14bf29e9b2a8f2c3a9982a09187d67`
 - Source project: `src/Fld1.Storage/Fld1.Storage.csproj`
+- File-level Git blob hashes: `UPSTREAM-MANIFEST.json`
 
-The copy exists only so BIN-SYNC's public CI can compile and test the cross-repository adapter without requiring access to the private FLD-DB repository. The authoritative implementation remains in FLD-DB. When updating this snapshot, copy the complete `src/Fld1.Storage` project from a tested FLD-DB commit and update this pinned source commit. Do not make independent semantic changes here.
+The snapshot is kept in BIN-SYNC so public CI can compile and test the cross-repository adapter without requiring checkout access to FLD-DB. FLD-DB remains the sole source of truth. Do not make independent semantic changes in this directory.
+
+After updating the source snapshot, regenerate the manifest from the exact FLD-DB commit and run `python eng/verify-fld-storage-vendor.py`. The Storage Integration workflow runs this verification before build/test, so a stale or locally modified vendor copy fails CI.
