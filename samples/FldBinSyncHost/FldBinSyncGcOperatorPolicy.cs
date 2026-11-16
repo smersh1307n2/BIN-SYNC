@@ -85,6 +85,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     private readonly IFldBinSyncGcOperatorPolicyStore _store;
     private readonly IFldBinSyncGcOperatorAuthorizer _authorizer;
     private readonly FldBinSyncGcMaintenanceControl _runtime;
+    private readonly SemaphoreSlim _mutationGate = new(1, 1);
 
     public FldBinSyncGcOperatorPolicyCoordinator(
         FldBinSyncGcOperatorPolicyBinding binding,
@@ -107,24 +108,32 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     public async ValueTask<FldBinSyncGcOperatorPolicy?> RestoreAsync(
         CancellationToken cancellationToken = default)
     {
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            FldBinSyncGcOperatorPolicy? policy =
-                await _store.ReadAsync(_binding, cancellationToken).ConfigureAwait(false);
-            if (policy is null)
+            try
+            {
+                FldBinSyncGcOperatorPolicy? policy =
+                    await _store.ReadAsync(_binding, cancellationToken).ConfigureAwait(false);
+                if (policy is null)
+                {
+                    _runtime.Stop();
+                    return null;
+                }
+
+                ValidatePolicy(policy);
+                ApplyRuntime(policy);
+                return policy;
+            }
+            catch
             {
                 _runtime.Stop();
-                return null;
+                throw;
             }
-
-            ValidatePolicy(policy);
-            ApplyRuntime(policy);
-            return policy;
         }
-        catch
+        finally
         {
-            _runtime.Stop();
-            throw;
+            _mutationGate.Release();
         }
     }
 
@@ -135,6 +144,21 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     public async ValueTask<FldBinSyncGcOperatorPolicy> UpdateAsync(
         FldBinSyncGcOperatorPolicyRequest request,
         CancellationToken cancellationToken = default)
+    {
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await UpdateCoreAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
+
+    private async ValueTask<FldBinSyncGcOperatorPolicy> UpdateCoreAsync(
+        FldBinSyncGcOperatorPolicyRequest request,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.Binding != _binding)
