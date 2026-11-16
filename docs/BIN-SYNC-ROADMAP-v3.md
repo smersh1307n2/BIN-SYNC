@@ -4151,3 +4151,20 @@ to enable physical GC in production. Ghost GC remains excluded.
 - [x CI] Exact branch HEAD `a27946416fa25fbd1abd32544867a3e87e9160e8` passed FLD Storage Integration run [43785229276](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/43785229276) on Ubuntu, macOS 15 and Windows. The BinSync.Net workflow for that HEAD is still pending; the current documentation follow-up will receive a fresh exact-head run.
 - [!] This is still an interface plus Host enforcement layer. The durable store must implement atomic policy+audit CAS and crash-safe cross-process leases; do not substitute process-local semaphores or expiring wall-clock leases. The sample's test store is not a production adapter. All physical GC flags remain false by default; Ghost GC remains excluded.
 - [ ] Next: implement the concrete durable policy/audit/lease store over the existing Metadata `StorageDatabase` authority without adding a duplicate GC journal. Prove transactional policy+audit commit, cross-process lease fencing and recovery of abandoned leases after process death, corruption/replay rejection, backup/restore and Windows durability. Add refresh/notification so processes learn newly enabled policy without weakening the per-page lease. Keep the staged canary and retention policy as separate release gates.
+
+
+
+
+#### 1.176 — FLD Tombstone GC physical-sweep correction — 2026-11-16
+
+The FLD-only 250k sweep evidence in §§1.164–1.169 exposed a mismatch between the candidate-page API and physical namespace compaction. A 4,096 candidate limit did not bound FLD scan/rewrite work: every page rebuilt the namespace-wide RecordId/FieldId index, resolved the namespace, wrote a complete replacement Run and published a Manifest. Repeating the pages multiplied full-namespace work. The one-rewrite benchmark was much faster, but it still used a namespace-sized in-memory index and a complete in-memory RunBuilder; it is not the final bounded-memory design.
+
+FLD-DB has recorded the accepted correction in [FLD Tombstone GC Single-Sweep ADR](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/FLD-TOMBSTONE-GC-SINGLE-SWEEP-ADR.md) and the FLD [Storage Compaction Roadmap](https://github.com/smersh1307n2/FLD-DB/blob/fix/crash-consistency-outbox/docs/SYNC-STORAGE-COMPACTION-ROADMAP.md):
+
+- Tombstone reclamation becomes one logical namespace sweep: one ordered source-Run merge, bounded per-record state, chunked immutable FLD1 output, and one Manifest switch.
+- The first implementation holds the existing composed Host application guard, Metadata admission/maintenance lease and FLD IPC commit lease for the entire sweep. It does not release proof/reference fences between pages and does not introduce a second GC journal.
+- The current candidate-count Tombstone API and Host loop must be migrated; it must not be kept as a compatibility shim that repeats complete compaction. Receipt and ChangeId Metadata compactors retain their independent bounded-page/cursor contracts.
+- NRS2/OFR2/RCP2/FRA2, exact candidate authorization, snapshot pins, reservation fences, stale-peer FULL_REPLACE requirements and all fail-closed rules are unchanged.
+- Physical-GC feature switches remain false by default. Ghost GC remains excluded.
+
+**Status:** documentation/algorithm decision recorded; FLD implementation, Host adapter migration, crash/concurrency/complexity tests, composed scale benchmark and exact-head CI are pending. This entry does not authorize physical GC or production enablement.
