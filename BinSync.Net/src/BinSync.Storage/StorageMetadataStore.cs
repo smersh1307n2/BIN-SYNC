@@ -1407,6 +1407,71 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
+    /// Find only references to a bounded candidate page. Unlike
+    /// TryBuildLiveRecordReferenceSet this does not materialize every referenced
+    /// RecordId in the namespace; retained payloads are decoded once and only matches
+    /// against the supplied candidate page are retained. A pending peer reservation
+    /// or malformed payload keeps the whole page fail-closed.
+    /// </summary>
+    internal bool TryFindLiveRecordReferences(
+        string scopeId, NodeId localReplica, int namespaceId,
+        IReadOnlyCollection<RecordId> candidates,
+        out HashSet<RecordId> liveRecords)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            var candidateSet = candidates as HashSet<RecordId> ?? new HashSet<RecordId>(candidates);
+            liveRecords = new HashSet<RecordId>();
+            if (candidateSet.Count == 0 ||
+                !TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+                return true;
+
+            if (state.PeerStreams.Any(pair =>
+                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
+                return false;
+
+            bool ScanPayload(byte[] payload)
+            {
+                try
+                {
+                    RecordId recordId = ProviderMutationCodec.Decode(payload).RecordId;
+                    if (candidateSet.Contains(recordId))
+                        liveRecords.Add(recordId);
+                    return true;
+                }
+                catch (Exception exception) when (exception is InvalidDataException or
+                    ArgumentException or EndOfStreamException or IndexOutOfRangeException)
+                {
+                    return false;
+                }
+            }
+
+            foreach (PendingApplyValue pending in state.PendingApplies.Values)
+            {
+                if (pending.Batch.NamespaceId != namespaceId) continue;
+                foreach (MetadataOperation operation in pending.Batch.Operations)
+                    if (!ScanPayload(operation.Payload)) return false;
+            }
+            foreach (var stream in state.Relay)
+            {
+                if (stream.Key.NamespaceId != namespaceId) continue;
+                foreach (var item in stream.Value)
+                    if (!ScanPayload(item.Payload)) return false;
+            }
+            foreach (var stream in state.Outbound)
+            {
+                if (stream.Key.NamespaceId != namespaceId) continue;
+                foreach (var item in stream.Value)
+                    if (!ScanPayload(item.Payload)) return false;
+            }
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Read-only namespace-local diagnostics for durable Metadata reservations and
     /// retained relay/outbound payloads. These counts are advisory; compaction still
     /// revalidates exact candidate references under the Metadata transaction gate.
