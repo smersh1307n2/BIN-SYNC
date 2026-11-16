@@ -453,6 +453,76 @@ public sealed class StorageNamespaceGcStoreTests
         public int CompactCalls { get; private set; }
         public IReadOnlyList<ProviderMutation>? Approved { get; private set; }
 
+        private readonly List<ProviderMutation> _approvedSpool = new();
+
+        public ValueTask<ProviderSnapshotHandle> OpenTombstoneGcCandidateSnapshotAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.FromResult(new ProviderSnapshotHandle(Guid.NewGuid(), 0));
+        }
+
+        public ValueTask<ProviderTombstoneGcCandidatePage> ReadTombstoneGcCandidatePageAsync(
+            Guid snapshotToken, int afterIndex, int limit,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReadCalls++;
+            ProviderMutation[] page = _candidates.Skip(afterIndex).Take(limit).ToArray();
+            int next = afterIndex + page.Length;
+            return ValueTask.FromResult(new ProviderTombstoneGcCandidatePage(
+                page, next, next >= _candidates.Count));
+        }
+
+        public ValueTask ReleaseTombstoneGcCandidateSnapshotAsync(
+            Guid snapshotToken, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<Guid> BeginTombstoneGcApprovalSpoolAsync(
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _approvedSpool.Clear();
+            return ValueTask.FromResult(Guid.NewGuid());
+        }
+
+        public ValueTask AppendTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, IReadOnlyList<ProviderMutation> approvedCandidates,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _approvedSpool.AddRange(approvedCandidates);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<(int Count, byte[] Digest)> SealTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] digest = SHA256.HashData(Encoding.UTF8.GetBytes(_approvedSpool.Count.ToString()));
+            return ValueTask.FromResult((_approvedSpool.Count, digest));
+        }
+
+        public ValueTask<int> CommitTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, string scopeId, NodeId localReplica, int namespaceId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            CompactCalls++;
+            Approved = _approvedSpool.ToArray();
+            return ValueTask.FromResult(Approved.Count);
+        }
+
+        public ValueTask AbortTombstoneGcApprovalSpoolAsync(
+            Guid spoolToken, CancellationToken cancellationToken = default)
+        {
+            _approvedSpool.Clear();
+            return ValueTask.CompletedTask;
+        }
+
         public ValueTask<IReadOnlyList<ProviderMutation>> ReadTombstoneGcCandidatesAsync(
             int limit, CancellationToken cancellationToken = default)
         {
