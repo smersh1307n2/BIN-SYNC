@@ -1148,9 +1148,6 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             if (tombstoneProof is null)
                 return 0;
 
-            IReadOnlySet<RecordId>? liveRecordReferences = tombstoneGcLease.LiveRecordReferences;
-            if (liveRecordReferences is null)
-                return 0; // Unknown payloads or pending reservations block the whole pass.
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
             ApplicationDraftHorizon draftHorizon = externalScan.UnpublishedLocalDraftHorizon;
@@ -1197,7 +1194,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     !tombstoneProof.HasProof(
                         tombstone.AuthorNodeId, tombstone.OriginAuthorEpoch,
                         tombstone.OriginSequence, tombstone.HlcWall, tombstone.HlcLogical) ||
-                    liveRecordReferences.Contains(tombstone.RecordId) ||
+                    tombstoneGcLease.HasLiveRecordReference(tombstone.RecordId) ||
                     externalScan.HasExternalChangeIdReference(tombstone.ChangeId) ||
                     externalScan.HasExternalRecordReference(tombstone.RecordId, tombstone.ChangeId))
                 {
