@@ -597,20 +597,20 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     {
                         RecordId = RecordId.From(ScaleId(1_000_000 + sequence)),
                         FieldId = 7,
-                        AuthorNodeId = relayPeer,
+                        AuthorNodeId = authority,
                         KeyEpoch = 0,
                         Value = [0x5A],
                         ChangeId = changeId,
-                        OriginAuthorEpoch = 12,
+                        OriginAuthorEpoch = 8,
                         OriginSequence = (ulong)sequence,
                         HlcWall = 100,
                         HlcLogical = 1
                     };
                     operations[i] = new MetadataOperation
                     {
-                        AuthorNodeId = relayPeer,
+                        AuthorNodeId = authority,
                         ChangeId = changeId,
-                        OriginAuthorEpoch = 12,
+                        OriginAuthorEpoch = 8,
                         OriginSequence = (ulong)sequence,
                         Fingerprint = ScaleId(300_000 + sequence),
                         Payload = ProviderMutationCodec.Encode(payloadMutation),
@@ -627,7 +627,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     SenderPeer = authority,
                     SenderEpoch = 8,
                     TransportPeerEpoch = 1,
-                    AuthorStreamNodeId = relayPeer,
+                    AuthorStreamNodeId = authority,
                     NamespaceId = checked((int)namespaceId),
                     BatchId = BatchId.From(ScaleId(400_000 + batchIndex)),
                     CursorStart = (ulong)start + 1,
@@ -641,7 +641,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 previousMetadataDigest = batchDigest;
             }
             Assert.NotEmpty(metadata.ReadRelay(
-                scope, local, checked((int)namespaceId), relayPeer, 0, 16).Items);
+                scope, local, checked((int)namespaceId), authority, 0, 16).Items);
 
             // Seed live values and then immutable field tombstones through the real
             // FLD remote APPLY IPC. This guarantees every candidate is a tombstone of
@@ -692,7 +692,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 Value = [0x33],
                 ChangeId = BatchId.From(ScaleId(100_000 + sequence)),
                 OriginAuthorEpoch = 8,
-                OriginSequence = (ulong)sequence,
+                OriginSequence = (ulong)(candidateCount + sequence),
                 HlcWall = 99,
                 HlcLogical = 1
             });
@@ -705,7 +705,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 Value = Array.Empty<byte>(),
                 ChangeId = BatchId.From(ScaleId(200_000 + sequence)),
                 OriginAuthorEpoch = 8,
-                OriginSequence = (ulong)(candidateCount + sequence),
+                OriginSequence = (ulong)(candidateCount * 2 + sequence),
                 HlcWall = 100,
                 HlcLogical = 1,
                 IsTombstone = true
@@ -726,13 +726,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         {
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
-                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
-                        },
-                        new AppliedOriginFrontierEntry
-                        {
-                            OriginAuthorNodeId = relayPeer,
-                            OriginAuthorEpoch = 12,
-                            ContiguousAppliedOriginSequence = (ulong)candidateCount
+                            ContiguousAppliedOriginSequence = (ulong)(candidateCount * 3)
                         }
                     ],
                     IssuedOrigins =
@@ -740,7 +734,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         new IssuedOriginFrontierEntry
                         {
                             OriginAuthorEpoch = 8,
-                            IssuedOriginSequence = (ulong)(candidateCount * 2),
+                            IssuedOriginSequence = (ulong)(candidateCount * 3),
                             MaxIssuedHlcWall = 100,
                             MaxIssuedHlcLogical = 1
                         }
@@ -762,12 +756,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
                             ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
-                        },
-                        new AppliedOriginFrontierEntry
-                        {
-                            OriginAuthorNodeId = relayPeer,
-                            OriginAuthorEpoch = 12,
-                            ContiguousAppliedOriginSequence = (ulong)candidateCount
                         }
                     ]
                 }, keys[2].Seed), roster);
@@ -787,24 +775,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                             OriginAuthorNodeId = authority,
                             OriginAuthorEpoch = 8,
                             ContiguousAppliedOriginSequence = (ulong)(candidateCount * 2)
-                        },
-                        new AppliedOriginFrontierEntry
-                        {
-                            OriginAuthorNodeId = relayPeer,
-                            OriginAuthorEpoch = 12,
-                            ContiguousAppliedOriginSequence = (ulong)candidateCount
                         }
                     ],
-                    IssuedOrigins =
-                    [
-                        new IssuedOriginFrontierEntry
-                        {
-                            OriginAuthorEpoch = 12,
-                            IssuedOriginSequence = (ulong)candidateCount,
-                            MaxIssuedHlcWall = 100,
-                            MaxIssuedHlcLogical = 1
-                        }
-                    ]
                 }, keys[1].Seed), roster);
 
             Guid fullReplaceGeneration = Guid.Parse("23456789-2345-6789-abcd-ef0123456789");
