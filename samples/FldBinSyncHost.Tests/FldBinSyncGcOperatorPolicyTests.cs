@@ -120,6 +120,38 @@ public sealed class FldBinSyncGcOperatorPolicyTests
         Assert.Empty(store.Audit.Skip(1));
     }
 
+
+    [Fact]
+    public async Task Emergency_stop_wins_against_policy_restore_that_is_applying()
+    {
+        var store = new TestPolicyStore();
+        using var runtime = new FldBinSyncGcMaintenanceControl();
+        var coordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+            Binding(), store, new AllowAllAuthorizer(), runtime);
+        await coordinator.UpdateAsync(new(Binding(), 0, "operator-1", "enable receipt",
+            true, true, false, false));
+
+        using var oldToken = runtime.TryCreateLinkedTokenSource(FldBinSyncGcDomain.Receipt);
+        Assert.NotNull(oldToken);
+        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var registration = oldToken!.Token.Register(() =>
+        {
+            callbackEntered.TrySetResult();
+            releaseCallback.Task.GetAwaiter().GetResult();
+        });
+
+        Task<FldBinSyncGcOperatorPolicy?> restoring = coordinator.RestoreAsync().AsTask();
+        await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        coordinator.EmergencyStop();
+        releaseCallback.TrySetResult();
+        await restoring.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.False(runtime.IsRunning);
+        Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.Receipt));
+        Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.ChangeId));
+    }
+
     private sealed class TestPolicyStore : IFldBinSyncGcOperatorPolicyStore
     {
         public FldBinSyncGcOperatorPolicy? Current { get; private set; }
