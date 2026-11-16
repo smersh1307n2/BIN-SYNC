@@ -86,6 +86,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     private readonly IFldBinSyncGcOperatorAuthorizer _authorizer;
     private readonly FldBinSyncGcMaintenanceControl _runtime;
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
+    private long _emergencyStopVersion;
 
     public FldBinSyncGcOperatorPolicyCoordinator(
         FldBinSyncGcOperatorPolicyBinding binding,
@@ -122,7 +123,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
                 }
 
                 ValidatePolicy(policy);
-                ApplyRuntime(policy);
+                ApplyRuntimeUnlessEmergencyStopped(policy);
                 return policy;
             }
             catch
@@ -236,7 +237,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
 
         try
         {
-            ApplyRuntime(next);
+            ApplyRuntimeUnlessEmergencyStopped(next);
         }
         catch
         {
@@ -247,7 +248,19 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     }
 
     /// <summary>Immediate local emergency brake; deliberately independent of durable audit availability.</summary>
-    public void EmergencyStop() => _runtime.Stop();
+    public void EmergencyStop()
+    {
+        Interlocked.Increment(ref _emergencyStopVersion);
+        _runtime.Stop();
+    }
+
+    private void ApplyRuntimeUnlessEmergencyStopped(FldBinSyncGcOperatorPolicy policy)
+    {
+        long stopVersion = Volatile.Read(ref _emergencyStopVersion);
+        ApplyRuntime(policy);
+        if (Volatile.Read(ref _emergencyStopVersion) != stopVersion)
+            _runtime.Stop();
+    }
 
     private void ValidatePolicy(FldBinSyncGcOperatorPolicy policy)
     {
