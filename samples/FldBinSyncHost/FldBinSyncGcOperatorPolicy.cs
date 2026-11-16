@@ -98,6 +98,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     private readonly FldBinSyncGcMaintenanceControl _runtime;
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
     private long _emergencyStopVersion;
+    private int _emergencyStopLatched;
 
     public FldBinSyncGcOperatorPolicyCoordinator(
         FldBinSyncGcOperatorPolicyBinding binding,
@@ -120,6 +121,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     public async ValueTask<FldBinSyncGcOperatorPolicy?> RestoreAsync(
         CancellationToken cancellationToken = default)
     {
+        long stopVersion = Volatile.Read(ref _emergencyStopVersion);
         await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -134,7 +136,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
                 }
 
                 ValidatePolicy(policy);
-                ApplyRuntimeUnlessEmergencyStopped(policy);
+                ApplyRuntimeUnlessEmergencyStopped(policy, stopVersion);
                 return policy;
             }
             catch
@@ -157,10 +159,11 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
         FldBinSyncGcOperatorPolicyRequest request,
         CancellationToken cancellationToken = default)
     {
+        long stopVersion = Volatile.Read(ref _emergencyStopVersion);
         await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await UpdateCoreAsync(request, cancellationToken).ConfigureAwait(false);
+            return await UpdateCoreAsync(request, stopVersion, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -170,6 +173,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
 
     private async ValueTask<FldBinSyncGcOperatorPolicy> UpdateCoreAsync(
         FldBinSyncGcOperatorPolicyRequest request,
+        long stopVersion,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -261,7 +265,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
 
         try
         {
-            ApplyRuntimeUnlessEmergencyStopped(next);
+            ApplyRuntimeForExplicitUpdate(next, stopVersion);
         }
         catch
         {
@@ -321,15 +325,55 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     public void EmergencyStop()
     {
         Interlocked.Increment(ref _emergencyStopVersion);
+        Interlocked.Exchange(ref _emergencyStopLatched, 1);
         _runtime.Stop();
     }
 
-    private void ApplyRuntimeUnlessEmergencyStopped(FldBinSyncGcOperatorPolicy policy)
+    private void ApplyRuntimeUnlessEmergencyStopped(
+        FldBinSyncGcOperatorPolicy policy, long stopVersion)
     {
-        long stopVersion = Volatile.Read(ref _emergencyStopVersion);
+        if (Volatile.Read(ref _emergencyStopLatched) != 0 ||
+            Volatile.Read(ref _emergencyStopVersion) != stopVersion)
+        {
+            _runtime.Stop();
+            return;
+        }
+
         ApplyRuntime(policy);
         if (Volatile.Read(ref _emergencyStopVersion) != stopVersion)
+        {
+            Interlocked.Exchange(ref _emergencyStopLatched, 1);
             _runtime.Stop();
+        }
+    }
+
+    private void ApplyRuntimeForExplicitUpdate(
+        FldBinSyncGcOperatorPolicy policy, long stopVersion)
+    {
+        if (Volatile.Read(ref _emergencyStopVersion) != stopVersion)
+        {
+            _runtime.Stop();
+            throw new InvalidOperationException(
+                "An emergency stop superseded this operator policy update; maintenance remains stopped.");
+        }
+
+        // Only a new, explicitly authorized policy update may clear the emergency
+        // latch. RestoreAsync never clears it.
+        Interlocked.Exchange(ref _emergencyStopLatched, 0);
+        if (Volatile.Read(ref _emergencyStopVersion) != stopVersion)
+        {
+            Interlocked.Exchange(ref _emergencyStopLatched, 1);
+            _runtime.Stop();
+            throw new InvalidOperationException(
+                "An emergency stop superseded this operator policy update; maintenance remains stopped.");
+        }
+
+        ApplyRuntime(policy);
+        if (Volatile.Read(ref _emergencyStopVersion) != stopVersion)
+        {
+            Interlocked.Exchange(ref _emergencyStopLatched, 1);
+            _runtime.Stop();
+        }
     }
 
     private void ValidatePolicy(FldBinSyncGcOperatorPolicy policy)
