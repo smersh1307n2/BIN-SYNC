@@ -132,20 +132,13 @@ public sealed class FldBinSyncGcOperatorPolicyTests
         await coordinator.UpdateAsync(new(Binding(), 0, "operator-1", "enable receipt",
             true, true, false, false));
 
-        using var oldToken = runtime.TryCreateLinkedTokenSource(FldBinSyncGcDomain.Receipt);
-        Assert.NotNull(oldToken);
-        var callbackEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseCallback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var registration = oldToken!.Token.Register(() =>
-        {
-            callbackEntered.TrySetResult();
-            releaseCallback.Task.GetAwaiter().GetResult();
-        });
+        store.ReadEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        store.ReleaseRead = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         Task<FldBinSyncGcOperatorPolicy?> restoring = coordinator.RestoreAsync().AsTask();
-        await callbackEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await store.ReadEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         coordinator.EmergencyStop();
-        releaseCallback.TrySetResult();
+        store.ReleaseRead.TrySetResult();
         await restoring.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.False(runtime.IsRunning);
@@ -190,13 +183,20 @@ public sealed class FldBinSyncGcOperatorPolicyTests
         public bool ThrowOnRead { get; set; }
         public bool ForceConflict { get; set; }
         public int ActiveLeases { get; private set; }
+        public TaskCompletionSource? ReadEntered { get; set; }
+        public TaskCompletionSource? ReleaseRead { get; set; }
 
-        public ValueTask<FldBinSyncGcOperatorPolicy?> ReadAsync(
+        public async ValueTask<FldBinSyncGcOperatorPolicy?> ReadAsync(
             FldBinSyncGcOperatorPolicyBinding binding,
             CancellationToken cancellationToken = default)
         {
+            if (ReadEntered is not null && ReleaseRead is not null)
+            {
+                ReadEntered.TrySetResult();
+                await ReleaseRead.Task.WaitAsync(cancellationToken);
+            }
             if (ThrowOnRead) throw new IOException("simulated audit-store outage");
-            return ValueTask.FromResult(Current);
+            return Current;
         }
 
         public ValueTask<bool> TryCommitAsync(
