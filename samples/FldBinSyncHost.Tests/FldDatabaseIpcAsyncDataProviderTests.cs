@@ -483,6 +483,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     [Theory]
     [InlineData(1_000)]
     [InlineData(10_000)]
+    [InlineData(50_000)]
     public async Task Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references(
         int candidateCount)
     {
