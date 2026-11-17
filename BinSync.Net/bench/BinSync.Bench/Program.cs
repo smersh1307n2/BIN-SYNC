@@ -24,7 +24,17 @@ var config = DefaultConfig.Instance
         .WithIterationCount(10));
 
 if (args.Contains("--coordinator-retry-only", StringComparer.Ordinal))
-    BenchmarkRunner.Run<BinSync.Bench.MetadataCoordinatorRetryScanBench>(config);
+{
+    // The 4,096-row fixture performs durable setup in IterationSetup. Keep the
+    // full measurement count, but use the out-of-process toolchain: the in-process
+    // runner aborts this long setup before all configured iterations can finish.
+    var coordinatorConfig = DefaultConfig.Instance
+        .AddDiagnoser(MemoryDiagnoser.Default)
+        .AddJob(Job.Default
+            .WithWarmupCount(3)
+            .WithIterationCount(10));
+    BenchmarkRunner.Run<BinSync.Bench.MetadataCoordinatorRetryScanBench>(coordinatorConfig);
+}
 else if (args.Contains("--metadata-cardinality-only", StringComparer.Ordinal))
     BenchmarkRunner.Run<BinSync.Bench.MetadataStoreCardinalityBench>(config);
 else if (args.Contains("--metadata-gc-only", StringComparer.Ordinal))

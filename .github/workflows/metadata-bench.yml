@@ -9,6 +9,8 @@ on:
       - "BinSync.Net/src/BinSync.Storage/StorageSyncCoordinator.cs"
       - "BinSync.Net/src/BinSync.Storage/StorageDataProvider.cs"
       - "BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs"
+      - "external/Fld1.Storage"
+      - "external/Fld1.Storage/**"
       - ".github/workflows/metadata-bench.yml"
 
 permissions:
