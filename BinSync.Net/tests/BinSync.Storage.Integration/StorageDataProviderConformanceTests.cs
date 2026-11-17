@@ -606,7 +606,10 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
                 }
             }));
 
-            await Task.WhenAll(providerWrites, metadataWrites).WaitAsync(TimeSpan.FromSeconds(30));
+            // Each operation is a durable B+ tree/WAL commit. On Windows, concurrent
+            // integration-suite I/O can stretch this serialization well beyond 30 s;
+            // retain a finite deadlock guard without making normal CI load flaky.
+            await Task.WhenAll(providerWrites, metadataWrites).WaitAsync(TimeSpan.FromMinutes(2));
             Assert.Equal(64UL, provider.LocalChangeHighWatermark);
             Assert.Equal(64UL, metadata.GetOutboundHighWatermark(scope, local, 1, local));
             // BSP3 marker + active-generation pointer are committed before concurrent writes.\n            Assert.Equal(129UL, storage.LastCommitSeq);
