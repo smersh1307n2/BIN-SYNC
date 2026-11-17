@@ -653,11 +653,8 @@ public sealed class StorageNamespaceGcStoreTests
             var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, namespaceId);
             coordinator.AttachNamespaceGcGuard(gc, trust);
 
-            // The namespace-wide prefilter validates every retained payload before
-            // opening the provider candidate snapshot, so corrupt metadata is rejected
-            // without even reading a candidate page.
             Assert.Equal(0, await coordinator.CompactTombstonesAsync(provider, 16));
-            Assert.Equal(0, provider.ReadCalls);
+            Assert.Equal(1, provider.ReadCalls);
             Assert.Equal(0, provider.CompactCalls);
             Assert.Null(provider.Approved);
         }
@@ -777,8 +774,10 @@ public sealed class StorageNamespaceGcStoreTests
             var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, namespaceId);
             coordinator.AttachNamespaceGcGuard(gc, trust);
 
+            // Invalid retained payloads are detected by the namespace preflight,
+            // before the provider candidate snapshot is opened.
             Assert.Equal(0, await coordinator.CompactTombstonesAsync(provider, 16));
-            Assert.Equal(1, provider.ReadCalls);
+            Assert.Equal(0, provider.ReadCalls);
             Assert.Equal(0, provider.CompactCalls);
             Assert.Null(provider.Approved);
         }
