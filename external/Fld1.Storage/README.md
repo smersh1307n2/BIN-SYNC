@@ -4,7 +4,7 @@ This directory is a source snapshot copied from the authoritative FLD-DB project
 
 - Source repository: https://github.com/smersh1307n2/FLD-DB
 - Source branch: `fix/crash-consistency-outbox`
-- Pinned source commit: `0a3c3fa118b5503a7b0f8991b72d1c3c417205f7`
+- Pinned source commit: `60baa3622f46d45f6ae276091cbdd3cfdf134eac`
 - Source project: `src/Fld1.Storage/Fld1.Storage.csproj`
 - File-level Git blob hashes: `UPSTREAM-MANIFEST.json`
 
