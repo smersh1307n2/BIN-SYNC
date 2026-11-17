@@ -119,8 +119,10 @@ public sealed class ChangeIdentityProviderMutationTests
 
         foreach (var mutation in mutations)
         {
-            ProviderMutation decoded = ProviderMutationCodec.Decode(ProviderMutationCodec.Encode(mutation));
+            byte[] encoded = ProviderMutationCodec.Encode(mutation);
+            ProviderMutation decoded = ProviderMutationCodec.Decode(encoded);
             Assert.Equal(mutation.RecordId, decoded.RecordId);
+            Assert.Equal(mutation.RecordId, ProviderMutationCodec.DecodeRecordId(encoded));
             Assert.Equal(mutation.FieldId, decoded.FieldId);
             Assert.Equal(mutation.IsTombstone, decoded.IsTombstone);
             Assert.Equal(mutation.IsRecordTombstone, decoded.IsRecordTombstone);
@@ -148,6 +150,36 @@ public sealed class ChangeIdentityProviderMutationTests
 
         byte[] trailing = encoded.Concat(new byte[] { 0 }).ToArray();
         Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.Decode(trailing));
+    }
+
+    [Fact]
+    public void Provider_mutation_record_id_decoder_rejects_noncanonical_payloads()
+    {
+        var mutation = new ProviderMutation
+        {
+            RecordId = RecordId.From(Identity(15)),
+            FieldId = 0x0103,
+            AuthorNodeId = Author,
+            Value = new byte[] { 1, 2, 3 }
+        };
+        byte[] encoded = ProviderMutationCodec.Encode(mutation);
+        Assert.Equal(mutation.RecordId, ProviderMutationCodec.DecodeRecordId(encoded));
+
+        byte[] truncated = encoded[..^1];
+        Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.DecodeRecordId(truncated));
+
+        byte[] zeroAuthor = encoded.ToArray();
+        zeroAuthor.AsSpan(31, 16).Clear();
+        Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.DecodeRecordId(zeroAuthor));
+
+        byte[] inconsistentOrigin = encoded.ToArray();
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(
+            inconsistentOrigin.AsSpan(73), 1);
+        Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.DecodeRecordId(inconsistentOrigin));
+
+        var fieldTombstone = mutation with { IsTombstone = true };
+        byte[] invalidTombstone = ProviderMutationCodec.Encode(fieldTombstone);
+        Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.DecodeRecordId(invalidTombstone));
     }
 
     [Fact]
