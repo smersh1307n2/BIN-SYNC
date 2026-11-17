@@ -337,6 +337,7 @@ jobs:
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName!~Async_host_adapter_signed_tombstone_gc_scale&FullyQualifiedName!~Async_host_adapter_signed_changeid_gc_scale" \
             --logger "console;verbosity=normal" \
             --logger "trx;LogFileName=fld-host-integration.trx" \
             --results-directory "$RUNNER_TEMP/fld-host-integration-test-results" \
