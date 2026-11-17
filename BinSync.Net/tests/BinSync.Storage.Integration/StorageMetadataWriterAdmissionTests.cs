@@ -43,18 +43,18 @@ public sealed class StorageMetadataWriterAdmissionTests
                 var secondStarted = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
 
-                firstWriter = Task.Run(() =>
+                firstWriter = Task.Factory.StartNew(() =>
                 {
                     firstStarted.SetResult();
                     first.EnableProviderPublicationCutover(
                         "writer-admission-test", local, 7, 0);
-                });
-                secondWriter = Task.Run(() =>
+                }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+                secondWriter = Task.Factory.StartNew(() =>
                 {
                     secondStarted.SetResult();
                     second.EnableProviderPublicationCutover(
                         "writer-admission-test", local, 8, 0);
-                });
+                }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
                 await Task.WhenAll(
                     firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5)),
@@ -109,13 +109,13 @@ public sealed class StorageMetadataWriterAdmissionTests
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var releaseGuard = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
-            Task guardOwner = Task.Run(() =>
+            Task guardOwner = Task.Factory.StartNew(() =>
             {
                 using IDisposable commitGuard = metadata.AcquireTombstoneGcCommitGuard(
                     scope, local, namespaceId, gcStore, trustStore);
                 guardAcquired.SetResult();
                 releaseGuard.Task.GetAwaiter().GetResult();
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
             Task? writer = null;
             try
@@ -124,11 +124,11 @@ public sealed class StorageMetadataWriterAdmissionTests
 
                 var writerStarted = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
-                writer = Task.Run(() =>
+                writer = Task.Factory.StartNew(() =>
                 {
                     writerStarted.SetResult();
                     metadata.EnableProviderPublicationCutover(scope, local, namespaceId, 0);
-                });
+                }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
                 await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 await WaitForWriterWaitersAsync(storage, 1);
@@ -214,11 +214,11 @@ public sealed class StorageMetadataWriterAdmissionTests
             {
                 var writerStarted = new TaskCompletionSource(
                     TaskCreationOptions.RunContinuationsAsynchronously);
-                rosterWriter = Task.Run(() =>
+                rosterWriter = Task.Factory.StartNew(() =>
                 {
                     writerStarted.SetResult();
                     return gcStore.AcceptNamespaceRoster(signedNextRoster, trust);
-                });
+                }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
                 await writerStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 await WaitForWriterWaitersAsync(storage, 1);
