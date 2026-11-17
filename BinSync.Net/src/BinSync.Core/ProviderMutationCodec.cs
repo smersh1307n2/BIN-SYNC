@@ -58,6 +58,52 @@ public static class ProviderMutationCodec
         return mutation;
     }
 
+    /// <summary>
+    /// Reads and validates the canonical RecordId without materializing a ProviderMutation
+    /// or copying its value payload. Intended for metadata reference-index construction.
+    /// </summary>
+    public static RecordId DecodeRecordId(ReadOnlySpan<byte> bytes)
+    {
+        if (bytes.Length < FixedEncodedLength)
+            throw new InvalidDataException("Stored provider mutation is truncated.");
+
+        uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(49));
+        byte flags = bytes[18];
+        if (valueLength > int.MaxValue - FixedEncodedLength ||
+            bytes.Length != FixedEncodedLength + (int)valueLength ||
+            flags > 3 || flags == 3)
+            throw new InvalidDataException("Stored provider mutation length or flags are invalid.");
+
+        ReadOnlySpan<byte> recordIdBytes = bytes[..16];
+        if (recordIdBytes.IndexOfAnyExcept((byte)0) < 0 ||
+            bytes.Slice(31, 16).IndexOfAnyExcept((byte)0) < 0)
+            throw new InvalidDataException("Stored provider mutation has a zero RecordId or AuthorNodeId.");
+
+        bool hasChangeId = bytes.Slice(53, 16).IndexOfAnyExcept((byte)0) >= 0;
+        uint originEpoch = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(69));
+        ulong originSequence = BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(73));
+        if ((originSequence != 0 && originEpoch == 0) ||
+            (!hasChangeId && (originEpoch != 0 || originSequence != 0)))
+            throw new InvalidDataException("Stored provider mutation has inconsistent ChangeId/origin provenance.");
+
+        bool isTombstone = (flags & 1) != 0;
+        bool isRecordTombstone = (flags & 2) != 0;
+        ushort fieldId = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(16));
+        ushort keyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(bytes.Slice(47));
+        if (isRecordTombstone)
+        {
+            if (isTombstone || fieldId != Model.LifecycleFieldId ||
+                keyEpoch != 0 || valueLength != 0)
+                throw new InvalidDataException("Stored record tombstone violates its canonical contract.");
+        }
+        else if (isTombstone && valueLength != 0)
+        {
+            throw new InvalidDataException("Stored field tombstone carries a value payload.");
+        }
+
+        return RecordId.From(recordIdBytes);
+    }
+
     public static void Validate(ProviderMutation mutation)
     {
         ArgumentNullException.ThrowIfNull(mutation);
