@@ -839,6 +839,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
             var allocationStages = new Dictionary<string, long>(StringComparer.Ordinal);
+            metadata.TombstoneGcAllocationObserver = (stage, bytes) =>
+            {
+                allocationStages.TryGetValue(stage, out long previous);
+                allocationStages[stage] = checked(previous + bytes);
+            };
             coordinator.TombstoneGcAllocationObserver = (stage, bytes) =>
             {
                 allocationStages.TryGetValue(stage, out long previous);

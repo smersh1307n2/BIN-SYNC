@@ -7,6 +7,7 @@ on:
     paths:
       - 'BinSync.Net/src/BinSync.Storage/AsyncStorageSyncCoordinator.cs'
       - 'BinSync.Net/src/BinSync.Storage/AssemblyInfo.cs'
+      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
       - 'samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs'
       - '.github/workflows/composed-host-gc-scale.yml'
   workflow_dispatch:

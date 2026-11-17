@@ -30,6 +30,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     private readonly bool _ownsStorage;
     private StorageNamespaceGcStore? _namespaceGcStore;
     private TrustStore? _namespaceGcTrustStore;
+
+    // Optional test-only observer; null in production keeps this diagnostic path inert.
+    internal Action<string, long>? TombstoneGcAllocationObserver { get; set; }
     private bool _disposed;
 
     public StorageMetadataStore(string directory, ulong partitionId = 301, bool deleteOnDispose = false)
@@ -1379,14 +1382,26 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     {
         lock (_gate)
         {
+            Action<string, long>? observer = TombstoneGcAllocationObserver;
+            long checkpoint = observer is null ? 0 : GC.GetTotalAllocatedBytes(precise: true);
+            void Report(string phase)
+            {
+                if (observer is null) return;
+                long current = GC.GetTotalAllocatedBytes(precise: true);
+                observer(phase, current - checkpoint);
+                checkpoint = current;
+            }
+
             ThrowIfDisposed();
             ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
             if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
             {
+                Report("partition-state-load");
                 filter = new LiveRecordReferenceFilter(0);
                 return true;
             }
 
+            Report("partition-state-load");
             if (state.PeerStreams.Any(pair =>
                 pair.Key.NamespaceId == namespaceId &&
                 IsPeerStreamGcReservationOutstanding(
@@ -1398,6 +1413,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return false;
             }
 
+            Report("peer-reservation-check");
             long payloadCount = 0;
             foreach (PendingApplyValue pending in state.PendingApplies.Values)
                 if (pending.Batch.NamespaceId == namespaceId)
@@ -1409,6 +1425,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (stream.Key.NamespaceId == namespaceId)
                     payloadCount = checked(payloadCount + stream.Value.Count);
 
+            Report("payload-count");
             var builtFilter = new LiveRecordReferenceFilter(payloadCount);
             filter = builtFilter;
             bool AddPayload(byte[] payload)
@@ -1443,6 +1460,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 foreach (var item in stream.Value)
                     if (!AddPayload(item.Payload)) return false;
             }
+            Report("bloom-population");
             return true;
         }
     }
