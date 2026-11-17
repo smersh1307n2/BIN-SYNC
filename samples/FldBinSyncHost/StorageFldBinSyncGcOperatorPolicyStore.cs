@@ -84,7 +84,7 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStore : IFldBinSyncGcOperat
             LeasePath(policy.Binding, FldBinSyncGcDomain.Tombstone), cancellationToken).ConfigureAwait(false);
 
         using IDisposable writerAdmission =
-            await _metadata.AcquireGcWriterAdmissionAsync(cancellationToken).ConfigureAwait(false);
+            await _metadata.AcquireWriterAdmissionAsync(cancellationToken).ConfigureAwait(false);
 
         using StorageWriteBatch batch = _storage.BeginWriteBatch();
         byte[] policyKey = PolicyKey(policy.Binding);
