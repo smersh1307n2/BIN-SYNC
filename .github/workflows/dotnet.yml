@@ -54,7 +54,8 @@ jobs:
       - name: Run changed-component tests and samples
         shell: bash
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
           TEST_RESULTS: ${{ runner.temp }}/test-results
         run: |
           set -euo pipefail
@@ -74,7 +75,18 @@ jobs:
             exit 0
           fi
 
-          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base_sha="$BASE_SHA"
+          else
+            base_sha="$PUSH_BEFORE"
+            if [[ -z "$base_sha" || "$base_sha" =~ ^0+$ ]]; then
+              base_sha="$(git rev-parse "$GITHUB_SHA^" 2>/dev/null || true)"
+            fi
+          fi
+          if [[ -n "$base_sha" ]] && ! git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "$base_sha" --depth=1 || true
+          fi
+          if [[ -z "$base_sha" || "$base_sha" =~ ^0+$ ]] || ! git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
             echo "No usable base SHA; fail safe to complete BinSync.Net test suite."
             dotnet restore BinSync.Net/BinSync.slnx
             dotnet build BinSync.Net/BinSync.slnx --configuration Release --no-restore
@@ -86,7 +98,8 @@ jobs:
             exit 0
           fi
 
-          mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")
+          mapfile -t changed < <(echo "Changed-files base SHA: $base_sha"
+          git diff --name-only "$base_sha" "$GITHUB_SHA")
           run_tests=0
           run_all_samples=0
           samples=()
