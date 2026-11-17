@@ -148,6 +148,10 @@ public sealed class AsyncStorageSyncCoordinator
             if (proofSnapshot is null)
                 return 0;
 
+            if (!storageMetadata.TryCreateLiveRecordReferenceFilter(
+                scopeId, _node.NodeId, _namespaceId, out LiveRecordReferenceFilter liveReferenceFilter))
+                return 0; // Unknown payload or outstanding immutable peer reservation blocks physical GC.
+
             Guid spoolToken = await providerGc.BeginTombstoneGcApprovalSpoolAsync(ct).ConfigureAwait(false);
             bool spoolCommitted = false;
             ProviderSnapshotHandle? snapshot = null;
@@ -175,7 +179,7 @@ public sealed class AsyncStorageSyncCoordinator
                         {
                             if (!storageMetadata.TryFindLiveRecordReferences(
                                 scopeId, _node.NodeId, _namespaceId, page.Candidates,
-                                out liveRecordReferences))
+                                liveReferenceFilter, out liveRecordReferences))
                                 return 0; // Unknown payload or pending immutable peer reservation.
                         }
 

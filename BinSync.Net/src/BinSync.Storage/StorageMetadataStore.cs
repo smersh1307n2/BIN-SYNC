@@ -1379,12 +1379,93 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// Retained Metadata payloads are scanned under the writer-admission boundary;
     /// the returned set is bounded by the page size, never by namespace cardinality.
     /// </summary>
+    /// <summary>
+    /// Build a bounded Bloom prefilter from every retained namespace payload.
+    /// The caller must hold GC writer admission until candidate approval is committed.
+    /// A malformed payload or outstanding immutable peer reservation blocks GC.
+    /// </summary>
+    internal bool TryCreateLiveRecordReferenceFilter(
+        string scopeId, NodeId localReplica, int namespaceId,
+        out LiveRecordReferenceFilter filter)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+            {
+                filter = new LiveRecordReferenceFilter(0);
+                return true;
+            }
+
+            if (state.PeerStreams.Any(pair =>
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
+            {
+                filter = new LiveRecordReferenceFilter(0);
+                return false;
+            }
+
+            long payloadCount = 0;
+            foreach (PendingApplyValue pending in state.PendingApplies.Values)
+                if (pending.Batch.NamespaceId == namespaceId)
+                    payloadCount = checked(payloadCount + pending.Batch.Operations.Count);
+            foreach (var stream in state.Relay)
+                if (stream.Key.NamespaceId == namespaceId)
+                    payloadCount = checked(payloadCount + stream.Value.Count);
+            foreach (var stream in state.Outbound)
+                if (stream.Key.NamespaceId == namespaceId)
+                    payloadCount = checked(payloadCount + stream.Value.Count);
+
+            var builtFilter = new LiveRecordReferenceFilter(payloadCount);
+            filter = builtFilter;
+            bool AddPayload(byte[] payload)
+            {
+                try
+                {
+                    builtFilter.Add(ProviderMutationCodec.DecodeRecordId(payload));
+                    return true;
+                }
+                catch (Exception exception) when (exception is InvalidDataException or
+                    ArgumentException or EndOfStreamException or IndexOutOfRangeException)
+                {
+                    return false;
+                }
+            }
+
+            foreach (PendingApplyValue pending in state.PendingApplies.Values)
+            {
+                if (pending.Batch.NamespaceId != namespaceId) continue;
+                foreach (MetadataOperation operation in pending.Batch.Operations)
+                    if (!AddPayload(operation.Payload)) return false;
+            }
+            foreach (var stream in state.Relay)
+            {
+                if (stream.Key.NamespaceId != namespaceId) continue;
+                foreach (var item in stream.Value)
+                    if (!AddPayload(item.Payload)) return false;
+            }
+            foreach (var stream in state.Outbound)
+            {
+                if (stream.Key.NamespaceId != namespaceId) continue;
+                foreach (var item in stream.Value)
+                    if (!AddPayload(item.Payload)) return false;
+            }
+            return true;
+        }
+    }
+
     internal bool TryFindLiveRecordReferences(
         string scopeId, NodeId localReplica, int namespaceId,
         IReadOnlyList<ProviderMutation> candidates,
+        LiveRecordReferenceFilter referenceFilter,
         out HashSet<RecordId> liveRecords)
     {
         ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(referenceFilter);
         var candidateRecords = new HashSet<RecordId>(candidates.Count);
         foreach (ProviderMutation candidate in candidates)
         {
@@ -1404,8 +1485,22 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return true;
 
             if (state.PeerStreams.Any(pair =>
-                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
                 return false;
+
+            bool pageMayContainReference = false;
+            foreach (RecordId candidate in candidateRecords)
+            {
+                if (!referenceFilter.MightContain(candidate)) continue;
+                pageMayContainReference = true;
+                break;
+            }
+            if (!pageMayContainReference)
+                return true;
 
             bool ScanPayload(byte[] payload)
             {
@@ -1496,7 +1591,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return false;
 
             if (state.PeerStreams.Any(pair =>
-                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
                 return true;
             if (state.PendingApplies.Values.Any(pending =>
                 pending.Batch.NamespaceId == namespaceId &&
