@@ -1,4 +1,0 @@
-# Explicit request for one composed Host Metadata GC scale run.
-# Change this file only when intentionally requesting the 1k/10k/50k evidence suite.
-target: feature/fld-external-storage
-reason: validate the bounded RecordId Bloom prefilter against the recorded 50k baseline

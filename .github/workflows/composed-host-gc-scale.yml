@@ -2,13 +2,6 @@ name: Composed Host Metadata GC Scale
 
 on:
   workflow_dispatch:
-  # Explicit scale dispatch without running this workload on routine code pushes.
-  # Update .github/gc-scale-dispatch.txt only when a composed GC scale run is intended.
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - .github/gc-scale-dispatch.txt
   schedule:
     # Weekly scale evidence; not part of every functional CI run (UTC)
     - cron: "13 4 * * 0"
