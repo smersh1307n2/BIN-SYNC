@@ -1510,6 +1510,93 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
+    /// <summary>
+    /// Collects every RecordId retained by unresolved Metadata payloads in one namespace.
+    /// Returns false when a peer batch reservation is outstanding or a retained payload
+    /// cannot be decoded; callers must then refuse physical tombstone reclamation.
+    /// </summary>
+    public bool TryCollectLiveRecordReferences(
+        string scopeId, NodeId localReplica, int namespaceId,
+        out HashSet<RecordId> liveRecordReferences)
+    {
+        liveRecordReferences = new HashSet<RecordId>();
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+                return true;
+
+            if (state.PeerStreams.Any(pair =>
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
+                return false;
+
+            foreach (var pending in state.PendingApplies.Values)
+            {
+                if (pending.Batch.NamespaceId != namespaceId)
+                    continue;
+                foreach (var operation in pending.Batch.Operations)
+                {
+                    if (!TryAddLiveRecordReference(liveRecordReferences, operation.Payload))
+                    {
+                        liveRecordReferences.Clear();
+                        return false;
+                    }
+                }
+            }
+
+            foreach (var relay in state.Relay)
+            {
+                if (relay.Key.NamespaceId != namespaceId)
+                    continue;
+                foreach (var item in relay.Value)
+                {
+                    if (!TryAddLiveRecordReference(liveRecordReferences, item.Payload))
+                    {
+                        liveRecordReferences.Clear();
+                        return false;
+                    }
+                }
+            }
+
+            foreach (var outbound in state.Outbound)
+            {
+                if (outbound.Key.NamespaceId != namespaceId)
+                    continue;
+                foreach (var item in outbound.Value)
+                {
+                    if (!TryAddLiveRecordReference(liveRecordReferences, item.Payload))
+                    {
+                        liveRecordReferences.Clear();
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+    }
+
+    private static bool TryAddLiveRecordReference(
+        HashSet<RecordId> liveRecordReferences, byte[] payload)
+    {
+        try
+        {
+            liveRecordReferences.Add(ProviderMutationCodec.Decode(payload).RecordId);
+            return true;
+        }
+        catch (Exception exception) when (exception is InvalidDataException or
+            ArgumentException or EndOfStreamException or IndexOutOfRangeException)
+        {
+            // An undecodable retained payload may reference any record; fail closed.
+            return false;
+        }
+    }
+
     private static bool PayloadReferencesRecord(byte[] payload, RecordId recordId)
     {
         try
