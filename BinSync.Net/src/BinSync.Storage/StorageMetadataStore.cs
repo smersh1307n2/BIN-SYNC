@@ -1374,17 +1374,33 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// while candidate pages are consumed. Payloads are validated without allocating
     /// ProviderMutation objects or copying their value bytes.
     /// </summary>
-    internal bool TryCollectLiveRecordReferences(
+    /// <summary>
+    /// Find live RecordIds only within the current bounded tombstone candidate page.
+    /// Retained Metadata payloads are scanned under the writer-admission boundary;
+    /// the returned set is bounded by the page size, never by namespace cardinality.
+    /// </summary>
+    internal bool TryFindLiveRecordReferences(
         string scopeId, NodeId localReplica, int namespaceId,
+        IReadOnlyList<ProviderMutation> candidates,
         out HashSet<RecordId> liveRecords)
     {
+        ArgumentNullException.ThrowIfNull(candidates);
+        var candidateRecords = new HashSet<RecordId>(candidates.Count);
+        foreach (ProviderMutation candidate in candidates)
+        {
+            ArgumentNullException.ThrowIfNull(candidate);
+            if (!candidate.RecordId.IsZero)
+                candidateRecords.Add(candidate.RecordId);
+        }
+
         lock (_gate)
         {
             ThrowIfDisposed();
             ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
-            HashSet<RecordId> collectedRecords = new();
+            var collectedRecords = new HashSet<RecordId>();
             liveRecords = collectedRecords;
-            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+            if (candidateRecords.Count == 0 ||
+                !TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
                 return true;
 
             if (state.PeerStreams.Any(pair =>
@@ -1395,7 +1411,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             {
                 try
                 {
-                    collectedRecords.Add(ProviderMutationCodec.DecodeRecordId(payload));
+                    RecordId recordId = ProviderMutationCodec.DecodeRecordId(payload);
+                    if (candidateRecords.Contains(recordId))
+                        collectedRecords.Add(recordId);
                     return true;
                 }
                 catch (Exception exception) when (exception is InvalidDataException or
