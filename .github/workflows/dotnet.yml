@@ -53,6 +53,7 @@ jobs:
 
       - name: Run changed-component tests and samples
         shell: bash
+        env:
           TEST_RESULTS: ${{ runner.temp }}/test-results
         run: |
           set -euo pipefail
