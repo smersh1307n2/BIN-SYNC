@@ -1,0 +1,97 @@
+name: Composed Host Metadata GC Scale
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly scale evidence; not part of every functional CI run (UTC)
+    - cron: "13 4 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: composed-host-metadata-gc-scale-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scale:
+    name: composed Host GC scale (.NET 10, Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout BIN-SYNC
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "BIN-SYNC pins FLD Storage at $sha"
+
+      - name: Checkout exact FLD-DB revision used by the Storage submodule
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build Host adapter and its tests
+        shell: bash
+        run: |
+          dotnet build samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Measure composed Host GC scale in isolation
+        shell: bash
+        env:
+          COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/composed-host-metadata-gc-scale.md
+        run: |
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale|FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=fld-host-gc-scale.trx" \
+            --results-directory "$RUNNER_TEMP/fld-host-gc-scale-test-results" \
+            --blame-hang-timeout 5m \
+            --blame-hang-dump-type mini
+
+      - name: Verify and upload composed Host GC scale measurements
+        shell: bash
+        run: |
+          summary="$RUNNER_TEMP/composed-host-metadata-gc-scale.md"
+          test -f "$summary"
+          count="$(grep -c '^COMPOSED_HOST_' "$summary" || true)"
+          if [ "$count" -ne 6 ]; then
+            echo "::error::Expected 6 isolated Host GC measurements, found $count."
+            exit 1
+          fi
+          cp "$summary" composed-host-metadata-gc-scale.md
+
+      - name: Upload scale diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: composed-host-metadata-gc-scale-${{ github.sha }}
+          path: |
+            composed-host-metadata-gc-scale.md
+            ${{ runner.temp }}/fld-host-gc-scale-test-results
+          retention-days: 30
+          if-no-files-found: error
