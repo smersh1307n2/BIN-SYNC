@@ -40,6 +40,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -50,36 +51,93 @@ jobs:
         shell: bash
         run: bash scripts/vendor-ed25519-from-ztsharp.sh
 
-      - name: Restore
-        working-directory: BinSync.Net
-        run: dotnet restore BinSync.slnx
-
-      - name: Build
-        working-directory: BinSync.Net
-        run: dotnet build BinSync.slnx --configuration Release --no-restore
-
-      - name: Test
-        working-directory: BinSync.Net
-        run: >
-          dotnet test BinSync.slnx
-          --configuration Release
-          --no-build
-          --verbosity minimal
-          --collect:"XPlat Code Coverage"
-          --results-directory "${{ runner.temp }}/test-results"
-          --logger "console;verbosity=detailed"
-          --logger "trx;LogFileName=test-results.trx"
-          --blame-hang-timeout 3m
-          --blame-hang-dump-type mini
-          --
-          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
-
-      - name: Build and run public samples
+      - name: Run changed-component tests and samples
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          TEST_RESULTS: ${{ runner.temp }}/test-results
         run: |
-          dotnet run --project samples/TwoNodeLoopback -c Release
-          dotnet run --project samples/TwoNodeTcp -c Release
-          dotnet run --project samples/ScenarioHarness -c Release
-          dotnet run --project samples/V31ControlPlaneVectors -c Release
+          set -euo pipefail
+          test_project="BinSync.Net/tests/BinSync.Tests/BinSync.Tests.csproj"
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            dotnet restore BinSync.Net/BinSync.slnx
+            dotnet build BinSync.Net/BinSync.slnx --configuration Release --no-restore
+            dotnet test BinSync.Net/BinSync.slnx --configuration Release --no-build --verbosity minimal \
+              --collect:"XPlat Code Coverage" --results-directory "$TEST_RESULTS" \
+              --logger "console;verbosity=detailed" --logger "trx;LogFileName=test-results.trx" \
+              --blame-hang-timeout 3m --blame-hang-dump-type mini \
+              -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+            dotnet run --project samples/TwoNodeLoopback -c Release
+            dotnet run --project samples/TwoNodeTcp -c Release
+            dotnet run --project samples/ScenarioHarness -c Release
+            dotnet run --project samples/V31ControlPlaneVectors -c Release
+            exit 0
+          fi
+
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]] || ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            echo "No usable base SHA; fail safe to complete BinSync.Net test suite."
+            dotnet restore BinSync.Net/BinSync.slnx
+            dotnet build BinSync.Net/BinSync.slnx --configuration Release --no-restore
+            dotnet test BinSync.Net/BinSync.slnx --configuration Release --no-build --verbosity minimal \
+              --collect:"XPlat Code Coverage" --results-directory "$TEST_RESULTS" \
+              --logger "console;verbosity=detailed" --logger "trx;LogFileName=test-results.trx" \
+              --blame-hang-timeout 3m --blame-hang-dump-type mini \
+              -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+            exit 0
+          fi
+
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$GITHUB_SHA")
+          run_tests=0
+          run_all_samples=0
+          samples=()
+          for file in "${changed[@]}"; do
+            case "$file" in
+              BinSync.Net/src/BinSync.Core/*|BinSync.Net/tests/BinSync.Tests/*|BinSync.Net/tests/BinSync.MetadataStore.Conformance/*|scripts/vendor-ed25519-from-ztsharp.sh|third_party/ed25519-zlib/*)
+                run_tests=1 ;;
+              BinSync.Net/BinSync.slnx|BinSync.Net/Directory.*|Directory.*|*.props|*.targets|global.json|.github/workflows/dotnet.yml)
+                run_tests=1 ;;
+              BinSync.Net/src/BinSync.Storage/*|BinSync.Net/tests/BinSync.Storage.Integration/*|external/Fld1.Storage|external/Fld1.Storage/*)
+                # Covered by the dedicated FLD Storage integration workflow.
+                ;;
+              samples/TwoNodeLoopback/*) samples+=("samples/TwoNodeLoopback") ;;
+              samples/TwoNodeTcp/*) samples+=("samples/TwoNodeTcp") ;;
+              samples/ScenarioHarness/*) samples+=("samples/ScenarioHarness") ;;
+              samples/V31ControlPlaneVectors/*)
+                # Covered by the signed golden-vector job.
+                ;;
+              samples/StorageArraySync/*|samples/StorageArrayTcpSync/*|samples/FldBinSyncHost/*|samples/FldBinSyncHost.Tests/*)
+                # Covered by the dedicated storage/Host integration workflows.
+                ;;
+              BinSync.Net/src/*|BinSync.Net/tests/*|BinSync.Net/*)
+                run_tests=1 ;;
+              samples/*) run_all_samples=1 ;;
+              *)
+                # Documentation and benchmark-only edits do not require functional tests.
+                ;;
+            esac
+          done
+
+          if (( run_tests )); then
+            dotnet restore "$test_project"
+            dotnet build "$test_project" --configuration Release --no-restore
+            dotnet test "$test_project" --configuration Release --no-build --verbosity minimal \
+              --collect:"XPlat Code Coverage" --results-directory "$TEST_RESULTS" \
+              --logger "console;verbosity=detailed" --logger "trx;LogFileName=test-results.trx" \
+              --blame-hang-timeout 3m --blame-hang-dump-type mini \
+              -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+          else
+            echo "No BinSync.Core test project changes; affected integration checks run in their dedicated workflow."
+          fi
+
+          if (( run_all_samples )); then
+            dotnet run --project samples/TwoNodeLoopback -c Release
+            dotnet run --project samples/TwoNodeTcp -c Release
+            dotnet run --project samples/ScenarioHarness -c Release
+          else
+            for sample in "${samples[@]}"; do
+              dotnet run --project "$sample" -c Release
+            done
+          fi
 
       - name: Upload test results
         if: always()
