@@ -844,11 +844,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 allocationStages.TryGetValue(stage, out long previous);
                 allocationStages[stage] = checked(previous + bytes);
             };
-            coordinator.TombstoneGcAllocationObserver = (stage, bytes) =>
-            {
-                allocationStages.TryGetValue(stage, out long previous);
-                allocationStages[stage] = checked(previous + bytes);
-            };
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { });
             EnableAllGcDomainsForTest(adapter);
