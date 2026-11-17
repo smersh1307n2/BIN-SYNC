@@ -2,7 +2,7 @@ name: FLD Storage Integration
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main"]
     paths:
       - ".gitmodules"
       - ".github/workflows/storage-integration.yml"
