@@ -1360,27 +1360,21 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
-    /// Find only references to a bounded candidate page. Unlike
-    /// Unlike namespace-wide reference-set materialization, this does not retain every
-    /// referenced RecordId; retained payloads are decoded once and only matches
-    /// against the supplied candidate page are retained. A pending peer reservation
-    /// or malformed payload keeps the whole page fail-closed.
+    /// Build one namespace-local set of retained RecordIds for a complete tombstone-GC
+    /// pass. The caller holds writer admission for the pass, so the set remains valid
+    /// while candidate pages are consumed. Payloads are validated without allocating
+    /// ProviderMutation objects or copying their value bytes.
     /// </summary>
-    internal bool TryFindLiveRecordReferences(
+    internal bool TryCollectLiveRecordReferences(
         string scopeId, NodeId localReplica, int namespaceId,
-        IReadOnlyCollection<RecordId> candidates,
         out HashSet<RecordId> liveRecords)
     {
-        ArgumentNullException.ThrowIfNull(candidates);
         lock (_gate)
         {
             ThrowIfDisposed();
             ValidatePartitionArguments(scopeId, localReplica, namespaceId, localReplica);
-            var candidateSet = candidates as HashSet<RecordId> ?? new HashSet<RecordId>(candidates);
-            var referencedCandidates = new HashSet<RecordId>();
-            liveRecords = referencedCandidates;
-            if (candidateSet.Count == 0 ||
-                !TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+            liveRecords = new HashSet<RecordId>();
+            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
                 return true;
 
             if (state.PeerStreams.Any(pair =>
@@ -1391,9 +1385,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             {
                 try
                 {
-                    RecordId recordId = ProviderMutationCodec.Decode(payload).RecordId;
-                    if (candidateSet.Contains(recordId))
-                        referencedCandidates.Add(recordId);
+                    liveRecords.Add(ProviderMutationCodec.DecodeRecordId(payload));
                     return true;
                 }
                 catch (Exception exception) when (exception is InvalidDataException or
