@@ -39,7 +39,6 @@ permissions:
 jobs:
   test:
     name: durable provider integration (.NET 10) (${{ matrix.os }})
-    if: matrix.os == 'ubuntu-latest' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:

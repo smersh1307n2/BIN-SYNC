@@ -223,7 +223,6 @@ jobs:
 
   fld-host-integration-build:
     name: FLD cross-repository host adapter build (${{ matrix.os }})
-    if: matrix.os == 'ubuntu-latest' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
