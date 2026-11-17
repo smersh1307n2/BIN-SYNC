@@ -13,7 +13,7 @@
     <Description>Durable BIN-SYNC adapters for Fld1.Storage.</Description>
   </PropertyGroup>
   <PropertyGroup>
-    <Fld1StorageProject Condition="'$(Fld1StorageProject)' == ''">$(MSBuildThisFileDirectory)../../../external/Fld1.Storage/Fld1.Storage.csproj</Fld1StorageProject>
+    <Fld1StorageProject Condition="'$(Fld1StorageProject)' == ''">$(MSBuildThisFileDirectory)../../../external/Fld1.Storage/src/Fld1.Storage/Fld1.Storage.csproj</Fld1StorageProject>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../BinSync.Core/BinSync.Core.csproj" />
