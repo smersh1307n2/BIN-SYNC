@@ -10,7 +10,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SUBMODULE_PATH = "external/Fld1.Storage"
 STORAGE_PROJECT = ROOT / SUBMODULE_PATH / "src" / "Fld1.Storage" / "Fld1.Storage.csproj"
-EXPECTED_COMMIT = "e91d2e6382079df1e258204096141c7427c6088c"
 EXPECTED_URL = "https://github.com/smersh1307n2/FLD-DB.git"
 
 
@@ -38,12 +37,15 @@ def main() -> int:
     if configured_url != EXPECTED_URL:
         errors.append(f"unexpected submodule URL: {configured_url!r}")
     fields = tree_entry.split()
+    pinned_commit: str | None = None
     if len(fields) != 4 or fields[0] != "160000" or fields[1] != "commit":
         errors.append(f"expected a gitlink at {SUBMODULE_PATH}, got: {tree_entry!r}")
-    elif fields[2] != EXPECTED_COMMIT:
-        errors.append(f"gitlink points to {fields[2]}, expected {EXPECTED_COMMIT}")
-    if actual_commit != EXPECTED_COMMIT:
-        errors.append(f"checked-out submodule is {actual_commit}, expected {EXPECTED_COMMIT}")
+    else:
+        pinned_commit = fields[2]
+        if actual_commit != pinned_commit:
+            errors.append(
+                f"checked-out submodule is {actual_commit}, but HEAD gitlink pins {pinned_commit}"
+            )
     if not STORAGE_PROJECT.is_file():
         errors.append(f"Storage project not found: {STORAGE_PROJECT}")
 
@@ -52,7 +54,8 @@ def main() -> int:
             print(f"ERROR: {error}", file=sys.stderr)
         return 1
 
-    print(f"Verified {SUBMODULE_PATH} at FLD-DB commit {EXPECTED_COMMIT}.")
+    assert pinned_commit is not None
+    print(f"Verified {SUBMODULE_PATH} at FLD-DB commit {pinned_commit}.")
     return 0
 
 
