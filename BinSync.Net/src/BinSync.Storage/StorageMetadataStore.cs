@@ -1449,11 +1449,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     /// <summary>
     /// Find live RecordIds only within the current bounded tombstone candidate page.
-    /// Retained Metadata payloads are scanned under the writer-admission boundary;
-    /// the returned set is bounded by the page size, never by namespace cardinality.
-    /// </summary>
-    /// <summary>
-    /// Find live RecordIds only within the current bounded tombstone candidate page.
     /// Exact retained-payload scans are used only when the Bloom prefilter has a possible hit.
     /// </summary>
     internal bool TryFindLiveRecordReferences(
