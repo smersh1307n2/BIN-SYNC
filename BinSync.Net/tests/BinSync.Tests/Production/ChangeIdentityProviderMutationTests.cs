@@ -177,8 +177,8 @@ public sealed class ChangeIdentityProviderMutationTests
             inconsistentOrigin.AsSpan(73), 1);
         Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.DecodeRecordId(inconsistentOrigin));
 
-        var fieldTombstone = mutation with { IsTombstone = true };
-        byte[] invalidTombstone = ProviderMutationCodec.Encode(fieldTombstone);
+        byte[] invalidTombstone = encoded.ToArray();
+        invalidTombstone[18] = 1; // Field tombstone flag with a non-empty value.
         Assert.Throws<InvalidDataException>(() => ProviderMutationCodec.DecodeRecordId(invalidTombstone));
     }
 
