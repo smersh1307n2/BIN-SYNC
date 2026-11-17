@@ -39,6 +39,18 @@ public sealed class AsyncStorageSyncCoordinator
     private StorageNamespaceGcStore? _namespaceGcStore;
     private TrustStore? _namespaceGcTrustStore;
 
+    // Optional test-only observer. Null in production; no GC counter work is performed.
+    internal Action<string, long>? TombstoneGcAllocationObserver { get; set; }
+
+    private static void ReportTombstoneGcAllocation(
+        Action<string, long>? observer, string phase, ref long checkpoint)
+    {
+        if (observer is null) return;
+        long current = GC.GetTotalAllocatedBytes(precise: true);
+        observer(phase, current - checkpoint);
+        checkpoint = current;
+    }
+
     public AsyncStorageSyncCoordinator(
         Node node, IMetadataStore metadataStore, string scopeId, int namespaceId)
     {
@@ -128,6 +140,10 @@ public sealed class AsyncStorageSyncCoordinator
         if (!gcStore.IsTombstoneGcProofEnabled)
             return 0;
 
+        Action<string, long>? allocationObserver = TombstoneGcAllocationObserver;
+        long allocationCheckpoint = allocationObserver is null
+            ? 0
+            : GC.GetTotalAllocatedBytes(precise: true);
         await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -151,8 +167,10 @@ public sealed class AsyncStorageSyncCoordinator
             if (!storageMetadata.TryCreateLiveRecordReferenceFilter(
                 scopeId, _node.NodeId, _namespaceId, out LiveRecordReferenceFilter liveReferenceFilter))
                 return 0; // Unknown payload or outstanding immutable peer reservation blocks physical GC.
+            ReportTombstoneGcAllocation(allocationObserver, "metadata-prefilter", ref allocationCheckpoint);
 
             Guid spoolToken = await providerGc.BeginTombstoneGcApprovalSpoolAsync(ct).ConfigureAwait(false);
+            ReportTombstoneGcAllocation(allocationObserver, "spool-begin", ref allocationCheckpoint);
             bool spoolCommitted = false;
             ProviderSnapshotHandle? snapshot = null;
             int approvedExpectedCount = 0;
@@ -162,6 +180,7 @@ public sealed class AsyncStorageSyncCoordinator
                 // cursor is monotonic; no page reopens at index zero and no approved
                 // namespace-sized list is materialized in BIN-SYNC.
                 snapshot = await providerGc.OpenTombstoneGcCandidateSnapshotAsync(ct).ConfigureAwait(false);
+                ReportTombstoneGcAllocation(allocationObserver, "snapshot-open", ref allocationCheckpoint);
                 int cursor = 0;
                 while (true)
                 {
@@ -169,6 +188,7 @@ public sealed class AsyncStorageSyncCoordinator
                     ProviderTombstoneGcCandidatePage page =
                         await providerGc.ReadTombstoneGcCandidatePageAsync(
                             snapshot.Token, cursor, limit, ct).ConfigureAwait(false);
+                    ReportTombstoneGcAllocation(allocationObserver, "candidate-page-read", ref allocationCheckpoint);
                     if (page.Candidates.Count > limit)
                         throw new InvalidDataException("FLD tombstone candidate page exceeded its requested bound.");
 
@@ -182,6 +202,7 @@ public sealed class AsyncStorageSyncCoordinator
                                 liveReferenceFilter, out liveRecordReferences))
                                 return 0; // Unknown payload or pending immutable peer reservation.
                         }
+                        ReportTombstoneGcAllocation(allocationObserver, "metadata-reference-check", ref allocationCheckpoint);
 
                         var approvedPage = new List<ProviderMutation>(page.Candidates.Count);
                         foreach (ProviderMutation candidate in page.Candidates)
@@ -198,12 +219,14 @@ public sealed class AsyncStorageSyncCoordinator
                                 candidate.OriginSequence, candidate.HlcWall, candidate.HlcLogical))
                                 approvedPage.Add(candidate);
                         }
+                        ReportTombstoneGcAllocation(allocationObserver, "candidate-proof-filter", ref allocationCheckpoint);
 
                         if (approvedPage.Count != 0)
                         {
                             approvedExpectedCount = checked(approvedExpectedCount + approvedPage.Count);
                             await providerGc.AppendTombstoneGcApprovalSpoolAsync(
                                 spoolToken, approvedPage, ct).ConfigureAwait(false);
+                            ReportTombstoneGcAllocation(allocationObserver, "spool-append", ref allocationCheckpoint);
                         }
                     }
 
@@ -219,10 +242,12 @@ public sealed class AsyncStorageSyncCoordinator
                 await providerGc.ReleaseTombstoneGcCandidateSnapshotAsync(
                     snapshot.Token, CancellationToken.None).ConfigureAwait(false);
                 snapshot = null;
+                ReportTombstoneGcAllocation(allocationObserver, "snapshot-release", ref allocationCheckpoint);
 
                 (int approvedCount, byte[] approvalDigest) =
                     await providerGc.SealTombstoneGcApprovalSpoolAsync(
                         spoolToken, ct).ConfigureAwait(false);
+                ReportTombstoneGcAllocation(allocationObserver, "spool-seal", ref allocationCheckpoint);
                 if (approvalDigest.Length != 32)
                     throw new InvalidDataException("FLD approval spool returned an invalid SHA-256 digest.");
                 if (approvedCount != approvedExpectedCount)
@@ -237,6 +262,7 @@ public sealed class AsyncStorageSyncCoordinator
 
                 int reclaimed = await providerGc.CommitTombstoneGcApprovalSpoolAsync(
                     spoolToken, scopeId, _node.NodeId, _namespaceId, ct).ConfigureAwait(false);
+                ReportTombstoneGcAllocation(allocationObserver, "spool-commit", ref allocationCheckpoint);
                 spoolCommitted = true;
                 return reclaimed;
             }

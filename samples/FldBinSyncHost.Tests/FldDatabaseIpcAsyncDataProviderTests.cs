@@ -838,6 +838,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
+            var allocationStages = new Dictionary<string, long>(StringComparer.Ordinal);
+            coordinator.TombstoneGcAllocationObserver = (stage, bytes) =>
+            {
+                allocationStages.TryGetValue(stage, out long previous);
+                allocationStages[stage] = checked(previous + bytes);
+            };
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { });
             EnableAllGcDomainsForTest(adapter);
@@ -888,7 +894,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 $"TestProcessPeakWorkingSetBeforeBytes={testPeakBefore} " +
                 $"TestProcessPeakWorkingSetAfterBytes={testPeakAfter} " +
                 $"HostProcessPeakWorkingSetBeforeBytes={hostPeakBefore} " +
-                $"HostProcessPeakWorkingSetAfterBytes={hostPeakAfter}";
+                $"HostProcessPeakWorkingSetAfterBytes={hostPeakAfter} " +
+                $"AllocationStages={string.Join(';', allocationStages.Select(pair => $"{pair.Key}:{pair.Value}"))}";
             Console.WriteLine(metrics);
 
             string? measurementFile = Environment.GetEnvironmentVariable(
