@@ -4,9 +4,10 @@ on:
   push:
     branches: ["**"]
     paths:
+      - ".gitmodules"
       - ".github/workflows/storage-integration.yml"
-      - "external/Fld1.Storage/**"
-      - "eng/verify-fld-storage-vendor.py"
+      - "external/Fld1.Storage"
+      - "eng/verify-fld-storage-submodule.py"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
       - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
       - "BinSync.Net/src/BinSync.Core/**"
@@ -15,8 +16,9 @@ on:
       - "samples/StorageArrayTcpSync/**"
   pull_request:
     paths:
-      - "external/Fld1.Storage/**"
-      - "eng/verify-fld-storage-vendor.py"
+      - ".gitmodules"
+      - "external/Fld1.Storage"
+      - "eng/verify-fld-storage-submodule.py"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
       - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
       - "BinSync.Net/src/BinSync.Core/**"
@@ -44,8 +46,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Verify vendored FLD Storage source snapshot
-        run: python eng/verify-fld-storage-vendor.py
+        with:
+          submodules: recursive
+      - name: Verify FLD Storage submodule pin
+        run: python eng/verify-fld-storage-submodule.py
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
