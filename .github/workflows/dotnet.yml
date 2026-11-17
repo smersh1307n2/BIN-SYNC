@@ -2,24 +2,13 @@ name: BinSync.Net
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "feature/fld-external-storage"]
     paths:
       - "BinSync.Net/**"
       - "samples/**"
       - ".github/workflows/dotnet.yml"
-      - "docs/PRODUCTION-STATUS.md"
-      - "docs/BIN-SYNC-ROADMAP-v3.md"
       - "scripts/vendor-ed25519-from-ztsharp.sh"
       - "third_party/ed25519-zlib/**"
-      - "external/Fld1.Storage"
-  pull_request:
-    paths:
-      - "BinSync.Net/**"
-      - "samples/**"
-      - ".github/workflows/dotnet.yml"
-      - "docs/PRODUCTION-STATUS.md"
-      - "docs/BIN-SYNC-ROADMAP-v3.md"
-      - "scripts/vendor-ed25519-from-ztsharp.sh"
       - "external/Fld1.Storage"
   workflow_dispatch:
   schedule:

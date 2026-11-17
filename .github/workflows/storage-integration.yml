@@ -2,21 +2,10 @@ name: FLD Storage Integration
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "feature/fld-external-storage"]
     paths:
       - ".gitmodules"
       - ".github/workflows/storage-integration.yml"
-      - "external/Fld1.Storage"
-      - "eng/verify-fld-storage-submodule.py"
-      - "BinSync.Net/tests/BinSync.Storage.Integration/**"
-      - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
-      - "BinSync.Net/src/BinSync.Core/**"
-      - "BinSync.Net/src/BinSync.Storage/**"
-      - "samples/StorageArraySync/**"
-      - "samples/StorageArrayTcpSync/**"
-  pull_request:
-    paths:
-      - ".gitmodules"
       - "external/Fld1.Storage"
       - "eng/verify-fld-storage-submodule.py"
       - "BinSync.Net/tests/BinSync.Storage.Integration/**"
