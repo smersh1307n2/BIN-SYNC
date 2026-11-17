@@ -93,10 +93,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
-    internal ValueTask<IDisposable> AcquireGcWriterAdmissionAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Acquires the shared Metadata writer boundary for a durable host-owned
+    /// transaction that must serialize with Metadata mutations and namespace-GC commits.
+    /// Dispose the returned lease after the transaction completes.
+    /// </summary>
+    public ValueTask<IDisposable> AcquireWriterAdmissionAsync(CancellationToken cancellationToken = default)
         => _writerAdmission.EnterAsync(cancellationToken);
 
-    internal bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
+    internal ValueTask<IDisposable> AcquireGcWriterAdmissionAsync(CancellationToken cancellationToken)
+        => AcquireWriterAdmissionAsync(cancellationToken);
+
+    /// <summary>Returns true only when this adapter is attached to the exact StorageDatabase instance.</summary>
+    public bool IsBoundTo(StorageDatabase storage) => ReferenceEquals(_storage, storage);
     internal bool IsBoundTo(StorageNamespaceGcStore gcStore, string scopeId, NodeId localReplica)
         => gcStore is not null && gcStore.IsBoundTo(_storage, scopeId, localReplica);
 
