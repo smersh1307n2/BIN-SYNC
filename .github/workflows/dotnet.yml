@@ -328,11 +328,16 @@ jobs:
         shell: bash
         run: |
           summary="$RUNNER_TEMP/composed-host-metadata-gc-scale-${{ matrix.os }}.md"
-          if [ -f "$summary" ]; then
-            cp "$summary" "$RUNNER_TEMP/composed-host-metadata-gc-scale-${{ matrix.os }}-artifact.md"
-          else
-            printf '%s\\n' "The Host GC scale test did not write a measurement file." > "$summary"
+          if [ ! -f "$summary" ]; then
+            echo "::error::The isolated Host GC scale tests did not write a measurement file."
+            exit 1
           fi
+          count="$(grep -c '^COMPOSED_HOST_' "$summary" || true)"
+          if [ "$count" -ne 5 ]; then
+            echo "::error::Expected 5 isolated Host GC measurements, found $count."
+            exit 1
+          fi
+          cp "$summary" "$RUNNER_TEMP/composed-host-metadata-gc-scale-${{ matrix.os }}-artifact.md"
 
       - name: Upload composed Host GC scale measurements
         if: always()
