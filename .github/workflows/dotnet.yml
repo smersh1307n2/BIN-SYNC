@@ -38,6 +38,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -122,6 +124,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -157,6 +161,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -203,6 +209,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -235,11 +243,20 @@ jobs:
       - name: Vendor Ed25519 from ZtSharp (MIT subset)
         run: bash scripts/vendor-ed25519-from-ztsharp.sh
 
-      - name: Checkout public FLD-DB integration branch
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "BIN-SYNC pins FLD Storage at $sha"
+
+      - name: Checkout exact FLD-DB revision used by the Storage submodule
         uses: actions/checkout@v4
         with:
           repository: smersh1307n2/FLD-DB
-          ref: fix/crash-consistency-outbox
+          ref: ${{ steps.fld-ref.outputs.sha }}
           path: FLD-DB
           persist-credentials: false
 
