@@ -1,7 +1,7 @@
 {
   "source_repository": "smersh1307n2/FLD-DB",
   "source_branch": "fix/crash-consistency-outbox",
-  "source_commit": "28a487ae498a172026b5a90bc9acaaed4d863e7b",
+  "source_commit": "57e2cb651f69247ed066f59c3e082c5b0f4ea08f",
   "source_path": "src/Fld1.Storage",
   "files": {
     "Engine/StorageBlobStore.cs": "aeb4e73bae4826f598beeb7d65c31f2e82a039ad",
@@ -11,7 +11,7 @@
     "Engine/StorageSnapshotFile.cs": "1f5614304ee9bbf398c3bf9a5b080c62ae953634",
     "Integrity/StorageChecksums.cs": "c8f4f6393131282622c8919d21208570ef75dedd",
     "Ipc/StorageIpcConnection.cs": "24f3df422d035814f4362c040876d1ec80b0021b",
-    "Ipc/StorageIpcEndpoint.cs": "daebbb48827afc94b04bd916e305a22ac008a7cf",
+    "Ipc/StorageIpcEndpoint.cs": "0ae3d357201b76e06612e8d5025fd2d087718a4f",
     "Ipc/StorageIpcOperationDispatcher.cs": "b4187df60de723b125c84d9eca82b7d4ddead656",
     "Ipc/StorageIpcOperationLedger.cs": "f0bbf37b4566dea7f61de6e151aa4287a210ed83",
     "Ipc/StorageIpcOperationProtocol.cs": "5b57235654d45bb9dee147f3eee6e74b17c18f84",
