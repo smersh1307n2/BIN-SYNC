@@ -1369,12 +1369,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     /// <summary>
-    /// Build one namespace-local set of retained RecordIds for a complete tombstone-GC
-    /// pass. The caller holds writer admission for the pass, so the set remains valid
-    /// while candidate pages are consumed. Payloads are validated without allocating
-    /// ProviderMutation objects or copying their value bytes.
-    /// </summary>
-    /// <summary>
     /// Build a bounded Bloom prefilter from every retained namespace payload.
     /// The caller must hold GC writer admission until candidate approval is committed.
     /// A malformed payload or outstanding immutable peer reservation blocks GC.
@@ -1458,12 +1452,18 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     /// Retained Metadata payloads are scanned under the writer-admission boundary;
     /// the returned set is bounded by the page size, never by namespace cardinality.
     /// </summary>
+    /// <summary>
+    /// Find live RecordIds only within the current bounded tombstone candidate page.
+    /// Exact retained-payload scans are used only when the Bloom prefilter has a possible hit.
+    /// </summary>
     internal bool TryFindLiveRecordReferences(
         string scopeId, NodeId localReplica, int namespaceId,
         IReadOnlyList<ProviderMutation> candidates,
+        LiveRecordReferenceFilter referenceFilter,
         out HashSet<RecordId> liveRecords)
     {
         ArgumentNullException.ThrowIfNull(candidates);
+        ArgumentNullException.ThrowIfNull(referenceFilter);
         var candidateRecords = new HashSet<RecordId>(candidates.Count);
         foreach (ProviderMutation candidate in candidates)
         {
@@ -1483,8 +1483,22 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return true;
 
             if (state.PeerStreams.Any(pair =>
-                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
                 return false;
+
+            bool pageMayContainReference = false;
+            foreach (RecordId candidate in candidateRecords)
+            {
+                if (!referenceFilter.MightContain(candidate)) continue;
+                pageMayContainReference = true;
+                break;
+            }
+            if (!pageMayContainReference)
+                return true;
 
             bool ScanPayload(byte[] payload)
             {
@@ -1575,7 +1589,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return false;
 
             if (state.PeerStreams.Any(pair =>
-                pair.Key.NamespaceId == namespaceId && pair.Value.PendingBatch is not null))
+                pair.Key.NamespaceId == namespaceId &&
+                IsPeerStreamGcReservationOutstanding(
+                    pair.Value.PendingBatch is not null,
+                    pair.Value.PushedCursor,
+                    pair.Value.AckedCursor)))
                 return true;
             if (state.PendingApplies.Values.Any(pending =>
                 pending.Batch.NamespaceId == namespaceId &&
