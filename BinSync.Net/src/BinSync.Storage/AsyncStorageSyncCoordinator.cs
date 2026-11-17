@@ -152,7 +152,6 @@ public sealed class AsyncStorageSyncCoordinator
             bool spoolCommitted = false;
             ProviderSnapshotHandle? snapshot = null;
             int approvedExpectedCount = 0;
-            HashSet<RecordId>? liveRecordReferences = null;
             try
             {
                 // One immutable provider snapshot spans every candidate page. The
@@ -171,16 +170,13 @@ public sealed class AsyncStorageSyncCoordinator
 
                     if (page.Candidates.Count != 0)
                     {
-                        if (liveRecordReferences is null)
+                        HashSet<RecordId> liveRecordReferences;
+                        lock (_metadataGate)
                         {
-                            lock (_metadataGate)
-                            {
-                                if (!storageMetadata.TryCollectLiveRecordReferences(
-                                    scopeId, _node.NodeId, _namespaceId,
-                                    out HashSet<RecordId> collectedReferences))
-                                    return 0; // Unknown payload or pending immutable peer reservation.
-                                liveRecordReferences = collectedReferences;
-                            }
+                            if (!storageMetadata.TryFindLiveRecordReferences(
+                                scopeId, _node.NodeId, _namespaceId, page.Candidates,
+                                out liveRecordReferences))
+                                return 0; // Unknown payload or pending immutable peer reservation.
                         }
 
                         var approvedPage = new List<ProviderMutation>(page.Candidates.Count);
@@ -190,7 +186,7 @@ public sealed class AsyncStorageSyncCoordinator
                                 candidate.RecordId.IsZero || candidate.ChangeId.IsZero ||
                                 candidate.AuthorNodeId.IsZero || candidate.OriginAuthorEpoch == 0 ||
                                 candidate.OriginSequence == 0 || candidate.HlcWall == 0 ||
-                                liveRecordReferences!.Contains(candidate.RecordId))
+                                liveRecordReferences.Contains(candidate.RecordId))
                                 continue;
 
                             if (proofSnapshot.HasProof(
