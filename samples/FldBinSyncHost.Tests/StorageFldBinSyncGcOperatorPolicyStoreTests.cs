@@ -76,7 +76,7 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
             Assert.True(await store.TryCommitAsync(0, initial, initialAudit));
 
             IAsyncDisposable? lease = await store.TryAcquireMaintenanceLeaseAsync(
-                Binding(), expectedGeneration: 1, FldBinSyncGcDomain.ChangeId);
+                Binding(), expectedGeneration: 1, domain: FldBinSyncGcDomain.ChangeId);
             Assert.NotNull(lease);
 
             var (replacement, replacementAudit) = Next(2, 2, receipt: true);
