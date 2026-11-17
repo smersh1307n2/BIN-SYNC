@@ -1,13 +1,13 @@
 {
   "source_repository": "smersh1307n2/FLD-DB",
   "source_branch": "fix/crash-consistency-outbox",
-  "source_commit": "6b35acd4a3c5b53c611a27e253edf874f226dbff",
+  "source_commit": "60baa3622f46d45f6ae276091cbdd3cfdf134eac",
   "source_path": "src/Fld1.Storage",
   "files": {
     "Engine/StorageBlobStore.cs": "aeb4e73bae4826f598beeb7d65c31f2e82a039ad",
-    "Engine/StorageDatabase.cs": "6a5d7eef7afe3329b0b97c42b1b2fd0eb9bdd31c",
+    "Engine/StorageDatabase.cs": "77c02061a93a880440a54d4f7857b5fbb1c562cc",
     "Engine/StorageDirectorySync.cs": "e2954c8fdaf5af89e725de61497d8a2abd47feb1",
-    "Engine/StorageFaultPoint.cs": "ad4f8b2e16c40b89d7eba742b540bf47499c3c65",
+    "Engine/StorageFaultPoint.cs": "e02ae19f99ab56271a43163c48ce0650e06363e9",
     "Engine/StorageSnapshotFile.cs": "1f5614304ee9bbf398c3bf9a5b080c62ae953634",
     "Integrity/StorageChecksums.cs": "c8f4f6393131282622c8919d21208570ef75dedd",
     "Ipc/StorageIpcConnection.cs": "24f3df422d035814f4362c040876d1ec80b0021b",
@@ -19,15 +19,20 @@
     "Wal/Format/WalConstants.cs": "1e786f562e61226350e1369d88ae4073dc78d09e",
     "Wal/Format/WalEnvelope.cs": "334d3101456f4d9aef4e43c85bdc6dcfc0628817",
     "Wal/Format/WalHeader.cs": "073652a481b7b86d622fd6a662c8417de8865744",
-    "Wal/IO/WalManager.cs": "afca5b45a5f676df55ac33c85aaad14671d4de11",
+    "Wal/IO/WalManager.cs": "a474207352743ff678331b2e1e01e2a572ef3996",
     "Wal/IO/WalWriter.cs": "3ac08020a48ac56f69dd963ffe24995fa9ee9a40",
     "Wal/IO/WalWriterFence.cs": "c13c3fa369e87c06d3e7063c0995b1cfc79c81e5",
-    "Wal/Recovery/WalRecovery.cs": "1922c6dded6fcd6f6ea8f9e7f34bf7d4892e3526",
-    "Fld1.Storage.csproj": "25593a5139252ac40a527af14ed4a213b144d806",
+    "Wal/Recovery/WalRecovery.cs": "0813e87c8264f3085293d6b96de63436e1338d10",
+    "Fld1.Storage.csproj": "0f690944377a5c2ddf5c741a6c946a89fa4567e5",
     "Engine/StoragePageCodec.cs": "d3c6fcc9a4bb18ce6022c8204e3ba4fc6729cf1f",
     "Engine/StoragePageCache.cs": "4a7a764db242180c096788945a3234c070e160b6",
     "Engine/StorageGenerationPins.cs": "6bba96769869182e5d2e106a190240a7164b98e0",
-    "Engine/StorageRandomAccessFile.cs": "4276b4521a6d75e129d5441e83936001fdbe5263",
-    "Engine/StorageBTreePageCodec.cs": "d57fa20812e46c4f8dd749cb7ff572be8907a70a"
+    "Engine/StorageRandomAccessFile.cs": "036b429a3f594ce2ea3608bb64e6610c0488fd14",
+    "Engine/StorageBTreePageCodec.cs": "e83e7d29ccef3b329108679cb8af8c1eefaf5085",
+    "Engine/StorageBTreeGenerationBuilder.cs": "49aae8ec11791d18e9d976f9c44c41d580d16e79",
+    "Engine/StorageBTreeGenerationFiles.cs": "638c58c9b7257f08d95046489463a179f348395e",
+    "Engine/StorageBTreeManifestCodec.cs": "8cf177bbb7080328d1b3f7a47903c631f6b0dbbf",
+    "Engine/StorageBTreeRootPublisher.cs": "f7272b1a74a19cfce0f8cd276f3029836a557eae",
+    "Engine/StorageBTreeUpdater.cs": "06f8c88b8b72de8a980400c348ade20664008187"
   }
 }
