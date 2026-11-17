@@ -1,17 +1,9 @@
 name: Durable Metadata Bench
 
 on:
-  push:
-    branches: ["feature/fld-external-storage"]
-    paths:
-      - "BinSync.Net/bench/**"
-      - "BinSync.Net/src/BinSync.Core/Production/Node.ProviderSnapshot.cs"
-      - "BinSync.Net/src/BinSync.Storage/StorageSyncCoordinator.cs"
-      - "BinSync.Net/src/BinSync.Storage/StorageDataProvider.cs"
-      - "BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs"
-      - "external/Fld1.Storage"
-      - "external/Fld1.Storage/**"
-      - ".github/workflows/metadata-bench.yml"
+  # This is a multi-suite performance run (peer lifecycle, retry, cardinality,
+  # ChangeId GC and 1M rows). Start it explicitly at a benchmark milestone.
+  workflow_dispatch:
 
 permissions:
   contents: read
