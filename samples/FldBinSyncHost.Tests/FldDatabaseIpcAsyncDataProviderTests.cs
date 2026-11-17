@@ -1152,6 +1152,16 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore}";
             Console.WriteLine(metrics);
 
+            string? measurementFile = Environment.GetEnvironmentVariable(
+                "COMPOSED_HOST_METADATA_GC_SCALE_FILE");
+            if (!string.IsNullOrWhiteSpace(measurementFile))
+            {
+                string? directory = Path.GetDirectoryName(measurementFile);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory);
+                await File.AppendAllTextAsync(measurementFile, metrics + Environment.NewLine);
+            }
+
             // Each GitHub Actions step receives a different GITHUB_STEP_SUMMARY
             // file. Write to an explicit runner-temp file shared with the artifact
             // upload step instead of relying on the per-step summary path.
