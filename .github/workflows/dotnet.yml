@@ -333,8 +333,8 @@ jobs:
             exit 1
           fi
           count="$(grep -c '^COMPOSED_HOST_' "$summary" || true)"
-          if [ "$count" -ne 5 ]; then
-            echo "::error::Expected 5 isolated Host GC measurements, found $count."
+          if [ "$count" -ne 6 ]; then
+            echo "::error::Expected 6 isolated Host GC measurements, found $count."
             exit 1
           fi
           cp "$summary" "$RUNNER_TEMP/composed-host-metadata-gc-scale-${{ matrix.os }}-artifact.md"
