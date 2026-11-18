@@ -148,8 +148,14 @@ public sealed class FldBinSyncAsyncHostAdapter
         if (publicationLimit is < 1 or > 4096)
             throw new ArgumentOutOfRangeException(nameof(publicationLimit));
         _publicationLimit = publicationLimit;
-        _gcControl = gcControl ?? new FldBinSyncGcMaintenanceControl();
         _gcPolicyCoordinator = gcPolicyCoordinator;
+        _gcControl = gcControl ?? gcPolicyCoordinator?.RuntimeControl ??
+            new FldBinSyncGcMaintenanceControl();
+        if (gcPolicyCoordinator is not null &&
+            !ReferenceEquals(_gcControl, gcPolicyCoordinator.RuntimeControl))
+            throw new ArgumentException(
+                "The adapter and durable policy coordinator must share the exact GC maintenance control.",
+                nameof(gcControl));
         _requireDurableOperatorPolicy = requireDurableOperatorPolicy;
     }
 
