@@ -246,7 +246,10 @@ public sealed class FldBinSyncRuntimeHostTests
             databaseHost = StartDatabaseHost(fldRoot);
             await WaitForDatabaseHost(fldRoot, databaseHost, TimeSpan.FromSeconds(45));
 
-            runtimeHost = StartRuntimeHost(metadataRoot, fldRoot);
+            runtimeHost = StartRuntimeHost(
+                metadataRoot, fldRoot, MetadataPartition, LocalAuthor, ScopeId,
+                MetadataScopeId, NamespaceId, ProviderClientId,
+                maintenanceIntervalMs: 5000);
             (Uri address, int peerPort) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
 
             using var anonymous = new HttpClient { BaseAddress = address };
@@ -266,6 +269,7 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.True(ready.RootElement.GetProperty("peerListenerStarted").GetBoolean());
             Assert.True(ready.RootElement.GetProperty("maintenanceSchedulerStarted").GetBoolean());
             Assert.False(ready.RootElement.GetProperty("gcExecutionEnabled").GetBoolean());
+            await WaitForMaintenanceTick(client, TimeSpan.FromSeconds(20));
 
             using var peerNode = new Node(NodeId.From(Id(0x54)));
             await using (SyncSession peerSession = await TcpSync.ConnectAsync(
@@ -280,6 +284,18 @@ public sealed class FldBinSyncRuntimeHostTests
             {
                 Assert.Equal(NodeId.From(LocalAuthor), peerSession.PeerNodeId);
                 await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(5));
+
+                Task<HttpResponseMessage> hostBaselineTask = client.PostAsJsonAsync(
+                    "/admin/test/complete-peer-baseline", new { });
+                Task<(int Prefixes, int FieldsApplied)> peerBaselineTask =
+                    peerSession.AutoReconcileAsync(
+                        peerNode, NamespaceId, initiate: false, maxPrefixes: 16);
+                await Task.WhenAll(hostBaselineTask, peerBaselineTask);
+                using HttpResponseMessage hostBaseline = await hostBaselineTask;
+                Assert.Equal(HttpStatusCode.OK, hostBaseline.StatusCode);
+                (int prefixes, int fieldsApplied) = await peerBaselineTask;
+                Assert.Equal(0, prefixes);
+                Assert.Equal(0, fieldsApplied);
             }
             await WaitForActivePeer(client, expected: 0, TimeSpan.FromSeconds(5));
 
