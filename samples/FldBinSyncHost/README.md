@@ -312,7 +312,19 @@ For the async Host adapter, call `RecoverBeforeAcceptingSessionsAsync` as the st
 
 `FldBinSyncGcDomainReadiness.Blockers` exposes stable `FldBinSyncGcBlockerCode` identifiers alongside the existing human-readable `BlockedReasons` strings. Unknown future messages map to `Unclassified` rather than being silently treated as a known condition. Consumers should alert on the stable code and retain the message for operator context; neither a blocker code nor a readiness snapshot authorizes candidate deletion.
 
-The sample includes `StorageFldBinSyncGcOperatorPolicyStore`, which stores policy and audit records in one `StorageWriteBatch` on the exact `StorageDatabase` shared with `StorageMetadataStore`, and uses OS file-share locks for cross-process per-domain leases. The embedding production application must still provide its real authenticated `IFldBinSyncGcOperatorAuthorizer`, operator identity/control plane, durable retention/backup policy and a tested production Host composition. These sample tests are not a Windows power-loss durability claim. Until those application-owned pieces and the remaining V3 release gates are implemented and validated, keep all physical-GC startup flags false and Ghost GC excluded.
+The sample includes `StorageFldBinSyncGcOperatorPolicyStore`, which stores policy and audit records in one `StorageWriteBatch` on the exact `StorageDatabase` shared with `StorageMetadataStore`, and uses OS file-share locks for cross-process per-domain leases. It also includes `FldBinSyncAsyncHostComposition.Create`, which wires the caller-owned `StorageDatabase`, Metadata adapter, namespace-GC guard, durable policy store/coordinator, shared runtime control and async Host adapter into one checked object graph. Its test verifies the exact shared Storage/control bindings and that every GC domain remains disabled by default.
+
+Typical startup ordering:
+
+```csharp
+using var host = FldBinSyncAsyncHostComposition.Create(
+    storage, node, scopeId, metadataScopeId, namespaceId, trustStore,
+    provider, remoteApply, persistNode, authorizer);
+await host.RecoverBeforeAcceptingSessionsAsync(cancellationToken);
+// Only now accept peer sessions and start maintenance scheduling.
+```
+
+The embedding production application must still provide its real authenticated `IFldBinSyncGcOperatorAuthorizer`, operator identity/control plane, durable retention/backup policy, and executable Host/transport/session lifecycle. These sample tests are not a Windows power-loss durability claim. Until those application-owned pieces and the remaining V3 release gates are implemented and validated, keep all physical-GC startup flags false and Ghost GC excluded.
 
 The store contract requires `TryAcquireMaintenanceLeaseAsync`. The store atomically verifies the current policy generation and enabled bit; a policy update that disables or changes a domain waits for active leases to drain. A null lease makes the adapter skip that domain's page and disable only that local domain; other independent domains remain eligible. Store read/corruption failures throw and fail closed by stopping the entire local runtime control. `FldBinSyncAsyncHostAdapter.RunGcDomainAsync` now acquires and releases this durable lease internally around every bounded adapter GC operation, including legacy per-domain entry points. Production code must route maintenance through the adapter and must not call lower-level compaction APIs directly. The local runtime gate alone is not a cross-process policy fence.
 
