@@ -501,7 +501,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     [InlineData(1_000)]
     [InlineData(10_000)]
     [InlineData(50_000)]
-    [InlineData(1_000)]
     [InlineData(100_000)]
     [InlineData(250_000)]
     public async Task Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references(
