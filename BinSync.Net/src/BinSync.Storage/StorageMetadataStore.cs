@@ -1023,6 +1023,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (hostReferenced.Count >= candidateChangeIds.Length)
             return 0;
 
+        long revalidationStart = allocationObserver is null
+            ? 0
+            : GC.GetTotalAllocatedBytes(precise: true);
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -1038,6 +1041,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             // The Host lease and Metadata writer admission have remained held
             // since the initial scan, so this signed horizon is still current.
             HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
+            ReportAllocation("metadata-revalidation-live-set");
             var approved = new List<(LedgerKey Key, byte[] StorageKey)>(candidates.Count);
             foreach ((LedgerKey key, OperationOrigin origin) in candidates)
             {
@@ -1053,10 +1057,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 key.ChangeId.WriteTo(suffix.AsSpan(2));
                 approved.Add((key, StorageKey(PartitionRoot(partitionKey), 3, suffix)));
             }
+            ReportAllocation("metadata-revalidation-approved-candidates");
             if (approved.Count == 0)
                 return 0;
 
             byte[][] deletes = approved.Select(item => item.StorageKey).ToArray();
+            ReportAllocation("metadata-revalidation-delete-array");
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
                 () =>
@@ -1064,8 +1070,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     foreach (var item in approved)
                         current.ChangeLedger.Remove(item.Key);
                 });
+            ReportAllocation("metadata-revalidation-storage-commit");
             int reclaimed = approved.Count;
-            ReportAllocation("metadata-revalidation-and-commit");
+            if (allocationObserver is not null)
+            {
+                allocationObserver("metadata-revalidation-total",
+                    GC.GetTotalAllocatedBytes(precise: true) - revalidationStart);
+                allocationCheckpoint = GC.GetTotalAllocatedBytes(precise: true);
+            }
             return reclaimed;
         }
     }
