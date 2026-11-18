@@ -244,6 +244,12 @@ try
         {
             return Results.BadRequest(new { error = exception.Message });
         }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Test current-value endpoint failed: {exception}");
+            return Results.Problem(title: "Test current-value read failed.", detail: exception.ToString(),
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
     });
 
     app.MapPost("/admin/peers/connect", async (
