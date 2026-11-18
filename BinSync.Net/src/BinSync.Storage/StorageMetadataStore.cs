@@ -1065,14 +1065,30 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
                 candidates[approvedCount++] = candidate with
                 {
-                    StorageKey = ChangeLedgerStorageKey(partitionRoot, namespaceId, key.ChangeId)
+                };
+            }
+            if (approvedCount == 0)
+            {
+                ReportAllocation("metadata-revalidation-approved-candidates");
+                return 0;
+            }
+
+            int storageKeyLength = checked(partitionRoot.Length + 19);
+            byte[] packedStorageKeys = new byte[checked(approvedCount * storageKeyLength)];
+            for (int i = 0; i < approvedCount; i++)
+            {
+                int offset = checked(i * storageKeyLength);
+                WriteChangeLedgerStorageKey(
+                    packedStorageKeys.AsSpan(offset, storageKeyLength),
+                    partitionRoot, namespaceId, candidates[i].Key.ChangeId);
+                candidates[i] = candidates[i] with
+                {
+                    StorageKey = packedStorageKeys.AsMemory(offset, storageKeyLength)
                 };
             }
             ReportAllocation("metadata-revalidation-approved-candidates");
-            if (approvedCount == 0)
-                return 0;
 
-            IReadOnlyList<byte[]> deletes = new ChangeIdStorageKeyView(candidates, approvedCount);
+            IReadOnlyList<ReadOnlyMemory<byte>> deletes = new ChangeIdStorageKeyView(candidates, approvedCount);
             ReportAllocation("metadata-revalidation-delete-view");
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
@@ -5658,6 +5674,15 @@ private static bool ValidateIncomingBatchForStaging(
         IReadOnlyList<(byte[] Key, byte[] Value)> writes,
         IReadOnlyList<byte[]> deletes,
         Action publish)
+        => CommitPeerMetadataDelta(partitionKey, current, writes,
+            new ByteArrayStorageKeyMemoryView(deletes), publish);
+
+    private void CommitPeerMetadataDelta(
+        PartitionKey partitionKey,
+        PartitionState current,
+        IReadOnlyList<(byte[] Key, byte[] Value)> writes,
+        IReadOnlyList<ReadOnlyMemory<byte>> deletes,
+        Action publish)
     {
         Action<string, long>? allocationObserver = ChangeIdGcAllocationObserver;
         long allocationCheckpoint = allocationObserver is null ? 0 : GC.GetTotalAllocatedBytes(precise: true);
@@ -5878,13 +5903,21 @@ private static bool ValidateIncomingBatchForStaging(
 
     private static byte[] ChangeLedgerStorageKey(byte[] partitionRoot, int namespaceId, BatchId changeId)
     {
-        byte[] key = new byte[partitionRoot.Length + 1 + 18];
-        partitionRoot.CopyTo(key, 0);
+        byte[] key = new byte[partitionRoot.Length + 19];
+        WriteChangeLedgerStorageKey(key, partitionRoot, namespaceId, changeId);
+        return key;
+    }
+
+    private static void WriteChangeLedgerStorageKey(
+        Span<byte> key, byte[] partitionRoot, int namespaceId, BatchId changeId)
+    {
+        if (key.Length != partitionRoot.Length + 19)
+            throw new ArgumentException("ChangeLedger storage key buffer has an invalid length.", nameof(key));
+        partitionRoot.CopyTo(key);
         key[partitionRoot.Length] = 3;
         BinaryPrimitives.WriteUInt16LittleEndian(
-            key.AsSpan(partitionRoot.Length + 1), checked((ushort)namespaceId));
-        changeId.WriteTo(key.AsSpan(partitionRoot.Length + 3));
-        return key;
+            key.Slice(partitionRoot.Length + 1, 2), checked((ushort)namespaceId));
+        changeId.WriteTo(key.Slice(partitionRoot.Length + 3, 16));
     }
 
     private static Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)> StateEntries(
@@ -6831,7 +6864,7 @@ private static bool ValidateIncomingBatchForStaging(
     // identity as the revalidation snapshot instead of copying the full provenance
     // value into every candidate; any ledger update replaces this record instance.
     private readonly record struct ChangeIdGcCandidate(
-        LedgerKey Key, ChangeLedgerValue Value, byte[]? StorageKey);
+        LedgerKey Key, ChangeLedgerValue Value, ReadOnlyMemory<byte>? StorageKey);
 
     private sealed class ChangeIdTupleStorageKeyView : IReadOnlyList<byte[]>
     {
@@ -6854,7 +6887,21 @@ private static bool ValidateIncomingBatchForStaging(
             => GetEnumerator();
     }
 
-    private sealed class ChangeIdStorageKeyView : IReadOnlyList<byte[]>
+    private sealed class ByteArrayStorageKeyMemoryView : IReadOnlyList<ReadOnlyMemory<byte>>
+    {
+        private readonly IReadOnlyList<byte[]> _keys;
+        public ByteArrayStorageKeyMemoryView(IReadOnlyList<byte[]> keys) => _keys = keys;
+        public int Count => _keys.Count;
+        public ReadOnlyMemory<byte> this[int index] => _keys[index];
+        public IEnumerator<ReadOnlyMemory<byte>> GetEnumerator()
+        {
+            for (int i = 0; i < _keys.Count; i++)
+                yield return _keys[i];
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class ChangeIdStorageKeyView : IReadOnlyList<ReadOnlyMemory<byte>>
     {
         private readonly IReadOnlyList<ChangeIdGcCandidate> _candidates;
         private readonly int _count;
@@ -6870,11 +6917,11 @@ private static bool ValidateIncomingBatchForStaging(
         }
 
         public int Count => _count;
-        public byte[] this[int index] =>
+        public ReadOnlyMemory<byte> this[int index] =>
             _candidates[index].StorageKey
             ?? throw new InvalidOperationException("An approved ChangeId GC candidate has no storage key.");
 
-        public IEnumerator<byte[]> GetEnumerator()
+        public IEnumerator<ReadOnlyMemory<byte>> GetEnumerator()
         {
             for (int i = 0; i < _count; i++)
                 yield return this[i];
