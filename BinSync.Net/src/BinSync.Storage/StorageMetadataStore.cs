@@ -1071,10 +1071,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (approvedCount == 0)
                 return 0;
 
-            byte[][] deletes = new byte[approvedCount][];
-            for (int i = 0; i < approvedCount; i++)
-                deletes[i] = candidates[i].StorageKey!;
-            ReportAllocation("metadata-revalidation-delete-array");
+            IReadOnlyList<byte[]> deletes = new ChangeIdStorageKeyView(candidates, approvedCount);
+            ReportAllocation("metadata-revalidation-delete-view");
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
                 () =>
@@ -5685,8 +5683,8 @@ private static bool ValidateIncomingBatchForStaging(
             throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
         if (identityKey is not null)
             batch.PutShared(identityKey, identityValue!);
-        foreach (var key in deletes)
-            batch.DeleteShared(key);
+        for (int i = 0; i < deletes.Count; i++)
+            batch.DeleteShared(deletes[i]);
         foreach (var write in writes)
             batch.PutShared(write.Key, write.Value);
         ReportAllocation("metadata-batch-staging");
@@ -6830,6 +6828,36 @@ private static bool ValidateIncomingBatchForStaging(
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
     private readonly record struct ChangeIdGcCandidate(
         LedgerKey Key, OperationOrigin Origin, byte[]? StorageKey);
+
+    private sealed class ChangeIdStorageKeyView : IReadOnlyList<byte[]>
+    {
+        private readonly IReadOnlyList<ChangeIdGcCandidate> _candidates;
+        private readonly int _count;
+
+        public ChangeIdStorageKeyView(
+            IReadOnlyList<ChangeIdGcCandidate> candidates,
+            int count)
+        {
+            if ((uint)count > (uint)candidates.Count)
+                throw new ArgumentOutOfRangeException(nameof(count));
+            _candidates = candidates;
+            _count = count;
+        }
+
+        public int Count => _count;
+        public byte[] this[int index] =>
+            _candidates[index].StorageKey
+            ?? throw new InvalidOperationException("An approved ChangeId GC candidate has no storage key.");
+
+        public IEnumerator<byte[]> GetEnumerator()
+        {
+            for (int i = 0; i < _count; i++)
+                yield return this[i];
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
+    }
 
     private sealed class ChangeIdCandidateView : IReadOnlyList<BatchId>
     {
