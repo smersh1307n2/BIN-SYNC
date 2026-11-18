@@ -248,7 +248,7 @@ public sealed class FldBinSyncRuntimeHostTests
             // (older) policy. RestoreAsync must not clear it; only a fresh,
             // authorized all-off generation may do so.
             runtimeHost = StartRuntimeHost(metadataRoot, fldRoot, backupRestoreBrake: true);
-            (address, _) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            address = (await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45))).Address;
             using (var client = CreateClient(address, OperatorToken))
             {
                 string[] operatorRecord = await File.ReadAllLinesAsync(externalOperatorRecord);
