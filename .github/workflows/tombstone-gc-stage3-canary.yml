@@ -13,6 +13,7 @@ on:
       - 'docs/METADATA-STORE-GC-DESIGN.md'
       - '.github/workflows/tombstone-gc-stage3-canary.yml'
   pull_request:
+    types: [opened, synchronize, reopened, edited]
     branches:
       - main
     paths:
