@@ -64,15 +64,17 @@ public sealed class FldBinSyncRuntimeHostTests
 
             runtimeA = StartRuntimeHost(
                 metadataA, fldA, partitionA, nodeA, scopeId, metadataScope,
-                NamespaceId, providerClientA, Convert.ToHexString(nodeB));
+                NamespaceId, providerClientA, Convert.ToHexString(nodeB), maintenanceIntervalMs: 5000);
             runtimeB = StartRuntimeHost(
                 metadataB, fldB, partitionB, nodeB, scopeId, metadataScope,
-                NamespaceId, providerClientB, Convert.ToHexString(nodeA));
+                NamespaceId, providerClientB, Convert.ToHexString(nodeA), maintenanceIntervalMs: 5000);
 
             (Uri addressA, _) = await WaitForRuntimeHost(runtimeA, TimeSpan.FromSeconds(45));
             (Uri addressB, int peerPortB) = await WaitForRuntimeHost(runtimeB, TimeSpan.FromSeconds(45));
             using var clientA = CreateClient(addressA, OperatorToken);
             using var clientB = CreateClient(addressB, OperatorToken);
+            await WaitForMaintenanceTick(clientA, TimeSpan.FromSeconds(20));
+            await WaitForMaintenanceTick(clientB, TimeSpan.FromSeconds(20));
 
             using HttpResponseMessage connect = await clientA.PostAsJsonAsync(
                 "/admin/peers/connect",
@@ -80,6 +82,27 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.Equal(HttpStatusCode.OK, connect.StatusCode);
             await WaitForActivePeer(clientA, expected: 1, TimeSpan.FromSeconds(10));
             await WaitForActivePeer(clientB, expected: 1, TimeSpan.FromSeconds(10));
+
+            using HttpResponseMessage verifyEmptyA = await PostJsonWithRetry(
+                clientA, "/admin/test/verify-empty-namespace", new { }, TimeSpan.FromSeconds(10));
+            using HttpResponseMessage verifyEmptyB = await PostJsonWithRetry(
+                clientB, "/admin/test/verify-empty-namespace", new { }, TimeSpan.FromSeconds(10));
+            Assert.Equal(HttpStatusCode.OK, verifyEmptyA.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, verifyEmptyB.StatusCode);
+
+            HttpResponseMessage[] initialBaselineResponses = await Task.WhenAll(
+                clientA.PostAsJsonAsync("/admin/test/complete-peer-baseline", new { }),
+                clientB.PostAsJsonAsync("/admin/test/complete-peer-baseline", new { }));
+            try
+            {
+                Assert.Equal(HttpStatusCode.OK, initialBaselineResponses[0].StatusCode);
+                Assert.Equal(HttpStatusCode.OK, initialBaselineResponses[1].StatusCode);
+            }
+            finally
+            {
+                foreach (HttpResponseMessage response in initialBaselineResponses)
+                    response.Dispose();
+            }
 
             using HttpResponseMessage writeA = await PostJsonWithRetry(
                 clientA, "/admin/test/local-change",
@@ -152,6 +175,7 @@ public sealed class FldBinSyncRuntimeHostTests
             (addressB, peerPortB) = await WaitForRuntimeHost(runtimeB, TimeSpan.FromSeconds(45));
             clientB.Dispose();
             using var restartedClientB = CreateClient(addressB, OperatorToken);
+            await WaitForMaintenanceTick(restartedClientB, TimeSpan.FromSeconds(20));
 
             using HttpResponseMessage reconnect = await clientA.PostAsJsonAsync(
                 "/admin/peers/connect",
@@ -159,6 +183,20 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.Equal(HttpStatusCode.OK, reconnect.StatusCode);
             await WaitForActivePeer(clientA, expected: 1, TimeSpan.FromSeconds(10));
             await WaitForActivePeer(restartedClientB, expected: 1, TimeSpan.FromSeconds(10));
+
+            HttpResponseMessage[] resumedBaselineResponses = await Task.WhenAll(
+                clientA.PostAsJsonAsync("/admin/test/complete-peer-baseline", new { }),
+                restartedClientB.PostAsJsonAsync("/admin/test/complete-peer-baseline", new { }));
+            try
+            {
+                Assert.Equal(HttpStatusCode.OK, resumedBaselineResponses[0].StatusCode);
+                Assert.Equal(HttpStatusCode.OK, resumedBaselineResponses[1].StatusCode);
+            }
+            finally
+            {
+                foreach (HttpResponseMessage response in resumedBaselineResponses)
+                    response.Dispose();
+            }
 
             using JsonDocument persistedAtB = await WaitForCurrentMutation(
                 restartedClientB, Convert.ToHexString(recordA), fieldId, TimeSpan.FromSeconds(10));
@@ -572,6 +610,21 @@ public sealed class FldBinSyncRuntimeHostTests
             $"receiverHealth={health}; receiverPeers={peers}; senderPeers={remotePeers}");
     }
 
+    private static async Task WaitForMaintenanceTick(HttpClient client, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            using JsonDocument ready = JsonDocument.Parse(await client.GetStringAsync("/health/ready"));
+            if (ready.RootElement.GetProperty("maintenanceSchedulerStarted").GetBoolean() &&
+                ready.RootElement.GetProperty("maintenanceTicks").GetInt64() >= 1)
+                return;
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException("The Host did not complete its first GC maintenance round.");
+    }
+
     private static async Task WaitForActivePeer(HttpClient client, int expected, TimeSpan timeout)
     {
         DateTime deadline = DateTime.UtcNow + timeout;
@@ -598,7 +651,7 @@ public sealed class FldBinSyncRuntimeHostTests
         => StartRuntimeHost(
             metadataRoot, fldRoot, MetadataPartition, LocalAuthor, ScopeId,
             MetadataScopeId, NamespaceId, ProviderClientId,
-            allowedPeerIds: null, backupRestoreBrake);
+            allowedPeerIds: null, backupRestoreBrake: backupRestoreBrake);
 
     private static Process StartRuntimeHost(
         string metadataRoot,
@@ -610,7 +663,8 @@ public sealed class FldBinSyncRuntimeHostTests
         ushort namespaceId,
         Guid providerClientId,
         string? allowedPeerIds = null,
-        bool backupRestoreBrake = false)
+        bool backupRestoreBrake = false,
+        int maintenanceIntervalMs = 1000)
     {
         string runtime = Path.Combine(AppContext.BaseDirectory, "host-runtime", "FldBinSyncHost.Runtime.dll");
         if (!File.Exists(runtime))
@@ -625,6 +679,8 @@ public sealed class FldBinSyncRuntimeHostTests
         start.Environment["BINSYNC_TEST_HOST_OPERATOR_TOKEN"] = OperatorToken;
         if (allowedPeerIds is not null)
             start.Environment["BINSYNC_TEST_HOST_ALLOWED_PEERS"] = allowedPeerIds;
+        start.Environment["BINSYNC_TEST_HOST_MAINTENANCE_INTERVAL_MS"] =
+            maintenanceIntervalMs.ToString(CultureInfo.InvariantCulture);
         var runtimeArgs = new List<string>
         {
             runtime,
