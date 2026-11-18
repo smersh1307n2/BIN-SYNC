@@ -1,4 +1,8 @@
-using System.Reflection;\nusing BinSync;\nusing BinSync.Storage;\nusing Fld1.Storage.Engine;\nusing Xunit;
+using System.Reflection;
+using BinSync;
+using BinSync.Storage;
+using Fld1.Storage.Engine;
+using Xunit;
 
 namespace BinSync.FldHost.Tests;
 
