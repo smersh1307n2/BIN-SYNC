@@ -111,6 +111,52 @@ public sealed class FldBinSyncAsyncGcReadinessTests
     }
 
     [Fact]
+    public void Production_composition_binds_one_storage_and_starts_all_gc_domains_disabled()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-gc-host-composition-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 952);
+            byte[] nodeBytes = new byte[16];
+            nodeBytes[^1] = 0x52;
+            NodeId localReplica = NodeId.From(nodeBytes);
+            var node = new NodeBuilder().WithNodeId(localReplica).WithEpoch(1).Build();
+            var trustStore = new TrustStore();
+            IAsyncDataProvider provider =
+                DispatchProxy.Create<IAsyncDataProvider, ThrowIfStartupRecoveryRunsProxy>();
+            IAsyncProviderRemoteBatchCommitStore remoteApply =
+                DispatchProxy.Create<IAsyncProviderRemoteBatchCommitStore, ThrowIfStartupRecoveryRunsProxy>();
+
+            using var composition = FldBinSyncAsyncHostComposition.Create(
+                storage,
+                node,
+                "gc-host-composition",
+                Guid.NewGuid(),
+                18,
+                trustStore,
+                provider,
+                remoteApply,
+                _ => { },
+                new AllowPolicyAuthorizer());
+
+            Assert.True(composition.MetadataStore.IsBoundTo(storage));
+            Assert.True(composition.Coordinator.IsNamespaceGcGuardAttached(
+                composition.NamespaceGcStore, trustStore));
+            Assert.Same(composition.RuntimeControl, composition.Adapter.GcMaintenanceControl);
+            Assert.False(composition.RuntimeControl.IsRunning);
+            Assert.False(composition.NamespaceGcStore.IsReceiptGcProofEnabled);
+            Assert.False(composition.NamespaceGcStore.IsChangeIdGcProofEnabled);
+            Assert.False(composition.NamespaceGcStore.IsTombstoneGcProofEnabled);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Disabled_domain_is_never_ready_even_when_prerequisites_are_satisfied()
     {
         var readiness = new FldBinSyncGcDomainReadiness(
