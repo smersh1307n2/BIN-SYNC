@@ -88,8 +88,8 @@ jobs:
           summary="$RUNNER_TEMP/composed-host-metadata-gc-scale.md"
           test -f "$summary"
           count="$(grep -c '^COMPOSED_HOST_' "$summary" || true)"
-          if [ "$count" -ne 7 ]; then
-            echo "::error::Expected 7 isolated Host GC measurements, found $count."
+          if [ "$count" -ne 8 ]; then
+            echo "::error::Expected 8 isolated Host GC measurements, found $count."
             exit 1
           fi
           cp "$summary" composed-host-metadata-gc-scale.md
