@@ -77,6 +77,20 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.False(initial.RootElement.GetProperty("tombstoneStartupProofEnabled").GetBoolean());
             Assert.False(initial.RootElement.GetProperty("runtimeRunning").GetBoolean());
 
+            using HttpResponseMessage maintenance = await client.PostAsJsonAsync(
+                "/operator/gc/maintenance/once",
+                new { });
+            Assert.Equal(HttpStatusCode.OK, maintenance.StatusCode);
+            using JsonDocument maintenanceResult =
+                JsonDocument.Parse(await maintenance.Content.ReadAsStringAsync());
+            Assert.Equal(0, maintenanceResult.RootElement.GetProperty("receiptsReclaimed").GetInt32());
+            Assert.Equal(0, maintenanceResult.RootElement.GetProperty("changeIdsReclaimed").GetInt32());
+            Assert.Equal(0, maintenanceResult.RootElement.GetProperty("tombstonesReclaimed").GetInt32());
+            JsonElement readiness = maintenanceResult.RootElement.GetProperty("readiness");
+            Assert.False(readiness.GetProperty("receipts").GetProperty("enabled").GetBoolean());
+            Assert.False(readiness.GetProperty("changeIds").GetProperty("enabled").GetBoolean());
+            Assert.False(readiness.GetProperty("tombstones").GetProperty("enabled").GetBoolean());
+
             using HttpResponseMessage updated = await client.PostAsJsonAsync(
                 "/operator/gc/policy",
                 new
