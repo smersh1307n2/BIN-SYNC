@@ -342,3 +342,23 @@ The embedding production application must still provide its real authenticated `
 The store contract requires `TryAcquireMaintenanceLeaseAsync`. The store atomically verifies the current policy generation and enabled bit; a policy update that disables or changes a domain waits for active leases to drain. A null lease makes the adapter skip that domain's page and disable only that local domain; other independent domains remain eligible. Store read/corruption failures throw and fail closed by stopping the entire local runtime control. `FldBinSyncAsyncHostAdapter.RunGcDomainAsync` now acquires and releases this durable lease internally around every bounded adapter GC operation, including legacy per-domain entry points. Production code must route maintenance through the adapter and must not call lower-level compaction APIs directly. The local runtime gate alone is not a cross-process policy fence.
 
 The `FldBinSyncAsyncHostAdapter` constructor accepts the same policy coordinator and a `requireDurableOperatorPolicy` switch. The adapter requires durable operator policy by default. Pass the coordinator in the production composition; readiness reports `DurableOperatorPolicyUnavailable` and GC entry points fail closed if it is absent. Tests that intentionally exercise the adapter without a policy coordinator must explicitly set `requireDurableOperatorPolicy: false`; this opt-out is not production-safe.
+
+
+## Executable integration Host
+
+This repository does not contain a production transport/session executable or
+application identity provider. To validate the composition as an application
+would consume it, use the separate
+[FldBinSyncHost.Runtime](../FldBinSyncHost.Runtime/README.md) executable test
+Host. It starts the real FLD Database Host as a separate process, performs the
+provider-authoritative publication cutover, invokes the composition startup
+barrier, and exposes the operator surface through a loopback Kestrel API with
+test-only Bearer authentication.
+
+Its peer listener and scheduler are lifecycle probes, not production transport
+or physical-GC execution. The process-level Linux/Windows tests validate
+startup ordering, authorization, durable policy updates, emergency stop,
+process restart and fail-closed startup. They do not constitute production
+deployment or authorize enabling GC. A future real application must still
+supply its own identity provider, authenticated authorization, SyncSession
+transport lifecycle and production scheduler.
