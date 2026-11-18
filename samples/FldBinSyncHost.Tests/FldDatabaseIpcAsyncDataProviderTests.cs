@@ -1959,10 +1959,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             var coordinatorA = new AsyncStorageSyncCoordinator(nodeA, metadataA, scope, namespaceId);
             var coordinatorB = new AsyncStorageSyncCoordinator(nodeB, metadataB, scope, namespaceId);
-            FldBinSyncAsyncHostAdapter adapterA = new(
+            FldBinSyncAsyncHostAdapter adapterA = CreateTestAdapter(
                 coordinatorA, providerA, remoteA,
                 current => StorageNodePersistence.Save(nodeStorageA, current));
-            FldBinSyncAsyncHostAdapter adapterB = new(
+            FldBinSyncAsyncHostAdapter adapterB = CreateTestAdapter(
                 coordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
             EnableAllGcDomainsForTest(adapterA);
