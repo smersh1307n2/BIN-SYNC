@@ -12,6 +12,17 @@ on:
       - 'external/Fld1.Storage'
       - 'docs/METADATA-STORE-GC-DESIGN.md'
       - '.github/workflows/tombstone-gc-stage3-canary.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
+      - 'samples/FldBinSyncHost/**'
+      - 'samples/FldBinSyncHost.Tests/**'
+      - 'samples/FldBinSyncHost.Runtime/**'
+      - 'external/Fld1.Storage'
+      - 'docs/METADATA-STORE-GC-DESIGN.md'
+      - '.github/workflows/tombstone-gc-stage3-canary.yml'
   workflow_dispatch:
 
 permissions:
