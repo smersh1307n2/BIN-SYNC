@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
 using BinSync;
@@ -55,12 +53,17 @@ else
 FldDatabaseIpcAsyncDataProvider? provider = null;
 FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
 FldBinSyncAsyncHostComposition? composition = null;
-var peerListener = new TestPeerListener();
+TestPeerRuntime? peerRuntime = null;
 var scheduler = new TestMaintenanceScheduler(
-    cancellationToken => composition!.Operator.RunOneMaintenanceRoundAsync(
-        pageLimit: 256,
-        changeIdPageLimit: 4096,
-        cancellationToken: cancellationToken),
+    async cancellationToken =>
+    {
+        await composition!.Operator.RunOneMaintenanceRoundAsync(
+            pageLimit: 256,
+            changeIdPageLimit: 4096,
+            cancellationToken: cancellationToken);
+        if (peerRuntime is not null)
+            await peerRuntime.RunOutboundRoundAsync(cancellationToken);
+    },
     exception =>
     {
         Console.Error.WriteLine($"Test maintenance scheduler stopped: {exception.Message}");
@@ -106,11 +109,16 @@ try
     if (backupRestoreBrake)
         composition.Operator.EmergencyStop();
 
+    peerRuntime = new TestPeerRuntime(
+        node,
+        composition,
+        Environment.GetEnvironmentVariable("BINSYNC_TEST_HOST_ALLOWED_PEERS"));
+
     await composition.StartAsync(_ =>
     {
-        // The listener and maintenance loop are deliberately started only after
-        // durable policy restoration and provider/Node recovery have completed.
-        peerListener.Start();
+        // The real TCP SyncSession listener and maintenance loop are deliberately
+        // started only after durable policy restoration and provider/Node recovery.
+        peerRuntime.Start();
         scheduler.Start();
         return Task.CompletedTask;
     });
@@ -153,12 +161,35 @@ try
     app.MapGet("/health/ready", () => Results.Ok(new
     {
         status = composition.StartupCompleted ? "ready" : "starting",
-        peerListenerStarted = peerListener.IsRunning,
-        peerPort = peerListener.Port,
+        peerListenerStarted = peerRuntime.IsRunning,
+        peerPort = peerRuntime.Port,
+        activePeers = peerRuntime.ActivePeers,
         maintenanceSchedulerStarted = scheduler.IsRunning,
         maintenanceTicks = scheduler.TickCount,
         gcExecutionEnabled = false
     }));
+
+    app.MapGet("/operator/peers", () => Results.Ok(new
+    {
+        activePeers = peerRuntime.ActivePeers
+    }));
+
+    app.MapPost("/admin/peers/connect", async (
+        PeerConnectRequest request,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            NodeId peer = await peerRuntime.ConnectAsync(request.Host, request.Port, cancellationToken);
+            return Results.Ok(new { peerNodeId = Convert.ToHexString(peer.ToArray()) });
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or
+            SocketException or TimeoutException)
+        {
+            return Results.Problem(title: "Test peer connection failed.", detail: exception.Message,
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+    });
 
     app.MapGet("/operator/gc", async (CancellationToken cancellationToken) =>
     {
@@ -239,7 +270,7 @@ try
                 cancellationToken);
             durableStopCommitted = true;
             await scheduler.StopAsync();
-            await peerListener.StopAsync();
+            await peerRuntime.StopAsync();
             app.Lifetime.StopApplication();
             return Results.Ok(new { status = "stopping", durableGcStop = true });
         }
@@ -275,7 +306,7 @@ try
         composition.Operator.EmergencyStop();
         durableStopCommitted = true;
         await scheduler.StopAsync();
-        await peerListener.StopAsync();
+        await peerRuntime.StopAsync();
         app.Lifetime.StopApplication();
         return Results.Ok(new { status = "stopping", durableAllOffPolicyVerified = true });
     });
@@ -284,7 +315,7 @@ try
     string address = app.Services.GetRequiredService<IServer>()
         .Features.Get<IServerAddressesFeature>()?.Addresses.Single()
         ?? throw new InvalidOperationException("Kestrel did not publish its bound address.");
-    Console.WriteLine($"READY|{address}|{peerListener.Port}");
+    Console.WriteLine($"READY|{address}|{peerRuntime.Port}");
     Console.Out.Flush();
     await app.WaitForShutdownAsync();
     return 0;
@@ -335,6 +366,7 @@ internal sealed record PolicyUpdateRequest(
 
 internal sealed record EmergencyStopRequest(string Reason);
 internal sealed record ShutdownRequest(string Reason);
+internal sealed record PeerConnectRequest(string Host, int Port);
 
 internal sealed class TestOnlyOperatorAuthorizer : IFldBinSyncGcOperatorAuthorizer
 {
@@ -346,68 +378,6 @@ internal sealed class TestOnlyOperatorAuthorizer : IFldBinSyncGcOperatorAuthoriz
         CancellationToken cancellationToken = default)
         => ValueTask.FromResult(
             string.Equals(actorId, ActorId, StringComparison.Ordinal));
-}
-
-internal sealed class TestPeerListener
-{
-    private static readonly byte[] Banner = "BIN-SYNC-TEST-HOST/1 READY\n"u8.ToArray();
-    private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
-    private readonly CancellationTokenSource _stop = new();
-    private Task? _acceptLoop;
-
-    public bool IsRunning { get; private set; }
-    public int Port => ((IPEndPoint)_listener.LocalEndpoint).Port;
-
-    public void Start()
-    {
-        if (IsRunning)
-            throw new InvalidOperationException("The test peer listener is already running.");
-        _listener.Start();
-        IsRunning = true;
-        _acceptLoop = AcceptLoopAsync(_stop.Token);
-    }
-
-    private async Task AcceptLoopAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                TcpClient client = await _listener.AcceptTcpClientAsync(cancellationToken);
-                _ = ReplyAndCloseAsync(client, cancellationToken);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested) { }
-        catch (SocketException) when (cancellationToken.IsCancellationRequested) { }
-    }
-
-    private static async Task ReplyAndCloseAsync(TcpClient client, CancellationToken cancellationToken)
-    {
-        using (client)
-        {
-            try
-            {
-                await client.GetStream().WriteAsync(Banner, cancellationToken);
-            }
-            catch (IOException) { }
-            catch (OperationCanceledException) { }
-        }
-    }
-
-    public async Task StopAsync()
-    {
-        if (!IsRunning)
-            return;
-        IsRunning = false;
-        _stop.Cancel();
-        _listener.Stop();
-        if (_acceptLoop is not null)
-        {
-            try { await _acceptLoop; } catch (SocketException) { }
-        }
-        _stop.Dispose();
-    }
 }
 
 internal sealed class TestMaintenanceScheduler
