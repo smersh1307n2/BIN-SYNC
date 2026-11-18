@@ -1376,8 +1376,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             using var node = new NodeBuilder().WithNodeId(local).WithEpoch(17).Build();
             var gc = new StorageNamespaceGcStore(
                 nodeStorage, scope, local,
-                new StorageNamespaceGcFeatureOptions(
-                    EnableReceiptGc: true, EnableChangeIdGc: true));
+                new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
 
             var roster = new NamespaceRosterCertificate
             {
@@ -1544,9 +1543,26 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             }
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
-            var adapter = CreateTestAdapter(
-                coordinator, provider, remoteApply, _ => { });
-            EnableAllGcDomainsForTest(adapter);
+            using var gcRuntime = new FldBinSyncGcMaintenanceControl();
+            var policyBinding = new FldBinSyncGcOperatorPolicyBinding(
+                Guid.NewGuid(), local, checked((int)namespaceId));
+            var policyStore = new StorageFldBinSyncGcOperatorPolicyStore(nodeStorage, metadata);
+            var policyCoordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+                policyBinding, policyStore, new AllowGcOperatorAuthorizer(), gcRuntime);
+            FldBinSyncGcOperatorPolicy canaryPolicy = await policyCoordinator.UpdateAsync(new(
+                policyBinding, 0, "test-operator", "isolated ChangeId-only Stage 1 canary",
+                MaintenanceStarted: true,
+                ReceiptEnabled: false,
+                ChangeIdEnabled: true,
+                TombstoneEnabled: false));
+            Assert.Equal(1UL, canaryPolicy.Generation);
+            var adapter = new FldBinSyncAsyncHostAdapter(
+                coordinator, provider, remoteApply, _ => { },
+                gcPolicyCoordinator: policyCoordinator);
+            Assert.True(gcRuntime.IsRunning);
+            Assert.True(gcRuntime.IsEnabled(FldBinSyncGcDomain.ChangeId));
+            Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.Receipt));
+            Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.Tombstone));
 
             // An already-open provider snapshot is a global GC veto. The IPC scan
             // exposes the pin and both Metadata compaction domains must stop before
@@ -1558,10 +1574,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(pinnedReadiness.Receipts.PrerequisitesSatisfied);
             Assert.False(pinnedReadiness.ChangeIds.PrerequisitesSatisfied);
             Assert.False(pinnedReadiness.Tombstones.PrerequisitesSatisfied);
-            Assert.Equal(0, await coordinator.CompactReceiptsAsync(referenceScanner, limit: 1));
-            Assert.Equal(0, await coordinator.CompactChangeLedgerAsync(referenceScanner, limit: 1));
             FldBinSyncAsyncGcPassResult blockedPass =
-                await adapter.RunGcMaintenanceAsync(gc, trust, limit: 1);
+                await adapter.RunGcMaintenanceAsync(gc, trust, changeIdLimit: 1);
             Assert.Equal(0, blockedPass.ReceiptsReclaimed);
             Assert.Equal(0, blockedPass.ChangeIdsReclaimed);
             Assert.Equal(0, blockedPass.TombstonesReclaimed);
@@ -1580,19 +1594,21 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.NotNull(readiness.MetadataReservations);
             Assert.Equal(0, readiness.MetadataReservations!.PendingApplyCount);
             Assert.Equal(0, readiness.MetadataReservations.OutstandingPeerReservationCount);
-            Assert.True(readiness.Receipts.PrerequisitesSatisfied, string.Join("; ", readiness.Receipts.BlockedReasons));
+            Assert.False(readiness.Receipts.Enabled);
+            Assert.True(readiness.ChangeIds.Enabled);
             Assert.True(readiness.ChangeIds.PrerequisitesSatisfied, string.Join("; ", readiness.ChangeIds.BlockedReasons));
+            Assert.False(readiness.Tombstones.Enabled);
             Assert.False(readiness.Tombstones.PrerequisitesSatisfied);
             Assert.Contains(readiness.Tombstones.BlockedReasons,
                 reason => reason.Contains("Durable startup Tombstone GC option is disabled.", StringComparison.Ordinal));
             Assert.False(readiness.Tombstones.Enabled);
             Assert.False(readiness.Tombstones.ReadyForAttempt);
 
-            // One bounded Host-owned round reclaims the retired Receipt, but leaves the
-            // imported ChangeId because its relay payload is still live.
+            // The Stage 1 canary runs only ChangeId GC. The imported ChangeId
+            // remains live because its relay payload is still retained.
             FldBinSyncAsyncGcPassResult gcPass =
-                await adapter.RunGcMaintenanceAsync(gc, trust, limit: 1);
-            Assert.Equal(1, gcPass.ReceiptsReclaimed);
+                await adapter.RunGcMaintenanceAsync(gc, trust, changeIdLimit: 1);
+            Assert.Equal(0, gcPass.ReceiptsReclaimed);
             Assert.Equal(0, gcPass.ChangeIdsReclaimed);
             Assert.Equal(0, gcPass.TombstonesReclaimed);
             Assert.True(metadata.TryGetChangeIdentity(
@@ -1617,6 +1633,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // lease. A competing IPC writer stays blocked until that cleanup finishes.
             var cancelledScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
             gcCancellation = new CancellationTokenSource();
+            await using IAsyncDisposable cancellationLease =
+                await policyCoordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.ChangeId)
+                ?? throw new InvalidOperationException("ChangeId canary maintenance lease was not granted.");
             Task<int> cancelledGc = coordinator.CompactChangeLedgerAsync(
                 cancelledScanner, limit: 1, cancellationToken: gcCancellation.Token);
             await cancelledScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
@@ -1642,6 +1661,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // negative reference answer, final Metadata revalidation and durable delete.
             // A competing provider writer is released only after that transaction ends.
             var successfulScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
+            await using IAsyncDisposable successfulLease =
+                await policyCoordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.ChangeId)
+                ?? throw new InvalidOperationException("ChangeId canary maintenance lease was not granted.");
             Task<int> successfulGc = coordinator.CompactChangeLedgerAsync(
                 successfulScanner, limit: 1);
             await successfulScanner.ReferenceCheckReached.WaitAsync(TimeSpan.FromSeconds(15));
@@ -1659,6 +1681,18 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 "The successful pass commits the ChangeId deletion before releasing the Host lease.");
             Assert.False(await successfulBlockedWriter.WaitAsync(TimeSpan.FromSeconds(15)),
                 "The independent writer has no local operation receipts to acknowledge.");
+
+            // Re-run through the Host adapter: the durable ChangeId-only lease is
+            // acquired again, while Receipt/Tombstone stay disabled and no second
+            // deletion is possible.
+            FldBinSyncAsyncGcPassResult idempotentPass =
+                await adapter.RunGcMaintenanceAsync(gc, trust, changeIdLimit: 1);
+            Assert.Equal(0, idempotentPass.ChangeIdsReclaimed);
+            Assert.Equal(0, idempotentPass.ReceiptsReclaimed);
+            Assert.Equal(0, idempotentPass.TombstonesReclaimed);
+            Assert.True(gcRuntime.IsEnabled(FldBinSyncGcDomain.ChangeId));
+            Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.Receipt));
+            Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.Tombstone));
         }
         finally
         {
