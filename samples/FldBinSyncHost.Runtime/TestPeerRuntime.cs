@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.Sockets;
 using BinSync;
+using BinSync.Storage;
 using BinSync.FldHost;
 
 internal sealed class TestPeerRuntime : IAsyncDisposable
