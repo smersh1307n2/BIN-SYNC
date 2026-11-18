@@ -1,4 +1,4 @@
-using Xunit;
+using System.Reflection;\nusing BinSync;\nusing BinSync.Storage;\nusing Fld1.Storage.Engine;\nusing Xunit;
 
 namespace BinSync.FldHost.Tests;
 
@@ -11,6 +11,93 @@ public sealed class FldBinSyncAsyncGcReadinessTests
             .Single().GetParameters()
             .Single(parameter => parameter.Name == "requireDurableOperatorPolicy");
         Assert.Equal(true, parameter.DefaultValue);
+    }
+
+    [Fact]
+    public async Task Startup_restores_durable_policy_before_recovery_and_fails_closed()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-gc-startup-policy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 951);
+            using var metadata = new StorageMetadataStore(storage);
+            byte[] nodeBytes = new byte[16];
+            nodeBytes[^1] = 0x51;
+            NodeId localReplica = NodeId.From(nodeBytes);
+            var node = new NodeBuilder().WithNodeId(localReplica).WithEpoch(1).Build();
+            var coordinator = new AsyncStorageSyncCoordinator(node, metadata, "gc-startup-policy", 17);
+            IAsyncDataProvider provider =
+                DispatchProxy.Create<IAsyncDataProvider, ThrowIfStartupRecoveryRunsProxy>();
+            IAsyncProviderRemoteBatchCommitStore remoteApply =
+                DispatchProxy.Create<IAsyncProviderRemoteBatchCommitStore, ThrowIfStartupRecoveryRunsProxy>();
+
+            // The production default must refuse startup when no durable policy
+            // coordinator is supplied, before touching provider recovery.
+            var missingPolicyAdapter = new FldBinSyncAsyncHostAdapter(
+                coordinator, provider, remoteApply, _ => { });
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => missingPolicyAdapter.RecoverBeforeAcceptingSessionsAsync());
+
+            // A configured but unavailable/corrupt policy store must also fail
+            // before coordinator recovery can reach the provider.
+            using var runtime = new FldBinSyncGcMaintenanceControl();
+            var policyCoordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+                new FldBinSyncGcOperatorPolicyBinding(Guid.NewGuid(), localReplica, 17),
+                new UnavailablePolicyStore(),
+                new AllowPolicyAuthorizer(),
+                runtime);
+            var adapter = new FldBinSyncAsyncHostAdapter(
+                coordinator, provider, remoteApply, _ => { },
+                gcPolicyCoordinator: policyCoordinator);
+            await Assert.ThrowsAsync<IOException>(
+                () => adapter.RecoverBeforeAcceptingSessionsAsync());
+            Assert.False(runtime.IsRunning);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    public class ThrowIfStartupRecoveryRunsProxy : DispatchProxy
+    {
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+            => throw new InvalidOperationException(
+                "Provider recovery must not run before durable GC policy restoration.");
+    }
+
+    private sealed class UnavailablePolicyStore : IFldBinSyncGcOperatorPolicyStore
+    {
+        public ValueTask<FldBinSyncGcOperatorPolicy?> ReadAsync(
+            FldBinSyncGcOperatorPolicyBinding binding,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException<FldBinSyncGcOperatorPolicy?>(
+                new IOException("simulated durable policy store outage"));
+
+        public ValueTask<bool> TryCommitAsync(
+            ulong expectedGeneration,
+            FldBinSyncGcOperatorPolicy policy,
+            FldBinSyncGcOperatorAuditEntry auditEntry,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(false);
+
+        public ValueTask<IAsyncDisposable?> TryAcquireMaintenanceLeaseAsync(
+            FldBinSyncGcOperatorPolicyBinding binding,
+            ulong expectedGeneration,
+            FldBinSyncGcDomain domain,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IAsyncDisposable?>(null);
+    }
+
+    private sealed class AllowPolicyAuthorizer : IFldBinSyncGcOperatorAuthorizer
+    {
+        public ValueTask<bool> AuthorizeAsync(
+            string actorId,
+            FldBinSyncGcOperatorPolicyBinding binding,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(true);
     }
 
     [Fact]
