@@ -930,10 +930,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Theory]
-    [InlineData(1_000)]
-    [InlineData(10_000)]
-    [InlineData(50_000)]
-    public async Task Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan(int candidateCount)
+    [InlineData(1_000, 4096)]
+    [InlineData(10_000, 4096)]
+    [InlineData(50_000, 4096)]
+    [InlineData(50_000, 256)]
+    public async Task Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan(
+        int candidateCount, int gcPageLimit)
     {
         static byte[] ScaleId(int value)
         {
@@ -949,7 +951,6 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         const uint namespaceId = 0x53A;
         const string scope = "fld-host-async-gc-scale";
         const int seedBatchSize = 256;
-        const int gcPageLimit = 4096;
         byte[] localAuthorBytes = Id(0x65);
         NodeId local = NodeId.From(localAuthorBytes);
         NodeId authority = NodeId.From(Id(0x11));
@@ -1163,7 +1164,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 scope, local, checked((int)namespaceId), BatchId.From(ScaleId(100_001)),
                 out _, out _, out _));
             string metrics =
-                $"COMPOSED_HOST_METADATA_GC_SCALE Candidates={candidateCount} Pages={pages} " +
+                $"COMPOSED_HOST_METADATA_GC_SCALE Candidates={candidateCount} PageLimit={gcPageLimit} Pages={pages} " +
                 $"ElapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3} " +
                 $"AllocatedBytes={allocatedBytes} TestProcessPeakWorkingSetBytes={peakWorkingSet} " +
                 $"TestProcessPeakBeforeBytes={peakWorkingSetBefore} " +
@@ -1180,7 +1181,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             if (!string.IsNullOrWhiteSpace(measurementFile))
             {
                 string summaryLine =
-                    $"- **{candidateCount:N0} candidates**: {pages} pages; " +
+                    $"- **{candidateCount:N0} candidates (page limit {gcPageLimit})**: {pages} pages; " +
                     $"{stopwatch.Elapsed.TotalMilliseconds:F3} ms; " +
                     $"{allocatedBytes:N0} allocated bytes; " +
                     $"test-process peak WS {peakWorkingSet:N0} bytes " +
