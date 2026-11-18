@@ -185,6 +185,16 @@ try
         }
     });
 
+    app.MapPost("/operator/gc/maintenance/once", async (CancellationToken cancellationToken) =>
+    {
+        FldBinSyncAsyncGcPassResult result =
+            await composition.Operator.RunOneMaintenanceRoundAsync(
+                pageLimit: 256,
+                changeIdPageLimit: 4096,
+                cancellationToken);
+        return Results.Ok(result);
+    });
+
     app.MapPost("/operator/gc/emergency-stop", async (
         EmergencyStopRequest request,
         CancellationToken cancellationToken) =>
