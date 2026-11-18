@@ -914,8 +914,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.True(readiness.Tombstones.Enabled);
             Assert.False(readiness.Tombstones.PrerequisitesSatisfied);
             Assert.Equal(
-                ["Host reports an unpublished local draft horizon (count=1)."],
-                readiness.Tombstones.BlockedReasons);
+                "Host reports an unpublished local draft horizon (count=1).",
+                Assert.Single(readiness.Tombstones.BlockedReasons));
 
             // Count the actual metadata pages before timing. The benchmark then
             // records provider page/spool counters for the GC pass itself.
