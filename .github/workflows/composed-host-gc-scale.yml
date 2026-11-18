@@ -151,3 +151,5 @@ jobs:
             ${{ runner.temp }}/fld-host-gc-scale-test-results
           retention-days: 30
           if-no-files-found: error
+
+# Diagnostic marker: keep this workflow eligible for the isolated 250k tombstone rerun.
