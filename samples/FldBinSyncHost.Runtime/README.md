@@ -17,12 +17,13 @@ The process intentionally resembles a long-running application:
 - GET /health/ready — startup barrier, listener and scheduler state.
 - GET /operator/gc — diagnostics and durable policy/audit snapshot.
 - POST /operator/gc/policy — generation-checked independent domain policy update.
+- POST /operator/gc/maintenance/once — one bounded pass through the real adapter/lease path (pageLimit 256, ChangeId page limit 4096).
 - POST /operator/gc/emergency-stop — immediate process-local stop followed by audited durable all-domains-off commit.
 - POST /admin/shutdown — durable all-domains-off commit, stop scheduler/listener, then process shutdown.
 
 All /operator/* and /admin/* routes require a Bearer token supplied through BINSYNC_TEST_HOST_OPERATOR_TOKEN. The token is test input only. The authorizer accepts only the fixed integration-test actor; do not reuse this authentication or authorizer in a real application.
 
-The peer listener speaks only a tiny test banner. It is a lifecycle probe, **not** a BIN-SYNC transport or SyncSession implementation. The scheduler is a lifecycle probe and does not execute physical GC. All StorageNamespaceGcFeatureOptions remain at their default-off values, and the operator API cannot override those immutable startup proof flags.
+The peer listener speaks only a tiny test banner. It is a lifecycle probe, **not** a BIN-SYNC transport or SyncSession implementation. The periodic scheduler is a lifecycle probe; the authenticated one-shot maintenance endpoint does invoke the real bounded adapter path. All StorageNamespaceGcFeatureOptions remain at their default-off values, so the process-level test verifies all three reclaimed counts stay zero and the operator API cannot override the immutable startup proof flags.
 
 ## Process arguments
 
@@ -38,6 +39,7 @@ FldBinSyncRuntimeHostTests launches the actual FLD Database Host and this execut
 - listener/scheduler are not started until the composition startup barrier completes;
 - unauthenticated and invalid-token operator requests are rejected;
 - the HTTP API exposes diagnostics and generation-checked policy changes;
+- one bounded maintenance round runs through the real adapter with all startup proof flags off and reclaims zero items in every domain;
 - a disabled startup proof flag cannot be overridden by the operator endpoint;
 - emergency stop commits an audited durable all-domains-off policy;
 - an ungraceful Host process death followed by a fresh process restores the same disabled policy;
