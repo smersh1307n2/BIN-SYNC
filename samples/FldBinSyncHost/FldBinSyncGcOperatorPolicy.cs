@@ -100,6 +100,8 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     private long _emergencyStopVersion;
     private int _emergencyStopLatched;
 
+    internal FldBinSyncGcMaintenanceControl RuntimeControl => _runtime;
+
     public FldBinSyncGcOperatorPolicyCoordinator(
         FldBinSyncGcOperatorPolicyBinding binding,
         IFldBinSyncGcOperatorPolicyStore store,
