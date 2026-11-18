@@ -366,3 +366,10 @@ has no independent anti-rollback authority. They do not constitute production
 deployment or authorize enabling GC. A future real application must still
 supply its own identity provider, authenticated authorization, SyncSession
 transport lifecycle and production scheduler.
+
+
+## Stage 1 ChangeId-only canary
+
+The disposable integration canary lives in `FldDatabaseIpcAsyncDataProviderTests.Async_host_adapter_changeid_only_canary_preserves_live_relay_reference_then_reclaims`. It uses a separate Metadata StorageDatabase and a real FLD Database Host process, enables only ChangeId GC, and persists a durable ChangeId-only operator policy. It verifies that a live relay reference and an active Host snapshot pin veto deletion, cancellation leaves the ChangeId intact, the per-domain durable lease excludes a competing Host writer, and only the now-unreferenced ChangeId is deleted. A second adapter pass is idempotent. Receipt and Tombstone stay disabled throughout.
+
+The focused cross-platform gate is `.github/workflows/changeid-gc-stage1-canary.yml`; it also runs the ChangeId-only policy restore/stop test and a 1,000-candidate real-FLD-IPC pass at page limit 4096. This remains a disposable test canary, not production activation.
