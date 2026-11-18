@@ -912,8 +912,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(readiness.Receipts.Enabled);
             Assert.False(readiness.ChangeIds.Enabled);
             Assert.True(readiness.Tombstones.Enabled);
-            Assert.True(readiness.Tombstones.PrerequisitesSatisfied,
-                string.Join(" | ", readiness.Tombstones.BlockedReasons));
+            Assert.False(readiness.Tombstones.PrerequisitesSatisfied);
+            Assert.Equal(
+                ["Host reports an unpublished local draft horizon (count=1)."],
+                readiness.Tombstones.BlockedReasons);
 
             // Count the actual metadata pages before timing. The benchmark then
             // records provider page/spool counters for the GC pass itself.
@@ -994,6 +996,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     Directory.CreateDirectory(directory);
                 await File.AppendAllTextAsync(measurementFile, metrics + Environment.NewLine);
             }
+
+            // The generic preflight deliberately does not seal WAL. The actual
+            // Tombstone pass seals only the committed prefix; readiness must then
+            // clear, while an uncommitted overlay would still have blocked deletion.
+            FldBinSyncAsyncGcReadinessReport postPassReadiness =
+                await adapter.GetGcReadinessAsync(gc, trust);
+            Assert.True(postPassReadiness.Tombstones.PrerequisitesSatisfied,
+                string.Join(" | ", postPassReadiness.Tombstones.BlockedReasons));
+            Assert.Equal(0UL, postPassReadiness.UnpublishedDraftCount);
         }
         finally
         {
