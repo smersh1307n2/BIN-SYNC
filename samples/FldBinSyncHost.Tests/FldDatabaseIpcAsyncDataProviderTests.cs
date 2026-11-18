@@ -979,6 +979,12 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             using var nodeStorage = StorageDatabase.Open(nodeRoot, 904);
             using var metadata = new StorageMetadataStore(nodeStorage);
+            var changeIdAllocationStages = new Dictionary<string, long>(StringComparer.Ordinal);
+            metadata.ChangeIdGcAllocationObserver = (phase, bytes) =>
+            {
+                changeIdAllocationStages.TryGetValue(phase, out long current);
+                changeIdAllocationStages[phase] = checked(current + bytes);
+            };
             using var node = new NodeBuilder().WithNodeId(local).WithEpoch(17).Build();
             var gc = new StorageNamespaceGcStore(
                 nodeStorage, scope, local,
@@ -1162,7 +1168,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 $"AllocatedBytes={allocatedBytes} TestProcessPeakWorkingSetBytes={peakWorkingSet} " +
                 $"TestProcessPeakBeforeBytes={peakWorkingSetBefore} " +
                 $"HostProcessPeakWorkingSetBytes={hostPeakWorkingSet} " +
-                $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore}";
+                $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore} " +
+                $"AllocationStages={string.Join(';', changeIdAllocationStages.Select(pair => $"{pair.Key}:{pair.Value}"))}";
             Console.WriteLine(metrics);
 
             // Each GitHub Actions step receives a different GITHUB_STEP_SUMMARY
