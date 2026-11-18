@@ -23,7 +23,7 @@ The process intentionally resembles a long-running application:
 
 All /operator/* and /admin/* routes require a Bearer token supplied through BINSYNC_TEST_HOST_OPERATOR_TOKEN. The token is test input only. The authorizer accepts only the fixed integration-test actor; do not reuse this authentication or authorizer in a real application.
 
-The peer listener speaks only a tiny test banner. It is a lifecycle probe, **not** a BIN-SYNC transport or SyncSession implementation. The periodic scheduler is a lifecycle probe; the authenticated one-shot maintenance endpoint does invoke the real bounded adapter path. All StorageNamespaceGcFeatureOptions remain at their default-off values, so the process-level test verifies all three reclaimed counts stay zero and the operator API cannot override the immutable startup proof flags.
+The peer listener speaks only a tiny test banner. It is a lifecycle probe, **not** a BIN-SYNC transport or SyncSession implementation. The periodic scheduler and authenticated one-shot endpoint both invoke the real bounded adapter maintenance path (pageLimit 256, ChangeId page limit 4096); the scheduler stops and trips the local brake on an unexpected pass failure. All StorageNamespaceGcFeatureOptions remain at their default-off values, so the process-level test verifies all three reclaimed counts stay zero and the operator API cannot override the immutable startup proof flags.
 
 ## Process arguments
 
@@ -39,7 +39,8 @@ FldBinSyncRuntimeHostTests launches the actual FLD Database Host and this execut
 - listener/scheduler are not started until the composition startup barrier completes;
 - unauthenticated and invalid-token operator requests are rejected;
 - the HTTP API exposes diagnostics and generation-checked policy changes;
-- one bounded maintenance round runs through the real adapter with all startup proof flags off and reclaims zero items in every domain;
+- the periodic scheduler starts only after recovery and invokes the real bounded adapter round;
+- one authenticated bounded maintenance round runs through the real adapter with all startup proof flags off and reclaims zero items in every domain;
 - a disabled startup proof flag cannot be overridden by the operator endpoint;
 - emergency stop commits an audited durable all-domains-off policy;
 - an ungraceful Host process death followed by a fresh process restores the same disabled policy;
