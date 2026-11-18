@@ -320,7 +320,7 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
     }
 
     [Fact]
-    public async Task Closed_database_backup_restores_policy_and_audit_without_restoring_live_leases()
+    public async Task Closed_database_backup_requires_operator_reauthorization_before_leases_resume()
     {
         string root = Path.Combine(Path.GetTempPath(),
             "binsync-gc-policy-backup-" + Guid.NewGuid().ToString("N"));
@@ -349,8 +349,21 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
                     restoredStorage, restoredMetadata);
                 Assert.Equal(policy, await restoredStore.ReadAsync(Binding()));
                 Assert.Equal(new[] { audit }, restoredStore.ReadAudit(Binding()));
-                IAsyncDisposable? restoredLease = await restoredStore.TryAcquireMaintenanceLeaseAsync(
-                    Binding(), 1, FldBinSyncGcDomain.ChangeId);
+
+                using var runtime = new FldBinSyncGcMaintenanceControl();
+                var coordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+                    Binding(), restoredStore, new AllowAllAuthorizer(), runtime);
+                coordinator.EmergencyStop();
+                Assert.Equal(policy, await coordinator.RestoreAsync());
+                Assert.False(runtime.IsRunning);
+                Assert.Null(await coordinator.TryAcquireMaintenanceLeaseAsync(
+                    FldBinSyncGcDomain.ChangeId));
+
+                await coordinator.UpdateAsync(new(Binding(), 1, "operator-restore",
+                    "verified offline backup and explicitly reauthorized maintenance",
+                    true, true, true, false));
+                IAsyncDisposable? restoredLease =
+                    await coordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.ChangeId);
                 Assert.NotNull(restoredLease);
                 await restoredLease!.DisposeAsync();
             }

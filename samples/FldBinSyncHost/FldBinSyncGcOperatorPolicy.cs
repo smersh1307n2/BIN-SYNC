@@ -284,9 +284,17 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
         FldBinSyncGcDomain domain,
         CancellationToken cancellationToken = default)
     {
+        long stopVersion = Volatile.Read(ref _emergencyStopVersion);
         await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // The durable policy is not enough by itself: an emergency stop or a
+            // process-local runtime stop must prevent new work from acquiring a lease.
+            if (Volatile.Read(ref _emergencyStopLatched) != 0 ||
+                Volatile.Read(ref _emergencyStopVersion) != stopVersion ||
+                !IsRuntimeDomainEnabled(domain))
+                return null;
+
             FldBinSyncGcOperatorPolicy? policy =
                 await _store.ReadAsync(_binding, cancellationToken).ConfigureAwait(false);
             if (policy is null)
@@ -308,6 +316,19 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
 
             IAsyncDisposable? lease = await _store.TryAcquireMaintenanceLeaseAsync(
                 _binding, policy.Generation, domain, cancellationToken).ConfigureAwait(false);
+            if (lease is null)
+                return null;
+
+            // EmergencyStop does not wait for the mutation gate. Recheck after the
+            // cross-process lock acquisition and release a lease if stop won the race.
+            if (Volatile.Read(ref _emergencyStopLatched) != 0 ||
+                Volatile.Read(ref _emergencyStopVersion) != stopVersion ||
+                !IsRuntimeDomainEnabled(domain))
+            {
+                await lease.DisposeAsync().ConfigureAwait(false);
+                return null;
+            }
+
             return lease;
         }
         catch
@@ -375,6 +396,15 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
             _runtime.Stop();
         }
     }
+
+    private bool IsRuntimeDomainEnabled(FldBinSyncGcDomain domain)
+        => domain switch
+        {
+            FldBinSyncGcDomain.Receipt => _runtime.IsEnabled(FldBinSyncGcDomain.Receipt),
+            FldBinSyncGcDomain.ChangeId => _runtime.IsEnabled(FldBinSyncGcDomain.ChangeId),
+            FldBinSyncGcDomain.Tombstone => _runtime.IsEnabled(FldBinSyncGcDomain.Tombstone),
+            _ => throw new ArgumentOutOfRangeException(nameof(domain))
+        };
 
     private void ValidatePolicy(FldBinSyncGcOperatorPolicy policy)
     {
