@@ -1,3 +1,4 @@
+using BinSync;
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
@@ -26,7 +27,7 @@ public sealed class FldBinSyncRuntimeHostTests
         "stage0-test-host-operator-token-0123456789abcdef0123456789abcdef";
 
     [Fact]
-    public async Task Executable_host_authenticates_operator_and_restores_durable_stop_after_process_restart()
+    public async Task Executable_host_establishes_real_tcp_sync_session_and_restores_durable_stop_after_process_restart()
     {
         string root = Path.Combine(Path.GetTempPath(), "binsync-stage0-runtime-" + Guid.NewGuid().ToString("N"));
         string metadataRoot = Path.Combine(root, "metadata");
@@ -61,14 +62,21 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.True(ready.RootElement.GetProperty("maintenanceSchedulerStarted").GetBoolean());
             Assert.False(ready.RootElement.GetProperty("gcExecutionEnabled").GetBoolean());
 
-            using (var peer = new TcpClient())
+            using var peerNode = new Node(NodeId.From(Id(0x54)));
+            await using (SyncSession peerSession = await TcpSync.ConnectAsync(
+                peerNode,
+                "127.0.0.1",
+                peerPort,
+                SessionCapabilities.FullAuthorId |
+                SessionCapabilities.FlowControl |
+                SessionCapabilities.NamespaceRosterV31 |
+                SessionCapabilities.OriginFrontierV31 |
+                SessionCapabilities.FullReplaceV31).WaitAsync(TimeSpan.FromSeconds(5)))
             {
-                await peer.ConnectAsync(IPAddress.Loopback, peerPort);
-                byte[] banner = new byte[64];
-                int count = await peer.GetStream().ReadAsync(banner).AsTask()
-                    .WaitAsync(TimeSpan.FromSeconds(5));
-                Assert.Equal("BIN-SYNC-TEST-HOST/1 READY\n", Encoding.UTF8.GetString(banner, 0, count));
+                Assert.Equal(NodeId.From(LocalAuthor), peerSession.PeerNodeId);
+                await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(5));
             }
+            await WaitForActivePeer(client, expected: 0, TimeSpan.FromSeconds(5));
 
             using JsonDocument initial = JsonDocument.Parse(await client.GetStringAsync("/operator/gc"));
             Assert.Equal(JsonValueKind.Null, initial.RootElement.GetProperty("policy").ValueKind);
@@ -353,6 +361,20 @@ public sealed class FldBinSyncRuntimeHostTests
             await KillProcess(process);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    private static async Task WaitForActivePeer(HttpClient client, int expected, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            using JsonDocument ready = JsonDocument.Parse(await client.GetStringAsync("/health/ready"));
+            if (ready.RootElement.GetProperty("activePeers").GetInt32() == expected)
+                return;
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException($"Host did not reach activePeers={expected}.");
     }
 
     private static HttpClient CreateClient(Uri address, string token)
