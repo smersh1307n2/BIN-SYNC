@@ -67,16 +67,33 @@ jobs:
         env:
           COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/changeid-gc-allocation.md
         run: |
-          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
-            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
-            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
-            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
-            --filter "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale" \
-            --logger "console;verbosity=normal" \
-            --logger "trx;LogFileName=changeid-gc-allocation.trx" \
-            --results-directory "$RUNNER_TEMP/changeid-gc-results" \
-            --blame-hang-timeout 3m \
-            --blame-hang-dump-type mini
+          run_case() {
+            local name="$1"
+            local filter="$2"
+            echo "::group::Isolated ChangeId GC measurement: $name"
+            dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+              -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+              -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+              -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+              --filter "$filter" \
+              --logger "console;verbosity=normal" \
+              --logger "trx;LogFileName=$name.trx" \
+              --results-directory "$RUNNER_TEMP/changeid-gc-results/$name" \
+              --blame-hang-timeout 3m \
+              --blame-hang-dump-type mini
+            echo "::endgroup::"
+          }
+
+          # Run each data point in a fresh testhost process. This isolates current
+          # and peak process memory from earlier theory cases in the same test run.
+          run_case "changeid-1000-4096" \
+            "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 1000&DisplayName~gcPageLimit: 4096"
+          run_case "changeid-10000-4096" \
+            "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 10000&DisplayName~gcPageLimit: 4096"
+          for limit in 4096 256 1024 2048; do
+            run_case "changeid-50000-$limit" \
+              "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 50000&DisplayName~gcPageLimit: $limit"
+          done
 
       - name: Verify and upload phase measurements
         if: always()
