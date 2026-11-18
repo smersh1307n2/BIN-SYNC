@@ -89,6 +89,14 @@ jobs:
             --logger "console;verbosity=normal" \
             --blame-hang-timeout 3m
 
+      - name: Verify Receipt WAL seal cannot authorize physical Tombstone deletion
+        shell: bash
+        run: |
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release \
+            --filter "FullyQualifiedName~Host_revalidates_exact_tombstone_candidates_and_blocks_relay_references_and_snapshot_pins" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 3m
+
       - name: Verify bounded Receipt pages and replay fence survive restart
         shell: bash
         run: |
