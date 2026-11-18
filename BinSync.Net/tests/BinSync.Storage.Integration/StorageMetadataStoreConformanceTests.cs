@@ -16,6 +16,42 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         => new StorageMetadataStoreConformanceAdapter(Path.Combine(_root, Guid.NewGuid().ToString("N")));
 
     [Fact]
+    public void Metadata_partition_cache_is_bounded_and_rehydrates_evicted_partitions()
+    {
+        string directory = Path.Combine(_root, "bounded-partition-cache");
+        Directory.CreateDirectory(directory);
+        NodeId local = Node(1);
+        const int namespaceId = 7;
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 463);
+            using var store = new StorageMetadataStore(storage);
+
+            for (byte i = 1; i <= 6; i++)
+            {
+                string scope = "bounded-partition-cache-" + i;
+                store.FreezeOutbound(scope, local, namespaceId, local,
+                    new[] { FrozenOperation((byte)(100 + i), (byte)(120 + i)) });
+            }
+
+            Assert.Equal(4, store.CachedPartitionCount);
+
+            // The first scope was evicted; reading it must rehydrate from FLD and
+            // evict the least-recently-used decoded partition without losing data.
+            Assert.Equal(1UL, store.GetOutboundHighWatermark(
+                "bounded-partition-cache-1", local, namespaceId, local));
+            Assert.Equal(4, store.CachedPartitionCount);
+            Assert.Single(store.ReadOutbound(
+                "bounded-partition-cache-1", local, namespaceId, local, 1, 0, 10).Items);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Outbound_freeze_rejects_missing_origin_epoch_without_allocating_sequence()
     {
         string directory = Path.Combine(_root, "missing-origin-epoch");
