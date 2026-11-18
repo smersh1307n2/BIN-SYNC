@@ -5148,6 +5148,15 @@ private static bool ValidateIncomingBatchForStaging(
         return state;
     }
 
+    private static byte[] PartitionRevisionKey(PartitionKey partitionKey)
+    {
+        byte[] key = PartitionRoot(partitionKey);
+        // Keep the cache-version stamp outside the v3 Metadata row namespace so
+        // older v3 readers can continue decoding every Metadata row kind unchanged.
+        key[0] = 0x73;
+        return key;
+    }
+
     private static byte[] EncodePartitionRevision(ulong revision)
     {
         if (revision == 0) throw new ArgumentOutOfRangeException(nameof(revision));
@@ -5170,7 +5179,7 @@ private static bool ValidateIncomingBatchForStaging(
         StorageWriteBatch batch, PartitionKey partitionKey, PartitionState current)
     {
         ulong nextRevision = checked(current.MetadataRevision + 1);
-        byte[] key = StorageKey(PartitionRoot(partitionKey), 27, ReadOnlySpan<byte>.Empty);
+        byte[] key = PartitionRevisionKey(partitionKey);
         byte[] value = EncodePartitionRevision(nextRevision);
         batch.Put(key, value);
         ulong commitSeq = batch.Commit();
@@ -5194,7 +5203,7 @@ private static bool ValidateIncomingBatchForStaging(
         using var snapshot = _storage.OpenSnapshot();
         if (_partitions.TryGetValue(key, out state!))
         {
-            byte[] revisionKey = StorageKey(root, 27, ReadOnlySpan<byte>.Empty);
+            byte[] revisionKey = PartitionRevisionKey(key);
             if (snapshot.TryGet(revisionKey, out byte[]? revisionValue))
             {
                 ulong revision = DecodePartitionRevision(revisionValue!);
@@ -5222,6 +5231,8 @@ private static bool ValidateIncomingBatchForStaging(
             return false;
         }
 
+        if (snapshot.TryGet(PartitionRevisionKey(key), out byte[]? decodedRevision))
+            decoded.MetadataRevision = DecodePartitionRevision(decodedRevision!);
         state = decoded;
         _partitions[key] = state;
         return true;
@@ -6055,12 +6066,6 @@ private static bool ValidateIncomingBatchForStaging(
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
                         BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
                     state.LegacyReceiveChains.Add(legacyChainKey, new ReceiveChainState(row.Value.ToArray()));
-                    break;
-                }
-                case 27:
-                {
-                    RequireLength(key, 0);
-                    state.MetadataRevision = DecodePartitionRevision(row.Value);
                     break;
                 }
                 case 26:
