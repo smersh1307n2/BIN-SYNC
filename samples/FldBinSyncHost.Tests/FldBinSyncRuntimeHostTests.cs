@@ -71,9 +71,7 @@ public sealed class FldBinSyncRuntimeHostTests
             }
 
             using JsonDocument initial = JsonDocument.Parse(await client.GetStringAsync("/operator/gc"));
-            Assert.Null(initial.RootElement.GetProperty("policy").ValueKind == JsonValueKind.Null
-                ? null
-                : initial.RootElement.GetProperty("policy"));
+            Assert.Equal(JsonValueKind.Null, initial.RootElement.GetProperty("policy").ValueKind);
             Assert.False(initial.RootElement.GetProperty("receiptStartupProofEnabled").GetBoolean());
             Assert.False(initial.RootElement.GetProperty("changeIdStartupProofEnabled").GetBoolean());
             Assert.False(initial.RootElement.GetProperty("tombstoneStartupProofEnabled").GetBoolean());
