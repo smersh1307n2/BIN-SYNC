@@ -167,12 +167,18 @@ try
         activePeers = peerRuntime.ActivePeers,
         maintenanceSchedulerStarted = scheduler.IsRunning,
         maintenanceTicks = scheduler.TickCount,
+        maintenanceError = scheduler.LastError,
         gcExecutionEnabled = false
     }));
 
     app.MapGet("/operator/peers", () => Results.Ok(new
     {
-        activePeers = peerRuntime.ActivePeers
+        activePeers = peerRuntime.ActivePeers,
+        activePeerIds = peerRuntime.ActivePeerIds,
+        outboundRounds = peerRuntime.OutboundRounds,
+        outboundBatches = peerRuntime.OutboundBatches,
+        inboundBatches = peerRuntime.InboundBatches,
+        lastPeerError = peerRuntime.LastError
     }));
 
     app.MapPost("/admin/test/local-change", async (
@@ -494,6 +500,7 @@ internal sealed class TestMaintenanceScheduler
     private CancellationTokenSource? _stop;
     private Task? _loop;
     private long _ticks;
+    private string? _lastError;
     private int _running;
 
     public TestMaintenanceScheduler(
@@ -506,6 +513,7 @@ internal sealed class TestMaintenanceScheduler
 
     public bool IsRunning => Volatile.Read(ref _running) != 0;
     public long TickCount => Interlocked.Read(ref _ticks);
+    public string? LastError => Volatile.Read(ref _lastError);
 
     public void Start()
     {
@@ -533,6 +541,7 @@ internal sealed class TestMaintenanceScheduler
             }
             catch (Exception exception)
             {
+                Volatile.Write(ref _lastError, exception.ToString());
                 _onFailure(exception);
                 Interlocked.Exchange(ref _running, 0);
                 return;
