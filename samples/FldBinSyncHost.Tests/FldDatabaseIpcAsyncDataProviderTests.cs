@@ -874,6 +874,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             using Process process = Process.GetCurrentProcess();
             long testPeakBefore = process.PeakWorkingSet64;
             hostWorker!.Refresh();
+            long hostWorkingSetBefore = hostWorker.WorkingSet64;
             long hostPeakBefore = hostWorker.PeakWorkingSet64;
             var stopwatch = Stopwatch.StartNew();
 
@@ -885,6 +886,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             process.Refresh();
             long testPeakAfter = process.PeakWorkingSet64;
             hostWorker.Refresh();
+            long hostWorkingSetAfter = hostWorker.WorkingSet64;
             long hostPeakAfter = hostWorker.PeakWorkingSet64;
             long pagesRead = provider.TombstoneCandidatePagesRead - pagesBefore;
             long appendBatches = provider.TombstoneApprovalBatchesAppended - appendsBefore;
@@ -906,6 +908,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 $"ElapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3} AllocatedBytes={allocatedBytes} " +
                 $"TestProcessPeakWorkingSetBeforeBytes={testPeakBefore} " +
                 $"TestProcessPeakWorkingSetAfterBytes={testPeakAfter} " +
+                $"HostProcessWorkingSetBeforeBytes={hostWorkingSetBefore} " +
+                $"HostProcessWorkingSetAfterBytes={hostWorkingSetAfter} " +
                 $"HostProcessPeakWorkingSetBeforeBytes={hostPeakBefore} " +
                 $"HostProcessPeakWorkingSetAfterBytes={hostPeakAfter} " +
                 $"AllocationStages={string.Join(';', allocationStages.Select(pair => $"{pair.Key}:{pair.Value}"))}";
