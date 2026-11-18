@@ -286,6 +286,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 2
+
+      - name: Detect FLD Storage pin change
+        id: fld-pin
+        shell: bash
+        run: |
+          changed=true
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            base_sha="$(git rev-parse HEAD^ 2>/dev/null || true)"
+            if [[ -n "$base_sha" ]] && git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
+              if git diff --quiet "$base_sha" HEAD -- external/Fld1.Storage; then
+                changed=false
+              fi
+            fi
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "FLD Storage pin changed: $changed"
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -321,6 +338,7 @@ jobs:
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
 
       - name: Test FLD Core, Storage, Manifest, Run, WAL and Engine durability contracts
+        if: steps.fld-pin.outputs.changed == 'true'
         shell: bash
         run: |
           dotnet test FLD-DB/tests/Fld1.Core.Tests/Fld1.Core.Tests.csproj --configuration Release
@@ -330,14 +348,43 @@ jobs:
           dotnet test FLD-DB/tests/Fld1.Wal.Tests/Fld1.Wal.Tests.csproj --configuration Release
           dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release
 
-      - name: Test FLD host adapter against durable FLD database
+      - name: Determine Host adapter test scope
+        id: host-scope
         shell: bash
         run: |
+          policy_only=true
+          base_sha="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          if [[ "$GITHUB_EVENT_NAME" != "push" || -z "$base_sha" ]]; then
+            policy_only=false
+          else
+            while IFS= read -r file; do
+              case "$file" in
+                samples/FldBinSyncHost/FldBinSyncGcOperatorPolicy.cs|samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs|samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs|samples/FldBinSyncHost.Tests/StorageFldBinSyncGcOperatorPolicyStoreTests.cs|samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj|samples/FldBinSyncHost.LeaseLockProbe/*|docs/METADATA-STORE-GC-DESIGN.md|.github/workflows/dotnet.yml)
+                  ;;
+                *)
+                  policy_only=false
+                  ;;
+              esac
+            done < <(git diff --name-only "$base_sha" HEAD)
+          fi
+          echo "policy_only=$policy_only" >> "$GITHUB_OUTPUT"
+          echo "Run only operator-policy tests: $policy_only"
+
+      - name: Test FLD host adapter against durable FLD database
+        shell: bash
+        env:
+          POLICY_ONLY: ${{ steps.host-scope.outputs.policy_only }}
+        run: |
+          if [[ "$POLICY_ONLY" == "true" ]]; then
+            filter="FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests"
+          else
+            filter="FullyQualifiedName!~Async_host_adapter_signed_tombstone_gc_scale&FullyQualifiedName!~Async_host_adapter_signed_changeid_gc_scale"
+          fi
           dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
-            --filter "FullyQualifiedName!~Async_host_adapter_signed_tombstone_gc_scale&FullyQualifiedName!~Async_host_adapter_signed_changeid_gc_scale" \
+            --filter "$filter" \
             --logger "console;verbosity=normal" \
             --logger "trx;LogFileName=fld-host-integration.trx" \
             --results-directory "$RUNNER_TEMP/fld-host-integration-test-results" \
