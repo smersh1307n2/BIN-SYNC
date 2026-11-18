@@ -306,3 +306,19 @@ Latest 50k phase values: candidate discovery 3,766,424 B; candidate-ID materiali
 All exact-head checks for BIN-SYNC commit `3fb90b1eab19327c8ad4b773b65e0a5b684dde1f` passed: ChangeId GC allocation run `44227221270` (including repeated attempt), composed Host smoke `44227221336`, FLD Storage Integration `44227221265`, and BinSync.Net `44227221397`. FLD .NET and Windows crash/recovery checks passed on the pinned Storage commit `6dfeeb0d326edfcc95af5026de3a53bf0608d77d`.
 
 No physical Receipt/ChangeId/Tombstone/Ghost GC was enabled. Remaining high-value profiling targets are the B+ tree COW leaf merge (17.74 MB), Host reference IPC scan (4.32 MB), and approved-candidate materialization (6.40 MB). Any further change must preserve the signed retention proof, the Host reference scan, the writer-admission boundary and the existing transaction atomicity.
+## 2026-11-18 — retained Metadata memory audit
+
+The second memory audit found a larger retained-memory issue than the remaining ChangeId GC allocation phases: the decoded PartitionState retained every encoded Metadata row in PersistedEntries while also materializing the same data into typed dictionaries/lists. This duplicated payload-bearing Relay, Outbound and PendingApply data for the lifetime of each cached partition.
+
+The PersistedEntries cache has been removed. Its four read sites now use the appropriate existing state or a targeted durable read:
+- FULL_REPLACE baseline marker checks read only the requested marker from a FLD snapshot.
+- Relay/Outbound watermark updates compare against the decoded ACK/high-watermark maps. The ACK map distinguishes an existing durable watermark row from a new stream whose high watermark is present but whose ACK row has not yet been written.
+- DecodePartition no longer retains each source StorageEntry key/value array after decoding it into the typed state.
+
+OpenSnapshot() previously cloned every PartitionState dictionary, including ChangeLedger, Receipts, PendingApplies and peer indexes. VolatileSnapshot reads only seven collections: Receives, Relay, RelayAck, RelayHighWatermarks, Outbound, OutboundAck and OutboundHighWatermarks. The snapshot now clones only those seven collections and shallow-copies the Relay/Outbound lists; payload arrays remain immutable and are cloned only when a page crosses the public API boundary.
+
+The decoded partition cache was also unbounded. It is now a four-entry LRU. Evicted partitions are rehydrated from the authoritative FLD rows on the next access. The cache bound is by partition count, not by exact byte size: one exceptionally large active partition can still occupy substantial RAM, so a retained-heap/byte-budget measurement remains necessary before claiming a hard memory ceiling. A focused integration test writes six independent scopes, verifies the four-entry cap, then reads the oldest evicted scope and verifies durable rehydration.
+
+PersistStreamWatermark no longer opens a Storage snapshot just to compare a watermark; it uses the decoded ACK/high-watermark state, preserving the distinction between an absent durable row and a persisted zero ACK.
+
+These changes remove the duplicate encoded row-value retention and unnecessary snapshot collection copies; they do not change the durable FLD row format or enable any physical GC. Cumulative allocation totals are not a proxy for retained heap. Follow-up measurement must use a fresh process, force full GC after loading 50k/100k payload-bearing rows, and report managed retained bytes, LOH, current WorkingSet and peak WorkingSet separately. Continue to profile RelaySequenceIndexes and EncodeIncomingBatch only after this retained-memory baseline exists.
