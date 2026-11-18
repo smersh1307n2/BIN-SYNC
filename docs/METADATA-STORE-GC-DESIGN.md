@@ -224,3 +224,29 @@ The direct public Metadata writer-bypass gate is closed at the adapter API bound
 The gate is process-local and keyed by the exact `StorageDatabase` object. FLD's exclusive partition writer fence prevents a second process from opening a competing writer handle; the FLD Host IPC lease still fences external provider/WAL/ApplyJournal mutations. The adapter-owned Metadata keyspaces must not be written through raw `StorageDatabase` batches.
 
 This closes the direct public Metadata API writer-bypass gate. It does not close the remaining provider crash/replay, scale, or operational release gates and does not authorize physical reclamation. All three physical-GC flags remain false by default; Ghost GC remains disabled.
+
+## 12. Composed Host GC scale and durable operator-policy reliability — 2026-11-18
+
+Exact BIN-SYNC HEAD `ec14e0c54e510f5b19d57848fe94439f2a2192f1` passed BinSync.Net run `44206291961` and Composed Host Metadata GC Scale run `44206291946`. The scale artifact reports:
+
+| Tombstone candidates | Allocated bytes | Elapsed |
+|---:|---:|---:|
+| 10,000 | 10,077,296 | 524.809 ms |
+| 50,000 | 47,082,056 | 4,428.153 ms |
+| 100,000 | 93,422,976 | 15,826.492 ms |
+| 250,000 | 231,933,280 | 103,138.781 ms |
+
+At 250k, the run completed 977 candidate pages/approval batches and one spool commit. Allocation stages were partition-state-load 212,280 B, peer-reservation-check 200 B, payload-count 24 B and Bloom population 1,048,640 B. The Host process peak working set reached 529,346,560 B (from 285,937,664 B before the run); the test process peak working set was 912,646,144 B. These are working-set observations, not incremental retained heap. The 50k allocation result is about 74% below the earlier 180,345,496 B composed baseline; timing is noisy and is not claimed as a stable speedup. The 250k result is a scale test, not production authorization. Keep all physical-GC flags default-off.
+
+### Durable operator policy — remaining reliability proof
+
+The policy and append-only audit are committed in one StorageWriteBatch. A maintenance lease is an OS file-share lock in the Storage database directory; policy updates acquire all three domain locks in stable order before the Metadata writer admission and transaction. This ordering makes policy updates wait for active domain leases and lets the OS release a dead process's lock. The policy store is tied to the exact StorageDatabase instance; FLD's exclusive writer fence prevents a second process from opening another writer handle to the same database. Cross-process lease contention is therefore the supported process boundary; concurrent policy writes are serialized through the one owning database process.
+
+Required tests and operational rules:
+- Exercise two independent policy-store instances racing the same expected generation; exactly one commit may win and append an audit event.
+- Exercise a child process holding the actual domain lock path; policy update must wait, and killing the child must release the OS lock so update/reacquisition can proceed.
+- Corrupt or truncate the persisted policy record; Read/Restore must throw and close the runtime gate. Corrupt audit pages must fail the audit read rather than be silently skipped.
+- Offline backup is supported only after closing StorageDatabase cleanly. Restore the complete database directory as one unit; do not copy live WAL/segment files. Lease lock files are not durable lease state: an OS lock exists only while a process owns its open handle, and restored lock files do not represent a live owner.
+- A database backup can roll policy generation and audit history backwards. The store has no independent anti-rollback authority. After restoring an older backup, keep physical GC disabled until an operator verifies the restored policy/audit against an external operational record and explicitly authorizes maintenance again. Do not treat a restored `MaintenanceStarted` bit as sufficient authorization for a production canary.
+
+This section records implementation/test scope only; it does not enable Receipt, ChangeId or Tombstone GC.

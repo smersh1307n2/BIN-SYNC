@@ -21,6 +21,13 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../FldBinSyncHost/FldBinSyncHost.csproj" />
+    <ProjectReference Include="../FldBinSyncHost.LeaseLockProbe/FldBinSyncHost.LeaseLockProbe.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="$(Fld1DatabaseHostProject)" ReferenceOutputAssembly="false" />
   </ItemGroup>
+  <Target Name="CopyFldBinSyncLeaseLockProbe" AfterTargets="Build">
+    <ItemGroup>
+      <_LeaseLockProbeFiles Include="$(MSBuildThisFileDirectory)../FldBinSyncHost.LeaseLockProbe/bin/$(Configuration)/net10.0/FldBinSyncHost.LeaseLockProbe.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_LeaseLockProbeFiles)" DestinationFolder="$(OutDir)lease-probe" SkipUnchangedFiles="true" />
+  </Target>
 </Project>
