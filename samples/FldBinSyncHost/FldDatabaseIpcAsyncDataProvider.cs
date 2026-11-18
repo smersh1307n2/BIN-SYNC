@@ -869,11 +869,13 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int count = Math.Min(batchLimit, changeIds.Count - offset);
-                var ids = new byte[count][];
+                // Keep the IPC batch contiguous. BatchId is a pair of value-type
+                // limbs, so WriteTo avoids one 16-byte array allocation per identity.
+                byte[] packedIds = new byte[checked(count * 16)];
                 for (int i = 0; i < count; i++)
-                    ids[i] = changeIds[offset + i].ToArray();
+                    changeIds[offset + i].WriteTo(packedIds.AsSpan(i * 16, 16));
                 bool[] results = await _client.HasGcChangeIdReferencesAsync(
-                    _scanToken, ids, cancellationToken).ConfigureAwait(false);
+                    _scanToken, packedIds, count, cancellationToken).ConfigureAwait(false);
                 for (int i = 0; i < count; i++)
                     if (results[i]) referenced.Add(changeIds[offset + i]);
             }
