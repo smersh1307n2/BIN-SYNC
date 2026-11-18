@@ -12,6 +12,7 @@ namespace BinSync.FldHost;
 /// </summary>
 public sealed class FldBinSyncAsyncHostComposition : IDisposable
 {
+    private int _startupState;
     private bool _disposed;
 
     private FldBinSyncAsyncHostComposition(
@@ -21,7 +22,9 @@ public sealed class FldBinSyncAsyncHostComposition : IDisposable
         FldBinSyncGcOperatorPolicyCoordinator policyCoordinator,
         AsyncStorageSyncCoordinator coordinator,
         FldBinSyncAsyncHostAdapter adapter,
-        FldBinSyncGcMaintenanceControl runtimeControl)
+        FldBinSyncGcMaintenanceControl runtimeControl,
+        TrustStore trustStore,
+        FldBinSyncGcOperatorPolicyBinding policyBinding)
     {
         MetadataStore = metadataStore;
         NamespaceGcStore = namespaceGcStore;
@@ -30,6 +33,11 @@ public sealed class FldBinSyncAsyncHostComposition : IDisposable
         Coordinator = coordinator;
         Adapter = adapter;
         RuntimeControl = runtimeControl;
+        TrustStore = trustStore;
+        PolicyBinding = policyBinding;
+        Operator = new FldBinSyncGcHostOperations(
+            Adapter, NamespaceGcStore, TrustStore, PolicyStore,
+            PolicyCoordinator, RuntimeControl, PolicyBinding);
     }
 
     /// <summary>The Metadata adapter created over the caller-owned StorageDatabase.</summary>
@@ -48,6 +56,15 @@ public sealed class FldBinSyncAsyncHostComposition : IDisposable
     public FldBinSyncAsyncHostAdapter Adapter { get; }
 
     public FldBinSyncGcMaintenanceControl RuntimeControl { get; }
+
+    public TrustStore TrustStore { get; }
+
+    public FldBinSyncGcOperatorPolicyBinding PolicyBinding { get; }
+
+    /// <summary>Operator diagnostics, independent policy updates and durable emergency stop.</summary>
+    public FldBinSyncGcHostOperations Operator { get; }
+
+    public bool StartupCompleted => Volatile.Read(ref _startupState) == 2;
 
     /// <summary>
     /// Build the production-safe adapter object graph for one namespace.
@@ -109,7 +126,7 @@ public sealed class FldBinSyncAsyncHostComposition : IDisposable
 
             return new FldBinSyncAsyncHostComposition(
                 metadata, namespaceGcStore, policyStore, policyCoordinator,
-                coordinator, adapter, runtime);
+                coordinator, adapter, runtime, trustStore, binding);
         }
         catch
         {
@@ -120,8 +137,39 @@ public sealed class FldBinSyncAsyncHostComposition : IDisposable
     }
 
     /// <summary>
-    /// Restore the durable policy and complete Node/provider recovery. The caller
-    /// must not accept peer sessions or start maintenance scheduling before this returns.
+    /// Restore durable operator policy and complete Node/provider recovery before
+    /// invoking any application callback that accepts peer sessions or schedules work.
+    /// If recovery or application startup fails, the local emergency brake is latched.
+    /// The callback must clean up any partially opened application resources before throwing.
+    /// </summary>
+    public async Task<AsyncStorageStartupRecoveryResult> StartAsync(
+        Func<CancellationToken, Task> startAcceptingWork,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(startAcceptingWork);
+        if (Interlocked.CompareExchange(ref _startupState, 1, 0) != 0)
+            throw new InvalidOperationException("Host composition startup can run only once.");
+
+        try
+        {
+            AsyncStorageStartupRecoveryResult recovery =
+                await Adapter.RecoverBeforeAcceptingSessionsAsync(cancellationToken).ConfigureAwait(false);
+            await startAcceptingWork(cancellationToken).ConfigureAwait(false);
+            Volatile.Write(ref _startupState, 2);
+            return recovery;
+        }
+        catch
+        {
+            PolicyCoordinator.EmergencyStop();
+            Volatile.Write(ref _startupState, 3);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Lower-level recovery barrier for applications that own a more elaborate startup
+    /// state machine. Prefer StartAsync when one callback can start sessions/scheduling.
     /// </summary>
     public Task<AsyncStorageStartupRecoveryResult> RecoverBeforeAcceptingSessionsAsync(
         CancellationToken cancellationToken = default)
@@ -140,6 +188,7 @@ public sealed class FldBinSyncAsyncHostComposition : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        PolicyCoordinator.EmergencyStop();
         RuntimeControl.Dispose();
         MetadataStore.Dispose();
     }
