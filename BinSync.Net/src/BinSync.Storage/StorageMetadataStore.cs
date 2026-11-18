@@ -2223,10 +2223,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             CommitPartitionBatch(storageBatch, partitionKey, current);
         }
 
-        if (identityKey is not null)
-        {
-            current.IsPersisted = true;
-        }
         current.PendingApplies.Remove(applyToken);
         current.CompletedPendingApplies.Add(applyToken,
             new CompletedPendingApplyValue(providerDigest.ToArray(), CloneReceipt(receipt, receipt.IsDuplicate)));
@@ -2262,8 +2258,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         foreach (var pair in newPeerStreams) current.PeerStreams.Add(pair.Key, pair.Value);
         foreach (var key in newRequiredStreams) current.RequiredPeerStreams.Add(key);
 
-        foreach (var write in writes)
-        foreach (var delete in deletes)
+        current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return receipt;
     }
@@ -2641,9 +2636,7 @@ private static bool ValidateIncomingBatchForStaging(
         foreach (var key in requiredStreams)
             current.RequiredPeerStreams.Add(key);
 
-        if (identityKey is not null)
-        foreach (var write in writes)
-        if (legacyChainDeleteKey is not null)
+        current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return receipt;
     }
@@ -5369,7 +5362,7 @@ private static bool ValidateIncomingBatchForStaging(
         }
         else
             current.Outbound[new OutboundKey(namespaceId, author)].RemoveAll(item => removedSet.Contains(item.Sequence));
-        foreach (var key in keys)
+        current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return removedSequences.Count;
     }
@@ -5497,8 +5490,6 @@ private static bool ValidateIncomingBatchForStaging(
         foreach (var required in newRequiredStreams)
             current.RequiredPeerStreams.Add(required);
 
-        if (identityKey is not null)
-        foreach (var write in writes)
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
     }
@@ -5526,7 +5517,6 @@ private static bool ValidateIncomingBatchForStaging(
             batch.Put(identityKey, identityValue!);
         batch.Put(storageKey, value);
         CommitPartitionBatch(batch, partitionKey, current);
-        if (identityKey is not null)
         current.OutboundLeases[key] = lease;
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
@@ -5581,7 +5571,6 @@ private static bool ValidateIncomingBatchForStaging(
         current.PendingApplies.Add(applyToken, value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
-        if (identityKey is not null)
     }
 
     private void CommitPeerMetadataDelta(
@@ -5634,8 +5623,6 @@ private static bool ValidateIncomingBatchForStaging(
         ReportAllocation("fld-storage-commit");
 
         publish();
-        if (identityKey is not null)
-        foreach (var key in deletes)
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         ReportAllocation("metadata-cache-publish");
@@ -5759,9 +5746,6 @@ private static bool ValidateIncomingBatchForStaging(
         if (addRoster) current.InterestedPeers.Add(rosterKey);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
-        if (identityKey is not null)
-        if (requiredKey is not null)
-        if (rosterRowKey is not null)
     }
 
 
