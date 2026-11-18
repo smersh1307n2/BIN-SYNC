@@ -81,8 +81,8 @@ public sealed class FldBinSyncRuntimeHostTests
             await WaitForActivePeer(clientA, expected: 1, TimeSpan.FromSeconds(10));
             await WaitForActivePeer(clientB, expected: 1, TimeSpan.FromSeconds(10));
 
-            using HttpResponseMessage writeA = await clientA.PostAsJsonAsync(
-                "/admin/test/local-change",
+            using HttpResponseMessage writeA = await PostJsonWithRetry(
+                clientA, "/admin/test/local-change",
                 new
                 {
                     recordIdHex = Convert.ToHexString(recordA),
@@ -108,8 +108,8 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.Equal(1U, receivedAtB.RootElement.GetProperty("originAuthorEpoch").GetUInt32());
             Assert.Equal(1UL, receivedAtB.RootElement.GetProperty("originSequence").GetUInt64());
 
-            using HttpResponseMessage writeB = await clientB.PostAsJsonAsync(
-                "/admin/test/local-change",
+            using HttpResponseMessage writeB = await PostJsonWithRetry(
+                clientB, "/admin/test/local-change",
                 new
                 {
                     recordIdHex = Convert.ToHexString(recordB),
@@ -526,6 +526,22 @@ public sealed class FldBinSyncRuntimeHostTests
             await KillProcess(process);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    private static async Task<HttpResponseMessage> PostJsonWithRetry(
+        HttpClient client, string path, object payload, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            HttpResponseMessage response = await client.PostAsJsonAsync(path, payload);
+            if (response.StatusCode != HttpStatusCode.ServiceUnavailable)
+                return response;
+            response.Dispose();
+            await Task.Delay(100);
+        }
+
+        throw new TimeoutException($"Test write endpoint {path} remained unavailable during GC reference scans.");
     }
 
     private static async Task<JsonDocument> WaitForCurrentMutation(
