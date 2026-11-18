@@ -18,6 +18,8 @@ The process intentionally resembles a long-running application:
 - GET /health/ready — startup barrier, TCP listener, active SyncSession count and scheduler state.
 - GET /operator/peers — active peer count.
 - POST /admin/peers/connect — initiate an outbound TCP SyncSession to another test Host (`{ host, port }`).
+- POST /admin/test/local-change — append a disposable local ProviderMutation through the same FLD IPC provider used by the Host.
+- GET /admin/test/current/{recordIdHex}/{fieldId} — read the current FLD value through the Host provider to verify remote application.
 - GET /operator/gc — diagnostics and durable policy/audit snapshot.
 - POST /operator/gc/policy — generation-checked independent domain policy update.
 - POST /operator/gc/maintenance/once — one bounded pass through the real adapter/lease path (pageLimit 256, ChangeId page limit 4096).
@@ -26,7 +28,7 @@ The process intentionally resembles a long-running application:
 
 All /operator/* and /admin/* routes require a Bearer token supplied through BINSYNC_TEST_HOST_OPERATOR_TOKEN. The token is test input only. The authorizer accepts only the fixed integration-test actor; do not reuse this authentication or authorizer in a real application.
 
-The peer listener uses the repository's `TcpSyncListener`/`TcpSync` transport and real `SyncSession` handshake. It exercises actual framed TCP transport, peer NodeId/epoch negotiation, session lifecycle, inbound batch processing, outbound publication and disconnect cleanup. `BINSYNC_TEST_HOST_ALLOWED_PEERS` can restrict admitted peer NodeIds (comma-separated 32-hex-character IDs); this is a test allowlist, not a production identity provider. The scheduler invokes both the real bounded GC maintenance path (pageLimit 256, ChangeId page limit 4096) and the adapter's outbound round. All StorageNamespaceGcFeatureOptions remain at their default-off values, so the process-level test verifies all three reclaimed counts stay zero and the operator API cannot override the immutable startup proof flags.
+The peer listener uses the repository's `TcpSyncListener`/`TcpSync` transport and real `SyncSession` handshake. It exercises actual framed TCP transport, peer NodeId/epoch negotiation, session lifecycle, inbound batch processing, outbound publication and disconnect cleanup. `BINSYNC_TEST_HOST_ALLOWED_PEERS` can restrict admitted peer NodeIds (comma-separated 32-hex-character IDs); this is a test allowlist, not a production identity provider. The scheduler invokes both the real bounded GC maintenance path (pageLimit 256, ChangeId page limit 4096) and the adapter's outbound round. The `/admin/test/*` probes are strictly test-only: they let the integration test inject a local FLD provider change and verify the received current value without opening a second database owner. All StorageNamespaceGcFeatureOptions remain at their default-off values, so the process-level test verifies all three reclaimed counts stay zero and the operator API cannot override the immutable startup proof flags.
 
 ## Process arguments
 
@@ -41,6 +43,7 @@ FldBinSyncRuntimeHostTests launches the actual FLD Database Host and this execut
 
 - TCP listener/session accept loop and scheduler are not started until the composition startup barrier completes;
 - a real TCP connection completes the BIN-SYNC HELLO/HELLO_ACK exchange, exposes the negotiated peer NodeId and is removed cleanly on disconnect;
+- two independent executable Hosts, each backed by a separate FLD Database Host and Metadata StorageDatabase, exchange local provider mutations in both directions over TCP and preserve the values across one Host process restart/reconnect;
 - unauthenticated and invalid-token operator requests are rejected;
 - the HTTP API exposes diagnostics and generation-checked policy changes;
 - the periodic scheduler starts only after recovery and invokes the real bounded adapter round;
