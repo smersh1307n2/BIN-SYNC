@@ -1,0 +1,108 @@
+name: Tombstone GC Stage 3 Canary
+
+on:
+  push:
+    branches:
+      - feature/fld-external-storage
+    paths:
+      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
+      - 'samples/FldBinSyncHost/**'
+      - 'samples/FldBinSyncHost.Tests/**'
+      - 'samples/FldBinSyncHost.Runtime/**'
+      - 'external/Fld1.Storage'
+      - 'docs/METADATA-STORE-GC-DESIGN.md'
+      - '.github/workflows/tombstone-gc-stage3-canary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tombstone-gc-stage3-canary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  tombstone-canary:
+    name: Tombstone-only disposable canary (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout BIN-SYNC
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        shell: bash
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact FLD-DB revision used by the Storage submodule
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build executable Host adapter and integration tests
+        shell: bash
+        run: |
+          dotnet build samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Run 1k Tombstone-only canary with durable operator policy
+        shell: bash
+        run: |
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references&DisplayName~candidateCount: 1000" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 5m
+
+      - name: Verify signed horizon, Host death before scan and after durable delete
+        shell: bash
+        run: |
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Async_coordinator_reclaims_only_signed_safe_tombstones_through_real_host_ipc" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 5m
+
+      - name: Verify Host exact-candidate revalidation, relay veto and snapshot pins
+        shell: bash
+        run: |
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release \
+            --filter "FullyQualifiedName~Host_revalidates_exact_tombstone_candidates_and_blocks_relay_references_and_snapshot_pins" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 5m
+
+      - name: Verify field and record tombstone no-resurrection and crash recovery
+        shell: bash
+        run: |
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release \
+            --filter "FullyQualifiedName~Field_tombstone_gc_requires_exact_approval_and_does_not_resurrect_old_value|FullyQualifiedName~Record_tombstone_gc_removes_older_fields_but_preserves_newer_fields|FullyQualifiedName~Field_tombstone_is_not_reclaimed_while_its_record_tombstone_is_unproven|FullyQualifiedName~Tombstone_gc_compaction_crash_cuts_recover_one_authoritative_generation" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 5m
