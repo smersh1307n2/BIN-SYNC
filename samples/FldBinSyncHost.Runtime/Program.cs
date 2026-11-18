@@ -10,11 +10,15 @@ using Fld1.Storage.Engine;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 
-if (args.Length != 8)
+if (args.Length is not (8 or 9))
 {
-    Console.Error.WriteLine("Expected: <metadata-root> <fld-root> <metadata-partition> <node-id-hex> <scope-id> <metadata-scope-guid> <namespace-id> <provider-client-guid>");
+    Console.Error.WriteLine("Expected: <metadata-root> <fld-root> <metadata-partition> <node-id-hex> <scope-id> <metadata-scope-guid> <namespace-id> <provider-client-guid> [--test-backup-restore-brake]");
     return 64;
 }
+bool backupRestoreBrake = args.Length == 9 &&
+    string.Equals(args[8], "--test-backup-restore-brake", StringComparison.Ordinal);
+if (args.Length == 9 && !backupRestoreBrake)
+    throw new ArgumentException("Unknown optional test Host argument.", nameof(args));
 
 string metadataRoot = Path.GetFullPath(args[0]);
 string fldRoot = Path.GetFullPath(args[1]);
@@ -86,6 +90,12 @@ try
         remoteApply,
         current => StorageNodePersistence.Save(metadataStorage, current),
         new TestOnlyOperatorAuthorizer());
+
+    // Offline backup restore has no independent anti-rollback authority. The
+    // test-only flag models the required operator first-response brake before
+    // RestoreAsync reads a possibly older policy/audit snapshot.
+    if (backupRestoreBrake)
+        composition.Operator.EmergencyStop();
 
     await composition.StartAsync(_ =>
     {
@@ -221,6 +231,34 @@ try
                 detail: exception.Message,
                 statusCode: StatusCodes.Status503ServiceUnavailable);
         }
+    });
+
+    app.MapPost("/admin/shutdown-clean", async (CancellationToken cancellationToken) =>
+    {
+        FldBinSyncGcOperatorDiagnosticsSnapshot snapshot =
+            await composition.Operator.GetDiagnosticsAsync(cancellationToken: cancellationToken);
+        FldBinSyncGcOperatorPolicy? policy = snapshot.Policy;
+        if (policy is null ||
+            policy.MaintenanceStarted ||
+            policy.ReceiptEnabled ||
+            policy.ChangeIdEnabled ||
+            policy.TombstoneEnabled)
+        {
+            return Results.Conflict(new
+            {
+                error = "Offline backup is allowed only after a durable all-domains-off policy has been verified."
+            });
+        }
+
+        // No policy write here: the existing all-off policy is already durable.
+        // The process-local latch is set before the clean close; only then may
+        // the test copy/restore the closed database directory.
+        composition.Operator.EmergencyStop();
+        durableStopCommitted = true;
+        await scheduler.StopAsync();
+        await peerListener.StopAsync();
+        app.Lifetime.StopApplication();
+        return Results.Ok(new { status = "stopping", durableAllOffPolicyVerified = true });
     });
 
     await app.StartAsync();
