@@ -55,6 +55,12 @@ public sealed class FldBinSyncAsyncGcReadinessTests
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { },
                 gcPolicyCoordinator: policyCoordinator);
+            Assert.Same(runtime, adapter.GcMaintenanceControl);
+            using var mismatchedRuntime = new FldBinSyncGcMaintenanceControl();
+            Assert.Throws<ArgumentException>(() => new FldBinSyncAsyncHostAdapter(
+                coordinator, provider, remoteApply, _ => { },
+                gcControl: mismatchedRuntime,
+                gcPolicyCoordinator: policyCoordinator));
             await Assert.ThrowsAsync<IOException>(
                 () => adapter.RecoverBeforeAcceptingSessionsAsync());
             Assert.False(runtime.IsRunning);
