@@ -163,7 +163,51 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
         await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return await UpdateCoreAsync(request, stopVersion, cancellationToken).ConfigureAwait(false);
+            return await UpdateCoreAsync(request, stopVersion, cancellationToken, "Update").ConfigureAwait(false);
+        }
+        finally
+        {
+            _mutationGate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Immediately stops this process, then durably commits an audited policy with
+    /// maintenance and every GC domain disabled. If persistence fails, the local
+    /// emergency latch remains set; the process must not be restarted until a
+    /// durable disabled policy has been committed by another authorized operation.
+    /// </summary>
+    public async ValueTask<FldBinSyncGcOperatorPolicy> EmergencyStopDurablyAsync(
+        string actorId,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        EmergencyStop();
+        long stopVersion = Volatile.Read(ref _emergencyStopVersion);
+        await _mutationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            FldBinSyncGcOperatorPolicy? current =
+                await _store.ReadAsync(_binding, cancellationToken).ConfigureAwait(false);
+            if (current is not null)
+                ValidatePolicy(current);
+
+            var request = new FldBinSyncGcOperatorPolicyRequest(
+                _binding,
+                current?.Generation ?? 0,
+                actorId,
+                reason,
+                MaintenanceStarted: false,
+                ReceiptEnabled: false,
+                ChangeIdEnabled: false,
+                TombstoneEnabled: false);
+            return await UpdateCoreAsync(
+                request, stopVersion, cancellationToken, "EmergencyStop").ConfigureAwait(false);
+        }
+        catch
+        {
+            _runtime.Stop();
+            throw;
         }
         finally
         {
@@ -174,7 +218,8 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
     private async ValueTask<FldBinSyncGcOperatorPolicy> UpdateCoreAsync(
         FldBinSyncGcOperatorPolicyRequest request,
         long stopVersion,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string auditAction)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.Binding != _binding)
@@ -236,7 +281,7 @@ public sealed class FldBinSyncGcOperatorPolicyCoordinator
             next.AuditSequence,
             next.Generation,
             request.ActorId,
-            current is null ? "Initialize" : "Update",
+            auditAction,
             request.Reason,
             next.MaintenanceStarted,
             next.ReceiptEnabled,
