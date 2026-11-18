@@ -3418,7 +3418,7 @@ private static bool ValidateIncomingBatchForStaging(
             if (!snapshot.TryGet(key, out byte[]? value))
                 return false;
             byte[] expectedRosterDigest = NamespaceRosterProtocol.ComputeDigest(acceptedRoster);
-            if (value.Length != 109 || !value.AsSpan(0, 4).SequenceEqual("MBAC"u8) ||
+            if (value!.Length != 109 || !value.AsSpan(0, 4).SequenceEqual("MBAC"u8) ||
                 value[4] != 1 || !value.AsSpan(5, 32).SequenceEqual(snapshotDigest) ||
                 !value.AsSpan(69, 32).SequenceEqual(expectedRosterDigest) ||
                 BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(101)) !=
