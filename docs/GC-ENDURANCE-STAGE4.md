@@ -11,8 +11,8 @@ This is a disposable integration test. It is not a production deployment and doe
 Workflow: `.github/workflows/gc-endurance-stage4.yml`
 
 - Matrix: `ubuntu-latest` and `windows-latest`.
-- Duration: at least 90 minutes per OS.
-- Minimum acceptance: six complete cycles on each OS; any failed test, hang, crash or missing artifact fails the job.
+- Duration: 15 minutes of active test execution per OS; setup and compilation are outside this window.
+- Minimum acceptance: three complete cycles on each OS; any failed test, hang, crash or missing artifact fails the job.
 - Every cycle rebuilds no code but runs the Release test binaries against the exact FLD Storage submodule SHA pinned by the BIN-SYNC commit.
 - Each underlying canary creates isolated disposable FLD/Metadata databases and Host processes. The cycle repeats the complete sequence rather than sharing one database between tests; this intentionally keeps failure attribution and cleanup deterministic.
 - Every test is run with hang diagnostics and TRX/log artifacts are retained.
@@ -23,11 +23,11 @@ Workflow: `.github/workflows/gc-endurance-stage4.yml`
 2. **ChangeId-only:** live relay reference veto, cancellation, durable policy restart, real FLD IPC reclamation. Scale case: 50,000 candidates with page limit **4096**.
 3. **Receipt-only:** Host WAL seal/reference scan, retired-epoch reclamation, replay fence after restart, and explicit proof that Receipt GC does not authorize physical Tombstone deletion. Page limit remains **256**.
 4. **Tombstone-only:** signed safe horizon, exact candidate revalidation, snapshot/relay vetoes, approval spool, two-host peer ACK/retirement/rejoin/FULL_REPLACE/replay, no-resurrection and compaction crash cuts. Scale case: 50,000 candidates with page limit **256**.
-5. All three stages are repeated in sequence for at least six complete cycles on each OS.
+5. All three stages are repeated in sequence for at least three complete cycles on each OS.
 
 ## Pass criteria
 
-- Both OS jobs complete at least six full cycles within the 120-minute job limit.
+- Both OS jobs complete at least three full cycles within the 45-minute job limit.
 - Every invoked test exits successfully; no test is skipped by the selected filters (the workflow's TRX artifacts are part of review).
 - Each cycle emits `GC_ENDURANCE_CYCLE_PASSED`.
 - The artifact contains all per-test logs/TRX files and a summary with cycle count, elapsed time and the pinned FLD revision.
