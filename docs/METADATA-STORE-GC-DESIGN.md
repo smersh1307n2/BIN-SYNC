@@ -360,13 +360,13 @@ This strengthens the 4096 ChangeId default: it has the lowest cumulative allocat
 
 ## Production operator-policy wiring gate (2026-11-18)
 
-The durable operator-policy implementation and per-domain OS file leases exist, but the Host adapter does not silently compose or restore them. Its constructor accepts an optional `FldBinSyncGcOperatorPolicyCoordinator`, and `requireDurableOperatorPolicy` currently defaults to false for compatibility with test/sample compositions. This is **not** a production-ready default.
+The durable operator-policy implementation and per-domain OS file leases exist, but the Host adapter does not silently compose or restore them. Its constructor accepts an optional `FldBinSyncGcOperatorPolicyCoordinator`; `requireDurableOperatorPolicy` now defaults to **true**. An application that explicitly opts out is responsible for ensuring that GC cannot be opened without equivalent durable authorization. Test-only compositions pass false explicitly. This default is fail-closed, but it does not replace production startup wiring.
 
 Before any production GC domain is enabled, the application composition must:
 
 1. Create `StorageFldBinSyncGcOperatorPolicyStore` over the exact same `StorageDatabase` instance used by `StorageMetadataStore`.
 2. Bind the policy to the exact Metadata scope, local replica and namespace; supply an application-owned authorizer.
-3. Pass the coordinator to `FldBinSyncAsyncHostAdapter` and set `requireDurableOperatorPolicy: true`.
+3. Pass the coordinator to `FldBinSyncAsyncHostAdapter` (the default is `requireDurableOperatorPolicy: true`; do not override it to false in production).
 4. Call the coordinator's `RestoreAsync` during startup, before enabling maintenance or accepting work that can schedule GC. Missing/corrupt/unavailable policy must leave runtime maintenance stopped.
 5. Require every pass to go through the adapter's `RunGcDomainAsync` path. It obtains the durable per-domain lease before invoking compaction and holds it through the complete bounded operation. Do not call lower-level compaction APIs directly from production scheduling code.
 6. Keep startup feature flags false until the signed roster/checkpoint, FULL_REPLACE, Host reference scan, operator audit, disable/rollback and canary gates are approved. Receipt, ChangeId and Tombstone remain independent; physical Tombstone GC is last.
