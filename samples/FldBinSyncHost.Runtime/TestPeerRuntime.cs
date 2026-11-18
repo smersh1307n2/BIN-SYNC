@@ -169,15 +169,15 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
             _listener = null;
         }
 
-        foreach (SyncSession session in _sessions.Values)
-        {
-            try { await session.DisposeAsync().ConfigureAwait(false); } catch { }
-        }
-
         if (_acceptLoop is not null)
         {
             try { await _acceptLoop.ConfigureAwait(false); } catch { }
             _acceptLoop = null;
+        }
+
+        foreach (SyncSession session in _sessions.Values)
+        {
+            try { await session.DisposeAsync().ConfigureAwait(false); } catch { }
         }
 
         Task[] loops;
