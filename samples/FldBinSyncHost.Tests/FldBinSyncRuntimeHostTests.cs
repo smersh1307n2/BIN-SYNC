@@ -27,6 +27,171 @@ public sealed class FldBinSyncRuntimeHostTests
         "stage0-test-host-operator-token-0123456789abcdef0123456789abcdef";
 
     [Fact]
+    public async Task Two_executable_hosts_exchange_provider_changes_over_tcp_and_reconnect_after_peer_restart()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "binsync-two-host-tcp-" + Guid.NewGuid().ToString("N"));
+        string metadataA = Path.Combine(root, "metadata-a");
+        string metadataB = Path.Combine(root, "metadata-b");
+        string fldA = Path.Combine(root, "fld-a");
+        string fldB = Path.Combine(root, "fld-b");
+        byte[] nodeA = Id(0x61);
+        byte[] nodeB = Id(0x62);
+        byte[] recordA = Id(0x63);
+        byte[] changeA = Id(0x64);
+        byte[] recordB = Id(0x65);
+        byte[] changeB = Id(0x66);
+        const ushort fieldId = 0x1234;
+        const string scopeId = "two-host-tcp-integration";
+        Guid metadataScope = Guid.Parse("b4ad91e8-9d47-4c8d-ae1f-16f31c7b0021");
+        byte[] valueA = "provider-change-from-host-a"u8.ToArray();
+        byte[] valueB = "provider-change-from-host-b"u8.ToArray();
+        Process? databaseA = null;
+        Process? databaseB = null;
+        Process? runtimeA = null;
+        Process? runtimeB = null;
+
+        ulong partitionA = 1201;
+        ulong partitionB = 1202;
+        Guid providerClientA = Guid.NewGuid();
+        Guid providerClientB = Guid.NewGuid();
+
+        try
+        {
+            databaseA = StartDatabaseHost(fldA, nodeA);
+            databaseB = StartDatabaseHost(fldB, nodeB);
+            await WaitForDatabaseHost(fldA, databaseA, TimeSpan.FromSeconds(45));
+            await WaitForDatabaseHost(fldB, databaseB, TimeSpan.FromSeconds(45));
+
+            runtimeA = StartRuntimeHost(
+                metadataA, fldA, partitionA, nodeA, scopeId, metadataScope,
+                NamespaceId, providerClientA, Convert.ToHexString(nodeB));
+            runtimeB = StartRuntimeHost(
+                metadataB, fldB, partitionB, nodeB, scopeId, metadataScope,
+                NamespaceId, providerClientB, Convert.ToHexString(nodeA));
+
+            (Uri addressA, _) = await WaitForRuntimeHost(runtimeA, TimeSpan.FromSeconds(45));
+            (Uri addressB, int peerPortB) = await WaitForRuntimeHost(runtimeB, TimeSpan.FromSeconds(45));
+            using var clientA = CreateClient(addressA, OperatorToken);
+            using var clientB = CreateClient(addressB, OperatorToken);
+
+            using HttpResponseMessage connect = await clientA.PostAsJsonAsync(
+                "/admin/peers/connect",
+                new { host = "127.0.0.1", port = peerPortB });
+            Assert.Equal(HttpStatusCode.OK, connect.StatusCode);
+            await WaitForActivePeer(clientA, expected: 1, TimeSpan.FromSeconds(10));
+            await WaitForActivePeer(clientB, expected: 1, TimeSpan.FromSeconds(10));
+
+            using HttpResponseMessage writeA = await clientA.PostAsJsonAsync(
+                "/admin/test/local-change",
+                new
+                {
+                    recordIdHex = Convert.ToHexString(recordA),
+                    fieldId,
+                    changeIdHex = Convert.ToHexString(changeA),
+                    valueBase64 = Convert.ToBase64String(valueA),
+                    keyEpoch = (ushort)0,
+                    hlcWall = 123_456_789UL,
+                    hlcLogical = 1U
+                });
+            Assert.Equal(HttpStatusCode.OK, writeA.StatusCode);
+            using JsonDocument receiptA = JsonDocument.Parse(await writeA.Content.ReadAsStringAsync());
+            Assert.True(receiptA.RootElement.GetProperty("receiptSequence").GetUInt64() > 0);
+
+            using JsonDocument receivedAtB = await WaitForCurrentMutation(
+                clientB, Convert.ToHexString(recordA), fieldId, TimeSpan.FromSeconds(20));
+            Assert.Equal(Convert.ToBase64String(valueA),
+                receivedAtB.RootElement.GetProperty("valueBase64").GetString());
+            Assert.Equal(Convert.ToHexString(changeA),
+                receivedAtB.RootElement.GetProperty("changeIdHex").GetString());
+            Assert.Equal(Convert.ToHexString(nodeA),
+                receivedAtB.RootElement.GetProperty("authorNodeIdHex").GetString());
+            Assert.Equal(1U, receivedAtB.RootElement.GetProperty("originAuthorEpoch").GetUInt32());
+            Assert.Equal(1UL, receivedAtB.RootElement.GetProperty("originSequence").GetUInt64());
+
+            using HttpResponseMessage writeB = await clientB.PostAsJsonAsync(
+                "/admin/test/local-change",
+                new
+                {
+                    recordIdHex = Convert.ToHexString(recordB),
+                    fieldId,
+                    changeIdHex = Convert.ToHexString(changeB),
+                    valueBase64 = Convert.ToBase64String(valueB),
+                    keyEpoch = (ushort)0,
+                    hlcWall = 123_456_790UL,
+                    hlcLogical = 1U
+                });
+            Assert.Equal(HttpStatusCode.OK, writeB.StatusCode);
+
+            using JsonDocument receivedAtA = await WaitForCurrentMutation(
+                clientA, Convert.ToHexString(recordB), fieldId, TimeSpan.FromSeconds(20));
+            Assert.Equal(Convert.ToBase64String(valueB),
+                receivedAtA.RootElement.GetProperty("valueBase64").GetString());
+            Assert.Equal(Convert.ToHexString(changeB),
+                receivedAtA.RootElement.GetProperty("changeIdHex").GetString());
+            Assert.Equal(Convert.ToHexString(nodeB),
+                receivedAtA.RootElement.GetProperty("authorNodeIdHex").GetString());
+
+            // Restart one executable Host while leaving its FLD Database Host and
+            // the remote peer alive. The durable Node/Metadata state must reopen,
+            // and the peer must be able to establish a fresh TCP SyncSession.
+            using HttpResponseMessage shutdownB = await clientB.PostAsJsonAsync(
+                "/admin/shutdown",
+                new { reason = "two-host TCP integration restart" });
+            Assert.Equal(HttpStatusCode.OK, shutdownB.StatusCode);
+            await runtimeB.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            runtimeB.Dispose();
+            runtimeB = null;
+
+            await WaitForActivePeer(clientA, expected: 0, TimeSpan.FromSeconds(10));
+
+            runtimeB = StartRuntimeHost(
+                metadataB, fldB, partitionB, nodeB, scopeId, metadataScope,
+                NamespaceId, providerClientB, Convert.ToHexString(nodeA));
+            (addressB, peerPortB) = await WaitForRuntimeHost(runtimeB, TimeSpan.FromSeconds(45));
+            clientB.Dispose();
+            using var restartedClientB = CreateClient(addressB, OperatorToken);
+
+            using HttpResponseMessage reconnect = await clientA.PostAsJsonAsync(
+                "/admin/peers/connect",
+                new { host = "127.0.0.1", port = peerPortB });
+            Assert.Equal(HttpStatusCode.OK, reconnect.StatusCode);
+            await WaitForActivePeer(clientA, expected: 1, TimeSpan.FromSeconds(10));
+            await WaitForActivePeer(restartedClientB, expected: 1, TimeSpan.FromSeconds(10));
+
+            using JsonDocument persistedAtB = await WaitForCurrentMutation(
+                restartedClientB, Convert.ToHexString(recordA), fieldId, TimeSpan.FromSeconds(10));
+            Assert.Equal(Convert.ToBase64String(valueA),
+                persistedAtB.RootElement.GetProperty("valueBase64").GetString());
+            using JsonDocument persistedAtA = await WaitForCurrentMutation(
+                clientA, Convert.ToHexString(recordB), fieldId, TimeSpan.FromSeconds(10));
+            Assert.Equal(Convert.ToBase64String(valueB),
+                persistedAtA.RootElement.GetProperty("valueBase64").GetString());
+
+            using HttpResponseMessage cleanA = await clientA.PostAsJsonAsync(
+                "/admin/shutdown", new { reason = "finish two-host TCP integration" });
+            Assert.Equal(HttpStatusCode.OK, cleanA.StatusCode);
+            await runtimeA.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            runtimeA.Dispose();
+            runtimeA = null;
+
+            using HttpResponseMessage cleanB = await restartedClientB.PostAsJsonAsync(
+                "/admin/shutdown", new { reason = "finish restarted two-host TCP integration" });
+            Assert.Equal(HttpStatusCode.OK, cleanB.StatusCode);
+            await runtimeB.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            runtimeB.Dispose();
+            runtimeB = null;
+        }
+        finally
+        {
+            if (runtimeA is not null) await KillProcess(runtimeA);
+            if (runtimeB is not null) await KillProcess(runtimeB);
+            if (databaseA is not null) await KillProcess(databaseA);
+            if (databaseB is not null) await KillProcess(databaseB);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Executable_host_establishes_real_tcp_sync_session_and_restores_durable_stop_after_process_restart()
     {
         string root = Path.Combine(Path.GetTempPath(), "binsync-stage0-runtime-" + Guid.NewGuid().ToString("N"));
@@ -361,6 +526,25 @@ public sealed class FldBinSyncRuntimeHostTests
             await KillProcess(process);
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    private static async Task<JsonDocument> WaitForCurrentMutation(
+        HttpClient client, string recordIdHex, ushort fieldId, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        string path = $"/admin/test/current/{recordIdHex}/{fieldId.ToString(CultureInfo.InvariantCulture)}";
+        while (DateTime.UtcNow < deadline)
+        {
+            using HttpResponseMessage response = await client.GetAsync(path);
+            if (response.StatusCode == HttpStatusCode.OK)
+                return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            if (response.StatusCode != HttpStatusCode.NotFound)
+                throw new InvalidOperationException(
+                    $"Current-value probe failed with {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
+            await Task.Delay(100);
+        }
+
+        throw new TimeoutException($"Remote FLD value {recordIdHex}/{fieldId} was not observed.");
     }
 
     private static async Task WaitForActivePeer(HttpClient client, int expected, TimeSpan timeout)
