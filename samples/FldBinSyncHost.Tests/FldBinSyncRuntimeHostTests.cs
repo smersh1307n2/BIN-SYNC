@@ -92,7 +92,8 @@ public sealed class FldBinSyncRuntimeHostTests
                     keyEpoch = (ushort)0,
                     hlcWall = 123_456_789UL,
                     hlcLogical = 1U
-                });
+                },
+                TimeSpan.FromSeconds(10));
             Assert.Equal(HttpStatusCode.OK, writeA.StatusCode);
             using JsonDocument receiptA = JsonDocument.Parse(await writeA.Content.ReadAsStringAsync());
             Assert.True(receiptA.RootElement.GetProperty("receiptSequence").GetUInt64() > 0);
@@ -119,7 +120,8 @@ public sealed class FldBinSyncRuntimeHostTests
                     keyEpoch = (ushort)0,
                     hlcWall = 123_456_790UL,
                     hlcLogical = 1U
-                });
+                },
+                TimeSpan.FromSeconds(10));
             Assert.Equal(HttpStatusCode.OK, writeB.StatusCode);
 
             using JsonDocument receivedAtA = await WaitForCurrentMutation(
