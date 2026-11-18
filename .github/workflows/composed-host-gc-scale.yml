@@ -20,7 +20,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: composed-host-metadata-gc-scale-${{ github.ref }}
+  group: composed-host-metadata-gc-smoke-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
