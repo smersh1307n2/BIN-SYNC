@@ -1972,7 +1972,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.Tombstone));
 
             // An already-open provider snapshot is a global GC veto. The IPC scan
-            // exposes the pin and the enabled ChangeId domain must stop before
+            // exposes the pin and the enabled Receipt domain must stop before
             // candidate deletion, even though the signed control plane is otherwise ready.
             ProviderSnapshotHandle pinnedSnapshot = await provider.OpenSnapshotAsync();
             FldBinSyncAsyncGcReadinessReport pinnedReadiness =
@@ -2051,11 +2051,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.ChangeId));
             Assert.True(gcRuntime.IsEnabled(FldBinSyncGcDomain.Receipt));
             Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.Tombstone));
+        }
         finally
         {
-            // Always release the test-only blocking scanner before disposing its owner.
-            // Otherwise an earlier assertion can strand the provider's scan gate and
-            // turn the real failure into an unbounded cleanup hang.
             if (remoteApply is not null)
                 await remoteApply.DisposeAsync();
             if (provider is not null)
