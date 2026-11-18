@@ -1633,7 +1633,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             // lease. A competing IPC writer stays blocked until that cleanup finishes.
             var cancelledScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
             gcCancellation = new CancellationTokenSource();
-            await using IAsyncDisposable cancellationLease =
+            IAsyncDisposable cancellationLease =
                 await policyCoordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.ChangeId)
                 ?? throw new InvalidOperationException("ChangeId canary maintenance lease was not granted.");
             Task<int> cancelledGc = coordinator.CompactChangeLedgerAsync(
@@ -1656,12 +1656,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 scope, local, checked((int)namespaceId), BatchId.From(changeId),
                 out _, out _, out _),
                 "Cancellation must not commit the ChangeId deletion.");
+            await cancellationLease.DisposeAsync();
 
             // A successful GC pass must hold the same real Host lease through the
             // negative reference answer, final Metadata revalidation and durable delete.
             // A competing provider writer is released only after that transaction ends.
             var successfulScanner = new BlockingAsyncGcReferenceScanner(referenceScanner);
-            await using IAsyncDisposable successfulLease =
+            IAsyncDisposable successfulLease =
                 await policyCoordinator.TryAcquireMaintenanceLeaseAsync(FldBinSyncGcDomain.ChangeId)
                 ?? throw new InvalidOperationException("ChangeId canary maintenance lease was not granted.");
             Task<int> successfulGc = coordinator.CompactChangeLedgerAsync(
@@ -1681,6 +1682,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 "The successful pass commits the ChangeId deletion before releasing the Host lease.");
             Assert.False(await successfulBlockedWriter.WaitAsync(TimeSpan.FromSeconds(15)),
                 "The independent writer has no local operation receipts to acknowledge.");
+            await successfulLease.DisposeAsync();
 
             // Re-run through the Host adapter: the durable ChangeId-only lease is
             // acquired again, while Receipt/Tombstone stay disabled and no second
