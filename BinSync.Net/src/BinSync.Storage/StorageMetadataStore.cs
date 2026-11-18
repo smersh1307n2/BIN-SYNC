@@ -5610,6 +5610,16 @@ private static bool ValidateIncomingBatchForStaging(
         IReadOnlyList<byte[]> deletes,
         Action publish)
     {
+        Action<string, long>? allocationObserver = ChangeIdGcAllocationObserver;
+        long allocationCheckpoint = allocationObserver is null ? 0 : GC.GetTotalAllocatedBytes(precise: true);
+        void ReportAllocation(string phase)
+        {
+            if (allocationObserver is null) return;
+            long allocated = GC.GetTotalAllocatedBytes(precise: true);
+            allocationObserver(phase, allocated - allocationCheckpoint);
+            allocationCheckpoint = allocated;
+        }
+
         byte[] root = PartitionRoot(partitionKey);
         byte[]? identityKey = current.IsPersisted
             ? null
@@ -5628,7 +5638,9 @@ private static bool ValidateIncomingBatchForStaging(
             batch.Delete(key);
         foreach (var write in writes)
             batch.Put(write.Key, write.Value);
+        ReportAllocation("metadata-batch-staging");
         CommitPartitionBatch(batch, partitionKey, current);
+        ReportAllocation("fld-storage-commit");
 
         publish();
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
@@ -5641,6 +5653,7 @@ private static bool ValidateIncomingBatchForStaging(
             current.PersistedEntries[Convert.ToHexString(write.Key)] = (write.Key, write.Value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
+        ReportAllocation("metadata-cache-publish");
     }
 
     private static byte[] EncodeReceiptKey(PartitionKey partitionKey, ReceiptKey receipt)
