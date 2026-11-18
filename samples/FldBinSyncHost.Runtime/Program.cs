@@ -191,7 +191,7 @@ try
             await composition.Operator.RunOneMaintenanceRoundAsync(
                 pageLimit: 256,
                 changeIdPageLimit: 4096,
-                cancellationToken);
+                cancellationToken: cancellationToken);
         return Results.Ok(result);
     });
 
