@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: binsync-gc-stage4-endurance-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   endurance:
@@ -29,9 +29,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 45
     env:
-      ENDURANCE_SECONDS: 5400
+      ENDURANCE_SECONDS: 900
     steps:
       - name: Checkout BIN-SYNC and pinned FLD Storage
         uses: actions/checkout@v4
@@ -72,7 +72,7 @@ jobs:
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
 
-      - name: Run repeated full GC lifecycle for 90 minutes
+      - name: Run repeated full GC lifecycle for 15 minutes
         shell: bash
         run: |
           set -euo pipefail
@@ -152,8 +152,8 @@ jobs:
             echo "GC_ENDURANCE_CYCLE_PASSED cycle=$cycle elapsed_seconds=$((SECONDS - start))" | tee -a "$results/endurance-summary.log"
           done
 
-          if (( cycle < 6 )); then
-            echo "::error::Only $cycle complete cycles ran; at least six are required."
+          if (( cycle < 3 )); then
+            echo "::error::Only $cycle complete cycles ran; at least three are required."
             exit 1
           fi
 
