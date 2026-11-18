@@ -1,5 +1,5 @@
 using BinSync;
-using BinSync.Storage;
+using BinSync.Storage;\nusing Fld1.Storage.Engine;
 using Xunit;
 
 namespace BinSync.Storage.Integration;
@@ -36,6 +36,54 @@ public sealed class LiveRecordReferenceFilterTests
 
         Assert.True(falsePositives < 100,
             $"Expected a low false-positive rate, observed {falsePositives} / 100000.");
+    }
+
+    [Fact]
+    public void Bloom_prefilter_refuses_pushed_but_unacknowledged_peer_reservation()
+    {
+        static byte[] Id(byte value)
+        {
+            byte[] bytes = new byte[16];
+            bytes[15] = value;
+            return bytes;
+        }
+
+        string directory = Path.Combine(
+            Path.GetTempPath(), "binsync-live-record-filter-reservation-" + Guid.NewGuid().ToString("N"));
+        const string scope = "live-record-filter-reservation";
+        const int namespaceId = 19;
+        NodeId local = NodeId.From(Id(0x41));
+        NodeId peer = NodeId.From(Id(0x42));
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 954);
+            using var metadata = new StorageMetadataStore(storage);
+
+            metadata.RegisterInterestedPeer(scope, local, peer, 1, namespaceId);
+            metadata.CompletePeerInitialSync(scope, local, peer, 1, namespaceId,
+                new[] { new MetadataPeerStreamBaseline(peer, 0, 3) });
+            var reservation = new MetadataOutboundBatchReservation
+            {
+                BatchId = BatchId.From(Id(0x43)),
+                IssuerEpoch = 3,
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)0x44, 16).ToArray(),
+                Payload = new byte[] { 0x45 }
+            };
+            metadata.ReserveOutboundBatch(
+                scope, local, peer, 1, namespaceId, peer, reservation);
+            metadata.MarkOutboundBatchPushed(
+                scope, local, peer, 1, namespaceId, peer, reservation.BatchId);
+
+            Assert.False(metadata.TryCreateLiveRecordReferenceFilter(
+                scope, local, namespaceId, out _));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
     }
 
     [Fact]
