@@ -72,10 +72,12 @@ jobs:
         env:
           COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/composed-host-metadata-gc-scale.md
           GC_SCALE_FULL: ${{ contains(github.event.head_commit.message, '[gc-scale-full]') }}
+          GC_SCALE_250K: ${{ contains(github.event.head_commit.message, '[gc-scale-250k]') }}
         run: |
           run_case() {
             local name="$1"
             local filter="$2"
+            local hang_timeout="${3:-5m}"
             echo "::group::Isolated GC measurement: $name"
             dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
               -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
@@ -85,12 +87,17 @@ jobs:
               --logger "console;verbosity=normal" \
               --logger "trx;LogFileName=$name.trx" \
               --results-directory "$RUNNER_TEMP/fld-host-gc-scale-test-results/$name" \
-              --blame-hang-timeout 5m \
+              --blame-hang-timeout "$hang_timeout" \
               --blame-hang-dump-type mini
             echo "::endgroup::"
           }
 
-          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GC_SCALE_FULL" != "true" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GC_SCALE_250K" = "true" ]; then
+            # Diagnostic rerun: isolate only the previously stalled 250k Tombstone case.
+            expected=1
+            run_case "tombstone-250000" \
+              "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: 250000" 15m
+          elif [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GC_SCALE_FULL" != "true" ]; then
             # Routine CI: one representative Tombstone GC point, in its own test process.
             expected=1
             run_case "tombstone-50000" \

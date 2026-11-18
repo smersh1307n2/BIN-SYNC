@@ -531,9 +531,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         Process? hostWorker = null;
         FldDatabaseIpcAsyncDataProvider? provider = null;
         FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
+        var stageClock = Stopwatch.StartNew();
+        void MarkStage(string stage) => Console.WriteLine(
+            $"TOMBSTONE_GC_STAGE Candidates={candidateCount} Stage={stage} ElapsedMs={stageClock.Elapsed.TotalMilliseconds:F0}");
 
         try
         {
+            MarkStage("host-start");
             using (var database = FldDatabase.Open(hostRoot, namespaceId, localAuthorBytes))
                 _ = database.Checkpoint();
 
@@ -547,6 +551,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 hostRoot, Guid.NewGuid(), TimeSpan.FromSeconds(15), local, () => 17);
             remoteApply = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                 hostRoot, Guid.NewGuid(), checked((ushort)namespaceId), TimeSpan.FromSeconds(15));
+            MarkStage("host-connected");
 
             using var nodeStorage = StorageDatabase.Open(nodeRoot, 905);
             using var metadata = new StorageMetadataStore(nodeStorage);
@@ -592,6 +597,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             metadata.RegisterInterestedPeer(scope, local, authority, 1, checked((int)namespaceId));
             metadata.RegisterInterestedPeer(scope, local, relayPeer, 1, checked((int)namespaceId));
 
+            MarkStage("relay-metadata-seed-start");
             // Keep a real retained Metadata Relay payload set in the same namespace.
             // Its RecordIds are deliberately disjoint from the FLD tombstone candidates:
             // every candidate page must scan and decode these payloads without treating
@@ -651,9 +657,14 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 };
                 Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
                 previousMetadataDigest = batchDigest;
+                int seeded = start + count;
+                if (candidateCount >= 100_000 &&
+                    (seeded == candidateCount || seeded % 25_600 == 0))
+                    MarkStage($"relay-metadata-seed {seeded}/{candidateCount}");
             }
             Assert.NotEmpty(metadata.ReadRelay(
                 scope, local, checked((int)namespaceId), relayPeer, 0, 16).Items);
+            MarkStage("relay-metadata-seed-complete");
 
             // Seed live values and then immutable field tombstones through the real
             // FLD remote APPLY IPC. This guarantees every candidate is a tombstone of
@@ -661,8 +672,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             byte[] previousRemoteDigest = new byte[16];
             ulong remoteCursor = 0;
             int remoteBatchIndex = 0;
-            async Task ApplyRemoteMutationStreamAsync(Func<int, ProviderMutation> createMutation)
+            async Task ApplyRemoteMutationStreamAsync(
+                string phase, Func<int, ProviderMutation> createMutation)
             {
+                MarkStage(phase + "-start");
                 for (int start = 0; start < candidateCount; start += remoteBatchSize)
                 {
                     int count = Math.Min(remoteBatchSize, candidateCount - start);
@@ -692,10 +705,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     remoteCursor += (ulong)count;
                     previousRemoteDigest = batchDigest;
                     remoteBatchIndex++;
+                    int applied = start + count;
+                    if (candidateCount >= 100_000 &&
+                        (applied == candidateCount || applied % 25_600 == 0))
+                        MarkStage($"{phase} {applied}/{candidateCount}");
                 }
+                MarkStage(phase + "-complete");
             }
 
-            await ApplyRemoteMutationStreamAsync(sequence => new ProviderMutation
+            await ApplyRemoteMutationStreamAsync("apply-live", sequence => new ProviderMutation
             {
                 RecordId = RecordId.From(ScaleId(sequence)),
                 FieldId = 1,
@@ -708,7 +726,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 HlcWall = 99,
                 HlcLogical = 1
             });
-            await ApplyRemoteMutationStreamAsync(sequence => new ProviderMutation
+            await ApplyRemoteMutationStreamAsync("apply-tombstones", sequence => new ProviderMutation
             {
                 RecordId = RecordId.From(ScaleId(sequence)),
                 FieldId = 1,
@@ -723,6 +741,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 IsTombstone = true
             });
 
+            MarkStage("frontier-checkpoint-start");
             var authorityReport = gc.AcceptOriginFrontier(OriginFrontierProtocol.Sign(
                 new AppliedOriginFrontierReport
                 {
@@ -845,6 +864,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 fullReplaceHlcWallFloor: 100, fullReplaceHlcLogicalFloor: 1);
             gc.AcceptRetentionCheckpoint(
                 NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+            MarkStage("frontier-checkpoint-complete");
 
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
@@ -860,9 +880,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             // Count the actual metadata pages before timing. The benchmark then
             // records provider page/spool counters for the GC pass itself.
+            MarkStage("candidate-snapshot-count-start");
             (int observedCandidates, int expectedPages) =
                 await CountTombstoneCandidatesAndPagesAsync(provider, tombstonePageSize);
             Assert.Equal(candidateCount, observedCandidates);
+            MarkStage($"candidate-snapshot-count-complete pages={expectedPages}");
             long pagesBefore = provider.TombstoneCandidatePagesRead;
             long appendsBefore = provider.TombstoneApprovalBatchesAppended;
             long commitsBefore = provider.TombstoneApprovalSpoolCommits;
@@ -877,11 +899,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             long hostWorkingSetBefore = hostWorker.WorkingSet64;
             long hostPeakBefore = hostWorker.PeakWorkingSet64;
             var stopwatch = Stopwatch.StartNew();
+            MarkStage("gc-pass-start");
 
             int reclaimed = await adapter.RunTombstoneGcPassAsync(
                 gc, trust, limit: 4_096).WaitAsync(TimeSpan.FromMinutes(3));
 
             stopwatch.Stop();
+            MarkStage($"gc-pass-complete reclaimed={reclaimed}");
             long allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
             process.Refresh();
             long testPeakAfter = process.PeakWorkingSet64;
@@ -899,7 +923,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal((long)expectedPages, pagesRead);
             Assert.Equal((long)expectedPages, appendBatches);
             Assert.Equal(1L, spoolCommits);
+            MarkStage("candidate-snapshot-empty-check-start");
             Assert.Empty(await ReadAllTombstoneCandidatesAsync(provider, tombstonePageSize));
+            MarkStage("candidate-snapshot-empty-check-complete");
 
             string metrics =
                 $"COMPOSED_HOST_TOMBSTONE_GC_SCALE Candidates={candidateCount} " +
@@ -927,6 +953,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         }
         finally
         {
+            MarkStage("cleanup-start");
             if (remoteApply is not null)
                 await remoteApply.DisposeAsync();
             if (provider is not null)
@@ -938,6 +965,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             hostWorker?.Dispose();
             try { Directory.Delete(hostRoot, recursive: true); } catch { }
             try { Directory.Delete(nodeRoot, recursive: true); } catch { }
+            MarkStage("cleanup-complete");
         }
     }
 
