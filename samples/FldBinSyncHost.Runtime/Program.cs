@@ -5,6 +5,7 @@ using System.Text;
 using BinSync;
 using BinSync.FldHost;
 using BinSync.Storage;
+using Fld1.Engine.Sync;
 using Fld1.Storage.Engine;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -33,15 +34,18 @@ if (Encoding.UTF8.GetByteCount(operatorToken) < 32)
 
 Directory.CreateDirectory(metadataRoot);
 using var metadataStorage = StorageDatabase.Open(metadataRoot, metadataPartition);
+using var nodeWal = Wal.Open(Path.Combine(metadataRoot, "node.wal"));
 Node node;
 if (!StorageNodePersistence.TryLoad(metadataStorage, nodeId, out Node? savedNode))
 {
     node = new NodeBuilder().WithNodeId(nodeId).WithEpoch(1).Build();
+    node.AttachWal(nodeWal);
     StorageNodePersistence.Save(metadataStorage, node);
 }
 else
 {
     node = savedNode!;
+    node.AttachWal(nodeWal);
 }
 
 FldDatabaseIpcAsyncDataProvider? provider = null;
@@ -66,6 +70,10 @@ try
         Guid.NewGuid(),
         namespaceId,
         TimeSpan.FromSeconds(15));
+
+    // The FLD provider must first make the provider-authoritative publication
+    // cutover durable. This is part of the real startup contract, not a test bypass.
+    await provider.EnableMetadataStoreOwnedPublicationAsync(0);
 
     composition = FldBinSyncAsyncHostComposition.Create(
         metadataStorage,
