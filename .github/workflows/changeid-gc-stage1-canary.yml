@@ -10,6 +10,7 @@ on:
       - 'samples/FldBinSyncHost.Tests/**'
       - 'samples/FldBinSyncHost.Runtime/**'
       - 'external/Fld1.Storage'
+      - 'docs/METADATA-STORE-GC-DESIGN.md'
       - '.github/workflows/changeid-gc-stage1-canary.yml'
   workflow_dispatch:
 
