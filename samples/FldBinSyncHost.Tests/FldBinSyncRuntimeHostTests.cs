@@ -155,7 +155,7 @@ public sealed class FldBinSyncRuntimeHostTests
     }
 
     [Fact]
-    public async Task Startup_without_the_FL D_database_host_fails_before_publishing_readiness()
+    public async Task Startup_without_the_FLD_database_host_fails_before_publishing_readiness()
     {
         string root = Path.Combine(Path.GetTempPath(), "binsync-stage0-runtime-failclosed-" + Guid.NewGuid().ToString("N"));
         string metadataRoot = Path.Combine(root, "metadata");
