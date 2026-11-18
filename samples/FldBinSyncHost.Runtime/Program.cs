@@ -55,9 +55,26 @@ FldDatabaseIpcAsyncDataProvider? provider = null;
 FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
 FldBinSyncAsyncHostComposition? composition = null;
 TestPeerRuntime? peerRuntime = null;
+int maintenanceIntervalMs = int.TryParse(
+    Environment.GetEnvironmentVariable("BINSYNC_TEST_HOST_MAINTENANCE_INTERVAL_MS"),
+    System.Globalization.NumberStyles.None,
+    System.Globalization.CultureInfo.InvariantCulture,
+    out int configuredMaintenanceIntervalMs)
+        ? configuredMaintenanceIntervalMs : 1000;
+if (maintenanceIntervalMs is < 100 or > 60000)
+    throw new InvalidOperationException("Test Host maintenance interval must be between 100 and 60000 ms.");
 var scheduler = new TestMaintenanceScheduler(
     async cancellationToken =>
     {
+        // The test Host conservatively yields the FLD Host-wide GC lease while
+        // any peer is connected. Sync publication has priority; GC resumes when
+        // the peer set becomes empty.
+        if (peerRuntime is not null && peerRuntime.ActivePeers > 0)
+        {
+            await peerRuntime.RunOutboundRoundAsync(cancellationToken);
+            return;
+        }
+
         await composition!.Operator.RunOneMaintenanceRoundAsync(
             pageLimit: 256,
             changeIdPageLimit: 4096,
@@ -69,7 +86,8 @@ var scheduler = new TestMaintenanceScheduler(
     {
         Console.Error.WriteLine($"Test maintenance scheduler stopped: {exception.Message}");
         composition!.Operator.EmergencyStop();
-    });
+    },
+    TimeSpan.FromMilliseconds(maintenanceIntervalMs));
 WebApplication? app = null;
 bool durableStopCommitted = false;
 
@@ -113,6 +131,8 @@ try
     peerRuntime = new TestPeerRuntime(
         node,
         composition,
+        provider,
+        current => StorageNodePersistence.Save(metadataStorage, current),
         Environment.GetEnvironmentVariable("BINSYNC_TEST_HOST_ALLOWED_PEERS"));
 
     await composition.StartAsync(_ =>
@@ -165,6 +185,7 @@ try
         peerListenerStarted = peerRuntime.IsRunning,
         peerPort = peerRuntime.Port,
         activePeers = peerRuntime.ActivePeers,
+        baselineReadyPeers = peerRuntime.BaselineReadyPeers,
         maintenanceSchedulerStarted = scheduler.IsRunning,
         maintenanceTicks = scheduler.TickCount,
         maintenanceError = scheduler.LastError,
@@ -174,12 +195,46 @@ try
     app.MapGet("/operator/peers", () => Results.Ok(new
     {
         activePeers = peerRuntime.ActivePeers,
+        baselineReadyPeers = peerRuntime.BaselineReadyPeers,
         activePeerIds = peerRuntime.ActivePeerIds,
         outboundRounds = peerRuntime.OutboundRounds,
         outboundBatches = peerRuntime.OutboundBatches,
         inboundBatches = peerRuntime.InboundBatches,
         lastPeerError = peerRuntime.LastError
     }));
+
+    app.MapPost("/admin/test/verify-empty-namespace", async (CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            await peerRuntime.VerifyEmptyNamespaceAsync(cancellationToken);
+            return Results.Ok(new { providerEmpty = true, nodeEmpty = true });
+        }
+        catch (Exception exception) when (exception.Message.Contains(
+            "GC lease owner may only access its reference scan", StringComparison.Ordinal))
+        {
+            return Results.Problem(
+                title: "FLD Host is performing a GC reference scan; retry the test verification.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Exception exception)
+        {
+            return Results.Conflict(new { error = exception.Message });
+        }
+    });
+
+    app.MapPost("/admin/test/complete-peer-baseline", async (CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            await peerRuntime.CompletePeerSessionsAsync(cancellationToken);
+            return Results.Ok(new { baselineReadyPeers = peerRuntime.BaselineReadyPeers });
+        }
+        catch (Exception exception)
+        {
+            return Results.Conflict(new { error = exception.Message });
+        }
+    });
 
     app.MapPost("/admin/test/local-change", async (
         LocalChangeRequest request,
@@ -497,6 +552,7 @@ internal sealed class TestMaintenanceScheduler
 {
     private readonly Func<CancellationToken, Task> _runMaintenance;
     private readonly Action<Exception> _onFailure;
+    private readonly TimeSpan _interval;
     private CancellationTokenSource? _stop;
     private Task? _loop;
     private long _ticks;
@@ -505,10 +561,13 @@ internal sealed class TestMaintenanceScheduler
 
     public TestMaintenanceScheduler(
         Func<CancellationToken, Task> runMaintenance,
-        Action<Exception> onFailure)
+        Action<Exception> onFailure,
+        TimeSpan interval)
     {
-        _runMaintenance = runMaintenance;
-        _onFailure = onFailure;
+        _runMaintenance = runMaintenance ?? throw new ArgumentNullException(nameof(runMaintenance));
+        _onFailure = onFailure ?? throw new ArgumentNullException(nameof(onFailure));
+        if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval));
+        _interval = interval;
     }
 
     public bool IsRunning => Volatile.Read(ref _running) != 0;
@@ -525,14 +584,15 @@ internal sealed class TestMaintenanceScheduler
 
     private async Task RunAsync(CancellationToken cancellationToken)
     {
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
-        while (await timer.WaitForNextTickAsync(cancellationToken))
+        while (!cancellationToken.IsCancellationRequested)
         {
             try
             {
-                // Exercise the real bounded adapter/lease path. All physical-GC
-                // startup proof flags are false in this test Host.
-                await _runMaintenance(cancellationToken);
+                // Delay after the previous round completes. PeriodicTimer can
+                // immediately replay a queued tick after a long scan and starve
+                // ordinary Host operations under a continuous GC lease.
+                await Task.Delay(_interval, cancellationToken).ConfigureAwait(false);
+                await _runMaintenance(cancellationToken).ConfigureAwait(false);
                 Interlocked.Increment(ref _ticks);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
