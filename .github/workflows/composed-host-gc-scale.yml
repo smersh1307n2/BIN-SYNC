@@ -9,6 +9,7 @@ on:
       - 'BinSync.Net/src/BinSync.Storage/AssemblyInfo.cs'
       - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
       - 'samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs'
+      - 'external/Fld1.Storage'
       - '.github/workflows/composed-host-gc-scale.yml'
   workflow_dispatch:
   schedule:
