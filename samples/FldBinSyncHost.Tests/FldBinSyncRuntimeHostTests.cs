@@ -538,7 +538,7 @@ public sealed class FldBinSyncRuntimeHostTests
             using HttpResponseMessage response = await client.GetAsync(path);
             if (response.StatusCode == HttpStatusCode.OK)
                 return JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            if (response.StatusCode != HttpStatusCode.NotFound)
+            if (response.StatusCode is not (HttpStatusCode.NotFound or HttpStatusCode.ServiceUnavailable))
                 throw new InvalidOperationException(
                     $"Current-value probe failed with {(int)response.StatusCode}: {await response.Content.ReadAsStringAsync()}");
             await Task.Delay(100);
