@@ -154,6 +154,31 @@ public sealed class FldBinSyncRuntimeHostTests
         }
     }
 
+    [Fact]
+    public async Task Startup_without_the_FL D_database_host_fails_before_publishing_readiness()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "binsync-stage0-runtime-failclosed-" + Guid.NewGuid().ToString("N"));
+        string metadataRoot = Path.Combine(root, "metadata");
+        string fldRoot = Path.Combine(root, "missing-fld-host");
+        Directory.CreateDirectory(root);
+        Process process = StartRuntimeHost(metadataRoot, fldRoot);
+
+        try
+        {
+            Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+            Task<string> stderr = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(25));
+            Assert.NotEqual(0, process.ExitCode);
+            Assert.DoesNotContain("READY|", await stdout);
+            Assert.NotEmpty(await stderr);
+        }
+        finally
+        {
+            await KillProcess(process);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     private static HttpClient CreateClient(Uri address, string token)
     {
         var client = new HttpClient { BaseAddress = address };
