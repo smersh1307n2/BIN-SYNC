@@ -1,5 +1,6 @@
 using BinSync;
-using BinSync.Storage;\nusing Fld1.Storage.Engine;
+using BinSync.Storage;
+using Fld1.Storage.Engine;
 using Xunit;
 
 namespace BinSync.Storage.Integration;
