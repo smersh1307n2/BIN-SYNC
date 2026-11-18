@@ -2187,7 +2187,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
             foreach (var write in writes) storageBatch.Put(write.Key, write.Value);
             foreach (var delete in deletes) storageBatch.Delete(delete);
-            storageBatch.Commit();
+            CommitPartitionBatch(storageBatch, partitionKey, current);
         }
 
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
@@ -2581,7 +2581,7 @@ private static bool ValidateIncomingBatchForStaging(
             storageBatch.Put(write.Key, write.Value);
         if (legacyChainDeleteKey is not null)
             storageBatch.Delete(legacyChainDeleteKey);
-        storageBatch.Commit();
+        CommitPartitionBatch(storageBatch, partitionKey, current);
 
         current.Receipts.Add(receiptKey, new ReceiptValue(batch.CursorStart, batch.CursorEnd,
             batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(), relayAdded,
@@ -3008,7 +3008,7 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new StorageConflictException(state.StorageCommitSeq, actualBaseCommitSeq);
             foreach (var update in updates)
                 batch.Put(update.StorageKey, update.Encoded);
-            batch.Commit();
+            CommitPartitionBatch(batch, partitionKey, state);
 
             if (ReferenceEquals(state.PersistedEntries, EmptyEntries))
                 state.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
@@ -5148,13 +5148,71 @@ private static bool ValidateIncomingBatchForStaging(
         return state;
     }
 
+    private static byte[] EncodePartitionRevision(ulong revision)
+    {
+        if (revision == 0) throw new ArgumentOutOfRangeException(nameof(revision));
+        byte[] value = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(value, revision);
+        return value;
+    }
+
+    private static ulong DecodePartitionRevision(byte[] value)
+    {
+        if (value.Length != 8)
+            throw new InvalidDataException("Metadata partition revision marker has an invalid length.");
+        ulong revision = BinaryPrimitives.ReadUInt64LittleEndian(value);
+        if (revision == 0)
+            throw new InvalidDataException("Metadata partition revision marker cannot be zero.");
+        return revision;
+    }
+
+    private ulong CommitPartitionBatch(
+        StorageWriteBatch batch, PartitionKey partitionKey, PartitionState current)
+    {
+        ulong nextRevision = checked(current.MetadataRevision + 1);
+        byte[] key = StorageKey(PartitionRoot(partitionKey), 27, ReadOnlySpan<byte>.Empty);
+        byte[] value = EncodePartitionRevision(nextRevision);
+        batch.Put(key, value);
+        ulong commitSeq = batch.Commit();
+
+        current.MetadataRevision = nextRevision;
+        current.StorageCommitSeq = commitSeq;
+        current.IsPersisted = true;
+        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
+        current.PersistedEntries[Convert.ToHexString(key)] = (key, value);
+        return commitSeq;
+    }
+
     private bool TryGetPartition(PartitionKey key, out PartitionState state)
     {
         ulong currentCommitSeq = _storage.LastCommitSeq;
         if (_partitions.TryGetValue(key, out state!) && state.StorageCommitSeq == currentCommitSeq)
             return true;
+
         byte[] root = PartitionRoot(key);
         using var snapshot = _storage.OpenSnapshot();
+        if (_partitions.TryGetValue(key, out state!))
+        {
+            byte[] revisionKey = StorageKey(root, 27, ReadOnlySpan<byte>.Empty);
+            if (snapshot.TryGet(revisionKey, out byte[]? revisionValue))
+            {
+                ulong revision = DecodePartitionRevision(revisionValue!);
+                if (revision == state.MetadataRevision)
+                {
+                    // Non-Metadata keyspaces (notably Namespace GC proofs/checkpoints)
+                    // share the same StorageDatabase commit sequence. They must not
+                    // invalidate the decoded Metadata partition cache.
+                    state.StorageCommitSeq = snapshot.CommitSeq;
+                    return true;
+                }
+            }
+            else if (state.MetadataRevision != 0)
+            {
+                throw new InvalidDataException("Metadata partition revision marker is missing.");
+            }
+        }
+
         PartitionState? decoded = DecodePartition(
             key, root, EnumeratePartitionRows(snapshot, root), snapshot.CommitSeq);
         if (decoded is null)
@@ -5187,7 +5245,7 @@ private static bool ValidateIncomingBatchForStaging(
         if (actualBaseCommitSeq != current.StorageCommitSeq)
             throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
         batch.Put(storageKey, value);
-        batch.Commit();
+        CommitPartitionBatch(batch, partitionKey, current);
         current.Receipts[key] = refreshed;
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
@@ -5219,7 +5277,7 @@ private static bool ValidateIncomingBatchForStaging(
         if (actualBaseCommitSeq != current.StorageCommitSeq)
             throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
         batch.Put(key, value);
-        batch.Commit();
+        CommitPartitionBatch(batch, partitionKey, current);
 
         if (storageKind == 5)
             current.RelayAck[new RelayKey(namespaceId, author)] = acknowledged;
@@ -5274,7 +5332,7 @@ private static bool ValidateIncomingBatchForStaging(
             if (actualBaseCommitSeq != current.StorageCommitSeq)
                 throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
             foreach (var key in keys) batch.Delete(key);
-            batch.Commit();
+            CommitPartitionBatch(batch, partitionKey, current);
         }
 
         var removedSet = removedSequences.ToHashSet();
@@ -5396,7 +5454,7 @@ private static bool ValidateIncomingBatchForStaging(
             batch.Put(identityKey, identityValue!);
         foreach (var write in writes)
             batch.Put(write.Key, write.Value);
-        batch.Commit();
+        CommitPartitionBatch(batch, partitionKey, current);
 
         if (!current.Outbound.TryGetValue(outboundKey, out var entries))
         {
@@ -5451,9 +5509,7 @@ private static bool ValidateIncomingBatchForStaging(
         if (identityKey is not null)
             batch.Put(identityKey, identityValue!);
         batch.Put(storageKey, value);
-        batch.Commit();
-
-        if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
+        CommitPartitionBatch(batch, partitionKey, current);
             current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         if (identityKey is not null)
             current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
@@ -5480,7 +5536,7 @@ private static bool ValidateIncomingBatchForStaging(
         if (actualBaseCommitSeq != current.StorageCommitSeq)
             throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
         batch.Put(key, value);
-        batch.Commit();
+        CommitPartitionBatch(batch, partitionKey, current);
 
         current.CompletedPeerBaselines.Add(peer);
         current.StorageCommitSeq = _storage.LastCommitSeq;
@@ -5508,7 +5564,7 @@ private static bool ValidateIncomingBatchForStaging(
         if (identityKey is not null)
             batch.Put(identityKey, identityValue!);
         batch.Put(key, encoded);
-        batch.Commit();
+        CommitPartitionBatch(batch, partitionKey, current);
 
         current.PendingApplies.Add(applyToken, value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
@@ -5543,7 +5599,7 @@ private static bool ValidateIncomingBatchForStaging(
             batch.Delete(key);
         foreach (var write in writes)
             batch.Put(write.Key, write.Value);
-        batch.Commit();
+        CommitPartitionBatch(batch, partitionKey, current);
 
         publish();
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
@@ -5669,7 +5725,7 @@ private static bool ValidateIncomingBatchForStaging(
             batch.Put(requiredKey, Array.Empty<byte>());
         if (rosterRowKey is not null)
             batch.Put(rosterRowKey, Array.Empty<byte>());
-        batch.Commit();
+        CommitPartitionBatch(batch, partitionKey, current);
 
         current.PeerStreams[key] = value;
         if (addRequired) current.RequiredPeerStreams.Add(key);
@@ -6000,6 +6056,12 @@ private static bool ValidateIncomingBatchForStaging(
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
                         BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
                     state.LegacyReceiveChains.Add(legacyChainKey, new ReceiveChainState(row.Value.ToArray()));
+                    break;
+                }
+                case 27:
+                {
+                    RequireLength(key, 0);
+                    state.MetadataRevision = DecodePartitionRevision(row.Value);
                     break;
                 }
                 case 26:
@@ -6886,6 +6948,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public Dictionary<(int NamespaceId, NodeId Peer), uint> RetiredPeerEpochs { get; } = new();
 
         public ulong StorageCommitSeq { get; set; }
+        public ulong MetadataRevision { get; set; }
         public bool IsPersisted { get; set; }
         public Dictionary<string, (byte[] Key, byte[] Value)> PersistedEntries { get; set; } = new(StringComparer.Ordinal);
 
@@ -6897,6 +6960,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             var clone = new PartitionState
             {
                 StorageCommitSeq = StorageCommitSeq,
+                MetadataRevision = MetadataRevision,
                 IsPersisted = IsPersisted,
                 PersistedEntries = PersistedEntries,
                 RelaySequenceIndexes = RelaySequenceIndexes
