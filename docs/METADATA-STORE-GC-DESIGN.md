@@ -356,3 +356,19 @@ The next focused run records managed heap after a forced full GC and current Wor
 The retained managed heap after full GC is similar across page sizes (~9–10 MB); the 171 MB at limit 256 is cumulative allocation, not retained memory. The Host is a separate process, and its current WorkingSet delta is the more useful per-case indicator here: limit 256 grew by about 7.26 MB, while 4096 grew by about 3.21 MB. The test-process WorkingSet is still affected by earlier theory cases in the same process, so do not use its absolute peak as a per-case peak. The 256 case also caused two Gen0 and one Gen1 collection; the larger page sizes caused none in this run.
 
 This strengthens the 4096 ChangeId default: it has the lowest cumulative allocations, comparable latency to 2048, lower Host working-set growth than 256, and avoids extra GC collections in this workload. It remains a configurable bounded limit, not a claim of a universal peak-memory ceiling.
+
+
+## Production operator-policy wiring gate (2026-11-18)
+
+The durable operator-policy implementation and per-domain OS file leases exist, but the Host adapter does not silently compose or restore them. Its constructor accepts an optional `FldBinSyncGcOperatorPolicyCoordinator`, and `requireDurableOperatorPolicy` currently defaults to false for compatibility with test/sample compositions. This is **not** a production-ready default.
+
+Before any production GC domain is enabled, the application composition must:
+
+1. Create `StorageFldBinSyncGcOperatorPolicyStore` over the exact same `StorageDatabase` instance used by `StorageMetadataStore`.
+2. Bind the policy to the exact Metadata scope, local replica and namespace; supply an application-owned authorizer.
+3. Pass the coordinator to `FldBinSyncAsyncHostAdapter` and set `requireDurableOperatorPolicy: true`.
+4. Call the coordinator's `RestoreAsync` during startup, before enabling maintenance or accepting work that can schedule GC. Missing/corrupt/unavailable policy must leave runtime maintenance stopped.
+5. Require every pass to go through the adapter's `RunGcDomainAsync` path. It obtains the durable per-domain lease before invoking compaction and holds it through the complete bounded operation. Do not call lower-level compaction APIs directly from production scheduling code.
+6. Keep startup feature flags false until the signed roster/checkpoint, FULL_REPLACE, Host reference scan, operator audit, disable/rollback and canary gates are approved. Receipt, ChangeId and Tombstone remain independent; physical Tombstone GC is last.
+
+The adapter's emergency stop is process-local and must be exposed through the application's operational control plane. The durable policy/audit record is the operator intent; the OS file lock is the cross-process exclusion fence. Policy updates acquire all domain locks, so they wait for in-flight passes. No production Host application composition is present in this repository's sample tree; until one exists and is tested, treat GC as implementation-complete but not operationally authorized.
