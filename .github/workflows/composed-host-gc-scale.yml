@@ -99,8 +99,14 @@ jobs:
             # WorkingSet and PeakWorkingSet cannot inherit earlier theory cases.
             expected=11
             for count in 1000 10000 50000 100000 250000; do
-              run_case "tombstone-$count" \
-                "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: $count)"
+              filter="FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: $count"
+              # VSTest '~' is substring matching; exclude longer numeric prefixes.
+              if [ "$count" = "1000" ]; then
+                filter="$filter&DisplayName!~candidateCount: 10000&DisplayName!~candidateCount: 100000"
+              elif [ "$count" = "10000" ]; then
+                filter="$filter&DisplayName!~candidateCount: 100000"
+              fi
+              run_case "tombstone-$count" "$filter"
             done
             run_case "changeid-1000-4096" \
               "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 1000&DisplayName~gcPageLimit: 4096"
