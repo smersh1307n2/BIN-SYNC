@@ -358,7 +358,9 @@ test-only Bearer authentication.
 Its peer listener and scheduler are lifecycle probes, not production transport
 or physical-GC execution. The process-level Linux/Windows tests validate
 startup ordering, authorization, durable policy updates, emergency stop,
-process restart and fail-closed startup. They do not constitute production
+process restart, offline backup restore/re-authorization and fail-closed startup.
+The backup test verifies an external operator record; the policy store itself
+has no independent anti-rollback authority. They do not constitute production
 deployment or authorize enabling GC. A future real application must still
 supply its own identity provider, authenticated authorization, SyncSession
 transport lifecycle and production scheduler.
