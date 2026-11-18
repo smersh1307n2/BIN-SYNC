@@ -5629,15 +5629,16 @@ private static bool ValidateIncomingBatchForStaging(
             : EncodePartitionIdentity(partitionKey);
 
         using var batch = _storage.BeginWriteBatch();
+        batch.ReserveCapacity(checked(writes.Count + deletes.Count + (identityKey is null ? 0 : 1)));
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
         if (actualBaseCommitSeq != current.StorageCommitSeq)
             throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
         if (identityKey is not null)
-            batch.Put(identityKey, identityValue!);
+            batch.PutShared(identityKey, identityValue!);
         foreach (var key in deletes)
-            batch.Delete(key);
+            batch.DeleteShared(key);
         foreach (var write in writes)
-            batch.Put(write.Key, write.Value);
+            batch.PutShared(write.Key, write.Value);
         ReportAllocation("metadata-batch-staging");
         Action<string, long>? previousStorageObserver = _storage.AllocationObserver;
         _storage.AllocationObserver = allocationObserver;
