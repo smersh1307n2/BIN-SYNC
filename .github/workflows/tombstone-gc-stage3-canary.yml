@@ -24,6 +24,7 @@ on:
       - 'samples/FldBinSyncHost.Runtime/**'
       - 'external/Fld1.Storage'
       - 'docs/METADATA-STORE-GC-DESIGN.md'
+      - 'docs/BIN-SYNC-ROADMAP-v3.md'
       - '.github/workflows/tombstone-gc-stage3-canary.yml'
   workflow_dispatch:
 
