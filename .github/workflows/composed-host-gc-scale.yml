@@ -72,6 +72,7 @@ jobs:
         env:
           COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/composed-host-metadata-gc-scale.md
           GC_SCALE_FULL: ${{ contains(github.event.head_commit.message, '[gc-scale-full]') }}
+          # Use [gc-scale-250k] in a push commit message to isolate the 250k regression case.
           GC_SCALE_250K: ${{ contains(github.event.head_commit.message, '[gc-scale-250k]') }}
         run: |
           run_case() {
