@@ -312,7 +312,8 @@ Typical startup ordering should use the composition barrier. The callback is not
 ```csharp
 using var host = FldBinSyncAsyncHostComposition.Create(
     storage, node, scopeId, metadataScopeId, namespaceId, trustStore,
-    provider, remoteApply, persistNode, authorizer);
+    provider, remoteApply, persistNode, authorizer,
+    gcFeatureOptions: new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
 
 await host.StartAsync(async ct =>
 {
