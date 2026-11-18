@@ -7,4 +7,7 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AssemblyName>FldBinSyncHost.LeaseLockProbe</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FldBinSyncHost/FldBinSyncHost.csproj" />
+  </ItemGroup>
 </Project>

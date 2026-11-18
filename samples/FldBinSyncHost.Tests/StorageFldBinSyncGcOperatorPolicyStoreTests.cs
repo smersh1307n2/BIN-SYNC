@@ -195,6 +195,7 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
                 CreateNoWindow = true
             };
             start.ArgumentList.Add(probePath);
+            start.ArgumentList.Add("hold-lock");
             start.ArgumentList.Add(leasePath);
             using System.Diagnostics.Process owner =
                 System.Diagnostics.Process.Start(start) ??
@@ -234,6 +235,68 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
         }
         finally
         {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task Process_death_after_atomic_policy_audit_commit_recovers_both_records()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-gc-policy-process-crash-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string probePath = Path.Combine(AppContext.BaseDirectory,
+            "lease-probe", "FldBinSyncHost.LeaseLockProbe.dll");
+        Assert.True(File.Exists(probePath), $"Lease lock probe was not built: {probePath}");
+
+        var start = new System.Diagnostics.ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        start.ArgumentList.Add(probePath);
+        start.ArgumentList.Add("commit-policy");
+        start.ArgumentList.Add(directory);
+        using System.Diagnostics.Process owner =
+            System.Diagnostics.Process.Start(start) ??
+            throw new InvalidOperationException("Could not start the policy commit process.");
+        try
+        {
+            string? committed = await owner.StandardOutput.ReadLineAsync()
+                .WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal("COMMITTED", committed);
+
+            // The child still owns the StorageDatabase writer fence. Kill it without
+            // Dispose so recovery must use only the durable WAL/root publication.
+            owner.Kill(entireProcessTree: true);
+            await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+
+            using var recoveredStorage = StorageDatabase.Open(directory, 979);
+            using var recoveredMetadata = new StorageMetadataStore(recoveredStorage);
+            var recoveredStore = new StorageFldBinSyncGcOperatorPolicyStore(
+                recoveredStorage, recoveredMetadata);
+            FldBinSyncGcOperatorPolicy recovered = Assert.IsType<FldBinSyncGcOperatorPolicy>(
+                await recoveredStore.ReadAsync(Binding()));
+            Assert.Equal(1UL, recovered.Generation);
+            Assert.Equal(1UL, recovered.AuditSequence);
+            Assert.Equal("operator-crash-test", recovered.UpdatedBy);
+            FldBinSyncGcOperatorAuditEntry recoveredAudit =
+                Assert.Single(recoveredStore.ReadAudit(Binding()));
+            Assert.Equal(recovered.Generation, recoveredAudit.PolicyGeneration);
+            Assert.Equal(recovered.AuditSequence, recoveredAudit.Sequence);
+            Assert.Equal(recovered.UpdatedBy, recoveredAudit.ActorId);
+            Assert.Equal(recovered.Reason, recoveredAudit.Reason);
+        }
+        finally
+        {
+            if (!owner.HasExited)
+            {
+                owner.Kill(entireProcessTree: true);
+                await owner.WaitForExitAsync();
+            }
             try { Directory.Delete(directory, recursive: true); } catch { }
         }
     }
