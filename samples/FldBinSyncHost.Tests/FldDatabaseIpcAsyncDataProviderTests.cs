@@ -16,6 +16,14 @@ namespace BinSync.FldHost.Tests;
 
 public sealed class FldDatabaseIpcAsyncDataProviderTests
 {
+    private static FldBinSyncAsyncHostAdapter CreateTestAdapter(
+        AsyncStorageSyncCoordinator coordinator,
+        IAsyncDataProvider provider,
+        IAsyncProviderRemoteBatchCommitStore remoteApply,
+        Action<Node> persistNode)
+        => new(coordinator, provider, remoteApply, persistNode,
+            requireDurableOperatorPolicy: false);
+
     private static void EnableAllGcDomainsForTest(FldBinSyncAsyncHostAdapter adapter)
     {
         FldBinSyncGcMaintenanceControl control = adapter.GcMaintenanceControl;
@@ -846,7 +854,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 allocationStages.TryGetValue(stage, out long previous);
                 allocationStages[stage] = checked(previous + bytes);
             };
-            var adapter = new FldBinSyncAsyncHostAdapter(
+            var adapter = CreateTestAdapter(
                 coordinator, provider, remoteApply, _ => { });
             EnableAllGcDomainsForTest(adapter);
 
@@ -1123,7 +1131,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
-            var adapter = new FldBinSyncAsyncHostAdapter(
+            var adapter = CreateTestAdapter(
                 coordinator, provider, remoteApply, _ => { });
             EnableAllGcDomainsForTest(adapter);
 
@@ -1467,7 +1475,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             }
             var coordinator = new AsyncStorageSyncCoordinator(
                 node, metadata, scope, checked((int)namespaceId));
-            var adapter = new FldBinSyncAsyncHostAdapter(
+            var adapter = CreateTestAdapter(
                 coordinator, provider, remoteApply, _ => { });
             EnableAllGcDomainsForTest(adapter);
 
@@ -2023,7 +2031,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 remoteA = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                     hostRootA, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
                 await providerA.EnableMetadataStoreOwnedPublicationAsync(0);
-                adapterA = new FldBinSyncAsyncHostAdapter(
+                adapterA = CreateTestAdapter(
                     coordinatorA, providerA, remoteA,
                     current => StorageNodePersistence.Save(nodeStorageA!, current));
             EnableAllGcDomainsForTest(adapterA);
@@ -2051,7 +2059,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                     hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
                 await providerB.EnableMetadataStoreOwnedPublicationAsync(0);
-                adapterB = new FldBinSyncAsyncHostAdapter(
+                adapterB = CreateTestAdapter(
                     coordinatorB, providerB, remoteB,
                     current => StorageNodePersistence.Save(nodeStorageB!, current));
             EnableAllGcDomainsForTest(adapterB);
@@ -2659,7 +2667,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                         EnableReceiptGc: true));
                 metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
                 coordinatorA = new AsyncStorageSyncCoordinator(nodeA, metadataA, scope, namespaceId);
-                adapterA = new FldBinSyncAsyncHostAdapter(
+                adapterA = CreateTestAdapter(
                     coordinatorA, providerA!, remoteA!,
                     current => StorageNodePersistence.Save(nodeStorageA!, current));
             EnableAllGcDomainsForTest(adapterA);
@@ -3166,11 +3174,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
 
             var coordinatorA = new AsyncStorageSyncCoordinator(nodeA, metadataA, "two-host-a", checked((int)namespaceId));
             var coordinatorB = new AsyncStorageSyncCoordinator(nodeB, metadataB, "two-host-b", checked((int)namespaceId));
-            var adapterA = new FldBinSyncAsyncHostAdapter(
+            var adapterA = CreateTestAdapter(
                 coordinatorA, providerA, remoteA,
                 current => StorageNodePersistence.Save(nodeStorageA, current));
             EnableAllGcDomainsForTest(adapterA);
-            var adapterB = new FldBinSyncAsyncHostAdapter(
+            var adapterB = CreateTestAdapter(
                 coordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
             EnableAllGcDomainsForTest(adapterB);
@@ -3331,11 +3339,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 nodeA, metadataA, "two-host-a", checked((int)namespaceId));
             var recoveredCoordinatorB = new AsyncStorageSyncCoordinator(
                 nodeB, metadataB, "two-host-b", checked((int)namespaceId));
-            var recoveredAdapterA = new FldBinSyncAsyncHostAdapter(
+            var recoveredAdapterA = CreateTestAdapter(
                 recoveredCoordinatorA, providerA, remoteA,
                 current => StorageNodePersistence.Save(nodeStorageA, current));
             EnableAllGcDomainsForTest(recoveredAdapterA);
-            var recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
+            var recoveredAdapterB = CreateTestAdapter(
                 recoveredCoordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
             EnableAllGcDomainsForTest(recoveredAdapterB);
@@ -3511,7 +3519,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 hostRootB, clientB, TimeSpan.FromSeconds(15), authorB, () => 17);
             remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                 hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
-            recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
+            recoveredAdapterB = CreateTestAdapter(
                 recoveredCoordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
             EnableAllGcDomainsForTest(recoveredAdapterB);
@@ -3579,7 +3587,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 hostRootB, clientB, TimeSpan.FromSeconds(15), authorB, () => 17);
             remoteB = await FldDatabaseIpcAsyncRemoteBatchApplyStore.ConnectAsync(
                 hostRootB, Guid.NewGuid(), namespaceId, TimeSpan.FromSeconds(15));
-            recoveredAdapterB = new FldBinSyncAsyncHostAdapter(
+            recoveredAdapterB = CreateTestAdapter(
                 recoveredCoordinatorB, providerB, remoteB,
                 current => StorageNodePersistence.Save(nodeStorageB, current));
             EnableAllGcDomainsForTest(recoveredAdapterB);

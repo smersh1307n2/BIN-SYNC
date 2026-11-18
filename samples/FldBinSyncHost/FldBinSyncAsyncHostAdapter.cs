@@ -139,7 +139,7 @@ public sealed class FldBinSyncAsyncHostAdapter
         int publicationLimit = 1024,
         FldBinSyncGcMaintenanceControl? gcControl = null,
         FldBinSyncGcOperatorPolicyCoordinator? gcPolicyCoordinator = null,
-        bool requireDurableOperatorPolicy = false)
+        bool requireDurableOperatorPolicy = true)
     {
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));

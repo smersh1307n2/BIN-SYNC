@@ -5,6 +5,15 @@ namespace BinSync.FldHost.Tests;
 public sealed class FldBinSyncAsyncGcReadinessTests
 {
     [Fact]
+    public void Host_adapter_requires_durable_operator_policy_by_default()
+    {
+        var parameter = typeof(FldBinSyncAsyncHostAdapter).GetConstructors()
+            .Single().GetParameters()
+            .Single(parameter => parameter.Name == "requireDurableOperatorPolicy");
+        Assert.Equal(true, parameter.DefaultValue);
+    }
+
+    [Fact]
     public void Disabled_domain_is_never_ready_even_when_prerequisites_are_satisfied()
     {
         var readiness = new FldBinSyncGcDomainReadiness(
