@@ -927,11 +927,18 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Empty(await ReadAllTombstoneCandidatesAsync(provider, tombstonePageSize));
             MarkStage("candidate-snapshot-empty-check-complete");
 
+            string hostDiagnosticsPath = Path.Combine(root, "host-gc-diagnostics.log");
+            string hostDiagnostics = File.Exists(hostDiagnosticsPath)
+                ? string.Join('|', File.ReadAllLines(hostDiagnosticsPath))
+                : "missing";
+            Assert.NotEqual("missing", hostDiagnostics);
+
             string metrics =
                 $"COMPOSED_HOST_TOMBSTONE_GC_SCALE Candidates={candidateCount} " +
                 $"MetadataRelayPayloads={candidateCount} Pages={pagesRead} PageSize={tombstonePageSize} " +
                 $"ApprovalBatches={appendBatches} SpoolCommits={spoolCommits} " +
-                $"ElapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3} AllocatedBytes={allocatedBytes} " +
+                $"ElapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3} TestProcessAllocatedBytes={allocatedBytes} " +
+                $"HostGcDiagnostics={hostDiagnostics} " +
                 $"TestProcessPeakWorkingSetBeforeBytes={testPeakBefore} " +
                 $"TestProcessPeakWorkingSetAfterBytes={testPeakAfter} " +
                 $"HostProcessWorkingSetBeforeBytes={hostWorkingSetBefore} " +
@@ -3829,7 +3836,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         start.ArgumentList.Add(namespaceId.ToString(CultureInfo.InvariantCulture));
         start.ArgumentList.Add(Convert.ToHexString(localAuthor));
         if (enableTombstoneGc)
+        {
             start.ArgumentList.Add("--enable-tombstone-gc");
+            start.Environment["FLD_TEST_GC_DIAGNOSTICS_FILE"] =
+                Path.Combine(root, "host-gc-diagnostics.log");
+        }
         if (dropRemoteApplyResponseForTest)
             start.ArgumentList.Add("--test-drop-remote-apply-response");
         return Process.Start(start)
