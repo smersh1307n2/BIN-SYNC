@@ -912,7 +912,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(readiness.Receipts.Enabled);
             Assert.False(readiness.ChangeIds.Enabled);
             Assert.True(readiness.Tombstones.Enabled);
-            Assert.True(readiness.Tombstones.PrerequisitesSatisfied);
+            Assert.True(readiness.Tombstones.PrerequisitesSatisfied,
+                string.Join(" | ", readiness.Tombstones.BlockedReasons));
 
             // Count the actual metadata pages before timing. The benchmark then
             // records provider page/spool counters for the GC pass itself.
