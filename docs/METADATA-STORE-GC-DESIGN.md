@@ -340,3 +340,19 @@ Evidence from the composed FLD IPC Host test on BIN-SYNC commit `fd307ba6578f931
 A prior independent run (`44247560518`) showed the same allocation gap: 35.86 MB at 4096 versus 172.86 MB at 256. The 4096 setting was selected because it minimizes cumulative allocations while remaining close to the fastest observed time; 2048 was about 56 ms faster in one run but allocated about 7.94 MB more. The 256 default caused repeated B-tree/StorageWriteBatch work across 196 passes; measured allocations in FLD storage commit and Metadata revalidation commit were each about 4x higher than at 4096.
 
 These are cumulative allocation and elapsed-time measurements, **not retained heap measurements**. PeakWorkingSet in the current multi-case test process is contaminated by earlier theory cases and cannot be used as a per-limit peak. Follow-up must capture current WorkingSet and managed retained heap after full GC in isolated processes before claiming a peak-memory bound. No production GC activation is authorized by these measurements.
+
+
+### Retained-heap and Host working-set follow-up (run 44251552580)
+
+The next focused run records managed heap after a forced full GC and current WorkingSet before/after each measurement. At 50,000 candidates:
+
+| Page limit | Managed heap before → after full GC | Host current WorkingSet before → after | Gen0/1/2 during GC |
+|---:|---:|---:|---:|
+| 256 | 14.83 → 9.80 MB | 61.64 → 68.90 MB (+7.26 MB) | 2 / 1 / 0 |
+| 1024 | 14.48 → 9.40 MB | 61.79 → 65.38 MB (+3.59 MB) | 0 / 0 / 0 |
+| 2048 | 14.78 → 9.67 MB | 61.59 → 64.70 MB (+3.11 MB) | 0 / 0 / 0 |
+| 4096 | 14.21 → 9.09 MB | 61.66 → 64.87 MB (+3.21 MB) | 0 / 0 / 0 |
+
+The retained managed heap after full GC is similar across page sizes (~9–10 MB); the 171 MB at limit 256 is cumulative allocation, not retained memory. The Host is a separate process, and its current WorkingSet delta is the more useful per-case indicator here: limit 256 grew by about 7.26 MB, while 4096 grew by about 3.21 MB. The test-process WorkingSet is still affected by earlier theory cases in the same process, so do not use its absolute peak as a per-case peak. The 256 case also caused two Gen0 and one Gen1 collection; the larger page sizes caused none in this run.
+
+This strengthens the 4096 ChangeId default: it has the lowest cumulative allocations, comparable latency to 2048, lower Host working-set growth than 256, and avoids extra GC collections in this workload. It remains a configurable bounded limit, not a claim of a universal peak-memory ceiling.
