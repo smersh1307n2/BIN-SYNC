@@ -1,0 +1,180 @@
+name: BIN-SYNC GC Stage 4 Endurance
+
+on:
+  push:
+    branches:
+      - feature/fld-external-storage
+    paths:
+      - 'BinSync.Net/src/BinSync.Storage/**'
+      - 'samples/FldBinSyncHost/**'
+      - 'samples/FldBinSyncHost.Tests/**'
+      - 'samples/FldBinSyncHost.Runtime/**'
+      - 'external/Fld1.Storage'
+      - 'docs/GC-ENDURANCE-STAGE4.md'
+      - '.github/workflows/gc-endurance-stage4.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binsync-gc-stage4-endurance-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  endurance:
+    name: GC lifecycle endurance (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      ENDURANCE_SECONDS: 5400
+    steps:
+      - name: Checkout BIN-SYNC and pinned FLD Storage
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        shell: bash
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Pinned FLD Storage: $sha"
+
+      - name: Checkout exact FLD-DB revision
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build all test Hosts and integration tests
+        shell: bash
+        run: |
+          dotnet build samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Run repeated full GC lifecycle for 90 minutes
+        shell: bash
+        run: |
+          set -euo pipefail
+          results="$RUNNER_TEMP/gc-stage4-results"
+          mkdir -p "$results"
+          start=$SECONDS
+          cycle=0
+
+          run_host_test() {
+            local name="$1"
+            local filter="$2"
+            local project="samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj"
+            local output="$results/cycle-$cycle-$name"
+            mkdir -p "$output"
+            echo "::group::Cycle $cycle / $name"
+            dotnet test "$project" --configuration Release --no-build --no-restore \
+              -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+              -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+              -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+              --filter "$filter" \
+              --logger "console;verbosity=normal" \
+              --logger "trx;LogFileName=$name.trx" \
+              --results-directory "$output" \
+              --blame-hang-timeout 10m --blame-hang-dump-type mini 2>&1 | tee "$output/$name.log"
+            echo "::endgroup::"
+          }
+
+          run_fld_test() {
+            local name="$1"
+            local project="$2"
+            local filter="$3"
+            local output="$results/cycle-$cycle-$name"
+            mkdir -p "$output"
+            echo "::group::Cycle $cycle / $name"
+            dotnet test "$project" --configuration Release \
+              --filter "$filter" \
+              --logger "console;verbosity=normal" \
+              --logger "trx;LogFileName=$name.trx" \
+              --results-directory "$output" \
+              --blame-hang-timeout 10m --blame-hang-dump-type mini 2>&1 | tee "$output/$name.log"
+            echo "::endgroup::"
+          }
+
+          while (( SECONDS - start < ENDURANCE_SECONDS )); do
+            cycle=$((cycle + 1))
+            echo "Starting complete GC endurance cycle $cycle"
+
+            # Host startup, durable policy restore, operator auth, emergency stop,
+            # ungraceful process death, restart and offline backup/rollback brake.
+            run_host_test "host-lifecycle" "FullyQualifiedName~FldBinSyncRuntimeHostTests"
+
+            # Stage 1: ChangeId-only, reference veto, cancellation, durable policy
+            # restore and real FLD IPC reclaim with the selected 4096 page limit.
+            run_host_test "changeid-canary" "FullyQualifiedName~Async_host_adapter_changeid_only_canary_preserves_live_relay_reference_then_reclaims"
+            run_host_test "changeid-policy-restart" "FullyQualifiedName~Production_composition_restores_changeid_only_policy_and_durable_stop_survives_restart"
+            run_host_test "changeid-1k" "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan&DisplayName~candidateCount: 1000&DisplayName~gcPageLimit: 4096"
+
+            # Stage 2: Receipt-only WAL seal and restart/replay fencing; no
+            # physical Tombstone authority is granted by Receipt reclamation.
+            run_host_test "receipt-canary" "FullyQualifiedName~Async_host_adapter_receipt_only_canary_reclaims_retired_receipt_and_preserves_replay_fence"
+            run_fld_test "receipt-reference-index" "FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj" "FullyQualifiedName~Host_gc_reference_scan_exposes_one_immutable_reference_index_and_is_session_owned"
+            run_fld_test "receipt-no-tombstone-authority" "FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj" "FullyQualifiedName~Host_revalidates_exact_tombstone_candidates_and_blocks_relay_references_and_snapshot_pins"
+            run_fld_test "receipt-replay-after-restart" "BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj" "FullyQualifiedName~Receipt_gc_retires_old_epoch_rejoins_new_epoch_and_keeps_replay_fence_after_restart"
+
+            # Stage 3: Tombstone-only exact candidate approval, vetoes, two-host
+            # retirement/rejoin/replay, no-resurrection and compaction crash cuts.
+            run_host_test "tombstone-1k" "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references&DisplayName~candidateCount: 1000&DisplayName!~candidateCount: 10000"
+            run_host_test "tombstone-signed-horizon-crash" "FullyQualifiedName~Async_coordinator_reclaims_only_signed_safe_tombstones_through_real_host_ipc"
+            run_host_test "tombstone-two-host-rejoin" "FullyQualifiedName~Async_two_host_signed_gc_waits_for_peer_acks_then_reclaims_all_proven_tombstones_on_both_hosts"
+            run_fld_test "tombstone-no-resurrection-crash" "FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj" "FullyQualifiedName~Field_tombstone_gc_requires_exact_approval_and_does_not_resurrect_old_value|FullyQualifiedName~Record_tombstone_gc_removes_older_fields_but_preserves_newer_fields|FullyQualifiedName~Field_tombstone_is_not_reclaimed_while_its_record_tombstone_is_unproven|FullyQualifiedName~Tombstone_gc_compaction_crash_cuts_recover_one_authoritative_generation"
+
+            # Repeat a larger real-FLD-IPC load in every cycle. The ChangeId
+            # page bound is intentionally 4096; Tombstone remains bounded at 256.
+            run_host_test "changeid-50k-page4096" "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan&DisplayName~candidateCount: 50000&DisplayName~gcPageLimit: 4096"
+            run_host_test "tombstone-50k-page256" "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references&DisplayName~candidateCount: 50000"
+
+            echo "GC_ENDURANCE_CYCLE_PASSED cycle=$cycle elapsed_seconds=$((SECONDS - start))" | tee -a "$results/endurance-summary.log"
+          done
+
+          if (( cycle < 6 )); then
+            echo "::error::Only $cycle complete cycles ran; at least six are required."
+            exit 1
+          fi
+
+          {
+            echo "# GC Stage 4 Endurance"
+            echo
+            echo "- OS: $RUNNER_OS"
+            echo "- Cycles passed: $cycle"
+            echo "- Elapsed seconds: $((SECONDS - start))"
+            echo "- ChangeId page limit: 4096"
+            echo "- Receipt page limit: 256"
+            echo "- Tombstone page limit: 256"
+            echo "- Each cycle recreated isolated disposable databases and Host processes."
+            echo "- Production flags remained off; no user data was used."
+          } > "$results/summary.md"
+
+      - name: Upload endurance logs and test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gc-stage4-endurance-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/gc-stage4-results
+          retention-days: 30
+          if-no-files-found: error
