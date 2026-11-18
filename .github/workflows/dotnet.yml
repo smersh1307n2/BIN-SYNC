@@ -99,7 +99,7 @@ jobs:
               samples/V31ControlPlaneVectors/*)
                 # Covered by the signed golden-vector job.
                 ;;
-              samples/StorageArraySync/*|samples/StorageArrayTcpSync/*|samples/FldBinSyncHost/*|samples/FldBinSyncHost.Tests/*|samples/FldBinSyncHost.LeaseLockProbe/*)
+              samples/StorageArraySync/*|samples/StorageArrayTcpSync/*|samples/FldBinSyncHost/*|samples/FldBinSyncHost.Tests/*|samples/FldBinSyncHost.LeaseLockProbe/*|samples/FldBinSyncHost.Runtime/*)
                 # Covered by the dedicated storage/Host integration workflows.
                 ;;
               BinSync.Net/src/*|BinSync.Net/tests/*|BinSync.Net/*)
