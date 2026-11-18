@@ -998,12 +998,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             {
                 if (pair.Key.NamespaceId != namespaceId)
                     continue;
-                OperationOrigin origin = pair.Value.Provenance;
+                ChangeLedgerValue ledgerValue = pair.Value;
+                OperationOrigin origin = ledgerValue.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
                     liveChangeIds.Contains(pair.Key.ChangeId) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
-                candidates.Add(new ChangeIdGcCandidate(pair.Key, origin, null));
+                candidates.Add(new ChangeIdGcCandidate(pair.Key, ledgerValue, null));
                 if (candidates.Count == limit)
                     break;
             }
@@ -1054,12 +1055,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             {
                 ChangeIdGcCandidate candidate = candidates[i];
                 LedgerKey key = candidate.Key;
-                OperationOrigin origin = candidate.Origin;
+                ChangeLedgerValue snapshotValue = candidate.Value;
                 if (hostReferenced.Contains(key.ChangeId) ||
                     liveChangeIds.Contains(key.ChangeId) ||
                     !current.ChangeLedger.TryGetValue(key, out ChangeLedgerValue? currentValue) ||
-                    currentValue.Provenance != origin ||
-                    !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
+                    !ReferenceEquals(currentValue, snapshotValue) ||
+                    !IsOriginCoveredBySafeFrontier(safeOriginFrontier, snapshotValue.Provenance))
                     continue;
 
                 candidates[approvedCount++] = candidate with
@@ -6826,8 +6827,11 @@ private static bool ValidateIncomingBatchForStaging(
     private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct LegacyReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
+    // The immutable ledger value is already retained by ChangeLedger. Keep its
+    // identity as the revalidation snapshot instead of copying the full provenance
+    // value into every candidate; any ledger update replaces this record instance.
     private readonly record struct ChangeIdGcCandidate(
-        LedgerKey Key, OperationOrigin Origin, byte[]? StorageKey);
+        LedgerKey Key, ChangeLedgerValue Value, byte[]? StorageKey);
 
     private sealed class ChangeIdStorageKeyView : IReadOnlyList<byte[]>
     {
