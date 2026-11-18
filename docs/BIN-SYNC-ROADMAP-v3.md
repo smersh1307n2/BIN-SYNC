@@ -1,3 +1,18 @@
+## 2.00. 250k FLD Host GC checkpoint memory reduction — 2026-11-18
+
+- [x CI] Exact BIN-SYNC HEAD `e57a2094cc65e1408e81e2c859b4a06985d3d836` pins FLD Storage `d576a8e7ae4dfb2fcbaf968f8389fbd48301e249`. Composed Host scale `44299037354`, ChangeId allocation `44299037186`, durable FLD Storage Integration `44299037205`, and BinSync.Net `44299037266` all passed. Windows .NET and fuzz/lab jobs were skipped by workflow selection; Linux .NET, v3.1 vectors and cross-repository Host adapter tests passed. FLD .NET CI `44298772283`, Run Mapping `44298772532`, and Tombstone GC benchmark `44298772149` passed.
+- [x P] The composed 250k case reclaimed 250,000 tombstones using 977 pages of 256 and one approval-spool commit. Elapsed 4,351.066 ms; client-process allocated bytes 100,754,352 B. Host checkpoint/WAL-seal stage: 86,506,328 B / 581.089 ms. Tombstone compaction: 584.022 ms / 18,079,536 B. These are cumulative allocations and process timings, not retained heap or production-GC safety evidence.
+- [x P] RunBuilder checkpoint allocations fell from the first instrumented 178.70 MB to 44.01 MB (~75.4% lower), while preserving canonical Run output and verification:
+  - Single-field `ComputeMode` fast path removed per-record mode dictionaries.
+  - BLAKE3 now hashes tag, namespace and body incrementally; no full-body temporary copy.
+  - Checkpoint RecordId MinRec/MaxRec is computed in one pass (250k entries: 352 B / 2.823 ms instead of ~12 MB and 72–125 ms).
+  - Checkpoint borrows immutable overlay Value/AuthorNodeId/ChangeId buffers; public FieldWrite construction still copies input.
+  - Sorted-unique overlay path bypasses generic LWW dictionary and second sort, with strict monotonicity validation.
+  - Cluster bytes are written directly into the final Run buffer; exact-sized compact cluster plans replace per-cluster byte arrays. Latest 250k RunBuilder phases: cluster plan 14,000,344 B / 71.682 ms; direct cluster write 96 B / 40.538 ms; final Run buffer 28,001,960 B.
+- [!] The final ~28 MB Run output buffer is the required returned artifact in the current API; this work removes redundant temporary copies and per-cluster allocations, not the output itself. WorkingSet/PeakWorkingSet are process metrics and must not be described as retained managed heap.
+- [ ] Remaining measured checkpoint allocations: RunBuilder.Add ~34.20 MB; final Run output ~28.00 MB. Do not add another generic layer or change the FLD format speculatively; measure each candidate and keep only changes that improve memory without material throughput regression.
+- [ ] These measurements do not authorize production reclamation. Receipt, ChangeId and Tombstone physical-GC flags remain false by default; Ghost GC remains excluded. Do not merge PR #16 or relax startup/operator/readiness, crash-recovery, Windows and staged-canary gates.
+
 ## 1.99. Cross-layer tombstone lifecycle and batched Host reference scan — 2026-11-15
 
 ## Current engineering direction — consolidation before new features — 2026-11-16
