@@ -11,6 +11,7 @@ on:
       - 'samples/FldBinSyncHost.Runtime/**'
       - 'external/Fld1.Storage'
       - 'docs/METADATA-STORE-GC-DESIGN.md'
+      - 'docs/BIN-SYNC-ROADMAP-v3.md'
       - '.github/workflows/tombstone-gc-stage3-canary.yml'
   pull_request:
     types: [opened, synchronize, reopened, edited]
@@ -110,6 +111,17 @@ jobs:
             --filter "FullyQualifiedName~Host_revalidates_exact_tombstone_candidates_and_blocks_relay_references_and_snapshot_pins" \
             --logger "console;verbosity=normal" \
             --blame-hang-timeout 5m
+
+      - name: Verify two-host retirement, rejoin and Tombstone-last replay safety
+        shell: bash
+        run: |
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Async_two_host_signed_gc_waits_for_peer_acks_then_reclaims_all_proven_tombstones_on_both_hosts" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 8m
 
       - name: Verify field and record tombstone no-resurrection and crash recovery
         shell: bash
