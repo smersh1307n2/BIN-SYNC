@@ -91,6 +91,11 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.False(readiness.GetProperty("changeIds").GetProperty("enabled").GetBoolean());
             Assert.False(readiness.GetProperty("tombstones").GetProperty("enabled").GetBoolean());
 
+            await Task.Delay(TimeSpan.FromMilliseconds(1100));
+            using JsonDocument schedulerTick = JsonDocument.Parse(
+                await client.GetStringAsync("/health/ready"));
+            Assert.True(schedulerTick.RootElement.GetProperty("maintenanceTicks").GetInt64() > 0);
+
             using HttpResponseMessage updated = await client.PostAsJsonAsync(
                 "/operator/gc/policy",
                 new
