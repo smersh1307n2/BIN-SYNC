@@ -3041,13 +3041,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
-            // Receipt GC sealed the committed WAL prefix. After outbound and relay
-            // payload compaction, ChangeId GC is independently eligible even though
-            // the physical provider Tombstone rows are still present.
-            Assert.Equal(2, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
-            Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
-            Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
-            Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
+            // Receipt GC sealed the committed WAL prefix, so ChangeId GC is now
+            // eligible. This combined lifecycle deliberately defers that independent
+            // domain until after verifying the active replacement receipt replay.
+            Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
+            Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
             // Distinguish a conservative Metadata reservation block from provider
             // candidate/proof rejection before invoking physical GC. The Host seals
@@ -3217,11 +3215,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     () => metadataA.AcceptIncomingBatch(retiredReceiptBatch));
             Assert.True(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate,
                 "The current transport epoch's receipt must remain a durable replay proof.");
-            // ChangeId GC already completed after the Receipt scan sealed the WAL
-            // prefix; the post-restart pass is idempotent and remains independent
-            // from the physical Tombstone sweep.
-            Assert.Equal(0, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
-            Assert.Equal(0, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
+            // After the active replacement receipt has proved exact replay, the
+            // independent ChangeId domain can reclaim its two now-unreferenced rows.
+            Assert.Equal(2, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
+            Assert.Equal(2, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
             Assert.Equal(0, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(0, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
             Assert.Throws<InvalidDataException>(
