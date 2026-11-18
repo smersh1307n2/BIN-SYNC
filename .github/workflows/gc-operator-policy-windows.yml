@@ -6,9 +6,12 @@ on:
       - feature/fld-external-storage
     paths:
       - 'samples/FldBinSyncHost/FldBinSyncGcOperatorPolicy.cs'
+      - 'samples/FldBinSyncHost/FldBinSyncAsyncHostComposition.cs'
+      - 'samples/FldBinSyncHost/FldBinSyncGcHostOperations.cs'
       - 'samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncAsyncGcReadinessTests.cs'
+      - 'samples/FldBinSyncHost.Tests/FldBinSyncGcHostOperationsTests.cs'
       - 'samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs'
       - 'samples/FldBinSyncHost.Tests/StorageFldBinSyncGcOperatorPolicyStoreTests.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj'
@@ -75,7 +78,7 @@ jobs:
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
-            --filter "FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale" \
+            --filter "FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~FldBinSyncGcHostOperationsTests|FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale" \
             --logger "console;verbosity=normal" \
             --logger "trx;LogFileName=gc-operator-policy-windows.trx" \
             --results-directory "$RUNNER_TEMP/gc-operator-policy-test-results" \

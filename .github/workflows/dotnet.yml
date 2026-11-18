@@ -359,7 +359,7 @@ jobs:
           else
             while IFS= read -r file; do
               case "$file" in
-                samples/FldBinSyncHost/FldBinSyncGcOperatorPolicy.cs|samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs|samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs|samples/FldBinSyncHost.Tests/StorageFldBinSyncGcOperatorPolicyStoreTests.cs|samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj|samples/FldBinSyncHost.LeaseLockProbe/*|docs/METADATA-STORE-GC-DESIGN.md|.github/workflows/dotnet.yml)
+                samples/FldBinSyncHost/FldBinSyncGcOperatorPolicy.cs|samples/FldBinSyncHost/FldBinSyncAsyncHostComposition.cs|samples/FldBinSyncHost/FldBinSyncGcHostOperations.cs|samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs|samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs|samples/FldBinSyncHost.Tests/FldBinSyncGcHostOperationsTests.cs|samples/FldBinSyncHost.Tests/StorageFldBinSyncGcOperatorPolicyStoreTests.cs|samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj|samples/FldBinSyncHost.LeaseLockProbe/*|docs/METADATA-STORE-GC-DESIGN.md|.github/workflows/dotnet.yml)
                   ;;
                 *)
                   policy_only=false
@@ -376,7 +376,7 @@ jobs:
           POLICY_ONLY: ${{ steps.host-scope.outputs.policy_only }}
         run: |
           if [[ "$POLICY_ONLY" == "true" ]]; then
-            filter="FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests"
+            filter="FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~FldBinSyncGcHostOperationsTests"
           else
             filter="FullyQualifiedName!~Async_host_adapter_signed_tombstone_gc_scale&FullyQualifiedName!~Async_host_adapter_signed_changeid_gc_scale"
           fi

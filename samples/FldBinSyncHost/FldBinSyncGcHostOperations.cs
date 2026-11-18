@@ -85,6 +85,10 @@ public sealed class FldBinSyncGcHostOperations
                 : after.AuditSequence - (ulong)auditLimit;
             IReadOnlyList<FldBinSyncGcOperatorAuditEntry> audit =
                 _policyStore.ReadAudit(_binding, afterSequence, auditLimit);
+            FldBinSyncGcOperatorPolicy? confirmed =
+                await _policyStore.ReadAsync(_binding, cancellationToken).ConfigureAwait(false);
+            if ((confirmed?.Generation ?? 0) != afterGeneration)
+                continue;
 
             return new FldBinSyncGcOperatorDiagnosticsSnapshot(
                 DateTimeOffset.UtcNow,

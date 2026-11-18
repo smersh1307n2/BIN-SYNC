@@ -269,11 +269,12 @@ Operational rules:
 
 The durable feature switches are startup configuration; the process-local
 emergency stop API below is an additional in-process brake, not a substitute
-for durable operator policy. A production rollout still needs an authenticated
-operator control plane, durable configuration/audit trail, blocked-reason
-telemetry, a demonstrated rollback exercise, retention policy and staged
-canary. Until those controls and the remaining V3 release gates pass, physical
-GC stays disabled.
+for durable operator policy. The sample now supplies the durable policy/audit store, stable blocker codes,
+generation-bound per-domain leases, operator diagnostics and a durable
+all-domains-off action. The embedding application must still expose these
+operations through its authenticated operator endpoint and supply its real
+identity/authorization provider. Physical GC remains disabled until the
+application lifecycle and the remaining V3 release gates are verified.
 
 ### Runtime emergency stop API
 
@@ -312,19 +313,38 @@ For the async Host adapter, call `RecoverBeforeAcceptingSessionsAsync` as the st
 
 `FldBinSyncGcDomainReadiness.Blockers` exposes stable `FldBinSyncGcBlockerCode` identifiers alongside the existing human-readable `BlockedReasons` strings. Unknown future messages map to `Unclassified` rather than being silently treated as a known condition. Consumers should alert on the stable code and retain the message for operator context; neither a blocker code nor a readiness snapshot authorizes candidate deletion.
 
-The sample includes `StorageFldBinSyncGcOperatorPolicyStore`, which stores policy and audit records in one `StorageWriteBatch` on the exact `StorageDatabase` shared with `StorageMetadataStore`, and uses OS file-share locks for cross-process per-domain leases. It also includes `FldBinSyncAsyncHostComposition.Create`, which wires the caller-owned `StorageDatabase`, Metadata adapter, namespace-GC guard, durable policy store/coordinator, shared runtime control and async Host adapter into one checked object graph. Its test verifies the exact shared Storage/control bindings and that every GC domain remains disabled by default.
+The sample includes `StorageFldBinSyncGcOperatorPolicyStore`, which stores policy and audit records in one `StorageWriteBatch` on the exact `StorageDatabase` shared with `StorageMetadataStore`, and uses OS file-share locks for cross-process per-domain leases. `FldBinSyncAsyncHostComposition.Create` wires the caller-owned `StorageDatabase`, Metadata adapter, namespace-GC guard, durable policy store/coordinator, shared runtime control and async Host adapter into one checked object graph. `FldBinSyncGcHostOperations` exposes a generation-consistent diagnostics snapshot (policy, bounded audit tail, readiness, startup proof flags and runtime gates), independent per-domain policy updates, one bounded maintenance round and immediate/durable emergency stop. Runtime policy cannot enable a domain whose immutable startup proof switch is false.
 
-Typical startup ordering:
+Typical startup ordering should use the composition barrier. The callback is not invoked until durable policy restore and provider/Node recovery have completed:
 
 ```csharp
 using var host = FldBinSyncAsyncHostComposition.Create(
     storage, node, scopeId, metadataScopeId, namespaceId, trustStore,
     provider, remoteApply, persistNode, authorizer);
-await host.RecoverBeforeAcceptingSessionsAsync(cancellationToken);
-// Only now accept peer sessions and start maintenance scheduling.
+
+await host.StartAsync(async ct =>
+{
+    await peerListener.StartAsync(ct);
+    await maintenanceScheduler.StartAsync(ct);
+}, cancellationToken);
+
+FldBinSyncGcOperatorDiagnosticsSnapshot status =
+    await host.Operator.GetDiagnosticsAsync();
+
+await host.Operator.UpdatePolicyAsync(
+    expectedGeneration: status.Policy?.Generation ?? 0,
+    actorId: authenticatedActorId,
+    reason: "approved ChangeId canary",
+    maintenanceStarted: true,
+    receiptEnabled: false,
+    changeIdEnabled: true,
+    tombstoneEnabled: false,
+    cancellationToken);
 ```
 
-The embedding production application must still provide its real authenticated `IFldBinSyncGcOperatorAuthorizer`, operator identity/control plane, durable retention/backup policy, and executable Host/transport/session lifecycle. These sample tests are not a Windows power-loss durability claim. Until those application-owned pieces and the remaining V3 release gates are implemented and validated, keep all physical-GC startup flags false and Ghost GC excluded.
+The application callback must clean up partially opened listeners/schedulers if it throws. Startup failure latches the local emergency brake and does not mark the composition started. For shutdown/rollback, stop scheduling new rounds, call `EmergencyStopDurablyAsync(authenticatedActorId, reason)`, wait for it to return (it drains active domain leases), then close peer sessions and dispose the composition. If durable stop fails, keep the process stopped and do not restart/re-enable GC until an authorized all-off policy commit is verified.
+
+The embedding production application must still provide its real authenticated `IFldBinSyncGcOperatorAuthorizer`, actor identity source, peer listener, scheduler and transport/session lifecycle. The sample tests are not Windows power-loss durability evidence. Until those application-owned pieces are deployed and verified, keep all physical-GC startup flags false and Ghost GC excluded.
 
 The store contract requires `TryAcquireMaintenanceLeaseAsync`. The store atomically verifies the current policy generation and enabled bit; a policy update that disables or changes a domain waits for active leases to drain. A null lease makes the adapter skip that domain's page and disable only that local domain; other independent domains remain eligible. Store read/corruption failures throw and fail closed by stopping the entire local runtime control. `FldBinSyncAsyncHostAdapter.RunGcDomainAsync` now acquires and releases this durable lease internally around every bounded adapter GC operation, including legacy per-domain entry points. Production code must route maintenance through the adapter and must not call lower-level compaction APIs directly. The local runtime gate alone is not a cross-process policy fence.
 
