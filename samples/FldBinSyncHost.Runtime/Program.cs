@@ -175,6 +175,77 @@ try
         activePeers = peerRuntime.ActivePeers
     }));
 
+    app.MapPost("/admin/test/local-change", async (
+        LocalChangeRequest request,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            byte[] recordId = Convert.FromHexString(request.RecordIdHex);
+            byte[] changeId = Convert.FromHexString(request.ChangeIdHex);
+            byte[] value = Convert.FromBase64String(request.ValueBase64);
+            if (recordId.Length != 16 || changeId.Length != 16 ||
+                request.FieldId == 0 || request.HlcWall == 0)
+                return Results.BadRequest(new { error = "Invalid test mutation identity, field or HLC." });
+
+            var mutation = new ProviderMutation
+            {
+                RecordId = RecordId.From(recordId),
+                FieldId = request.FieldId,
+                AuthorNodeId = node.NodeId,
+                KeyEpoch = request.KeyEpoch,
+                Value = value,
+                ChangeId = BatchId.From(changeId),
+                OriginAuthorEpoch = 1,
+                OriginSequence = 0,
+                HlcWall = request.HlcWall,
+                HlcLogical = request.HlcLogical
+            };
+            ulong receiptSequence = await provider!.AppendLocalChangeWithReceiptAsync(
+                mutation, cancellationToken);
+            return Results.Ok(new { receiptSequence });
+        }
+        catch (Exception exception) when (exception is FormatException or ArgumentException or InvalidDataException)
+        {
+            return Results.BadRequest(new { error = exception.Message });
+        }
+    });
+
+    app.MapGet("/admin/test/current/{recordIdHex}/{fieldId:int}", async (
+        string recordIdHex,
+        int fieldId,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            if (fieldId is < 1 or > ushort.MaxValue)
+                return Results.BadRequest(new { error = "FieldId is outside the supported range." });
+            byte[] recordId = Convert.FromHexString(recordIdHex);
+            if (recordId.Length != 16)
+                return Results.BadRequest(new { error = "RecordId must be exactly 16 bytes." });
+
+            ProviderMutation? current = await provider!.ReadCurrentAsync(
+                RecordId.From(recordId), checked((ushort)fieldId), cancellationToken);
+            if (current is null)
+                return Results.NotFound();
+
+            return Results.Ok(new
+            {
+                valueBase64 = Convert.ToBase64String(current.Value),
+                changeIdHex = Convert.ToHexString(current.ChangeId.ToArray()),
+                authorNodeIdHex = Convert.ToHexString(current.AuthorNodeId.ToArray()),
+                originAuthorEpoch = current.OriginAuthorEpoch,
+                originSequence = current.OriginSequence,
+                hlcWall = current.HlcWall,
+                hlcLogical = current.HlcLogical
+            });
+        }
+        catch (Exception exception) when (exception is FormatException or ArgumentException or InvalidDataException)
+        {
+            return Results.BadRequest(new { error = exception.Message });
+        }
+    });
+
     app.MapPost("/admin/peers/connect", async (
         PeerConnectRequest request,
         CancellationToken cancellationToken) =>
@@ -369,6 +440,14 @@ internal sealed record PolicyUpdateRequest(
 internal sealed record EmergencyStopRequest(string Reason);
 internal sealed record ShutdownRequest(string Reason);
 internal sealed record PeerConnectRequest(string Host, int Port);
+internal sealed record LocalChangeRequest(
+    string RecordIdHex,
+    ushort FieldId,
+    string ChangeIdHex,
+    string ValueBase64,
+    ushort KeyEpoch,
+    ulong HlcWall,
+    uint HlcLogical);
 
 internal sealed class TestOnlyOperatorAuthorizer : IFldBinSyncGcOperatorAuthorizer
 {
