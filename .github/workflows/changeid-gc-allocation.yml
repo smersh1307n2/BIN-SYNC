@@ -1,0 +1,105 @@
+name: ChangeId GC Allocation Breakdown
+
+on:
+  push:
+    branches:
+      - feature/fld-external-storage
+    paths:
+      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
+      - 'samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs'
+      - 'external/Fld1.Storage'
+      - '.github/workflows/changeid-gc-allocation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: changeid-gc-allocation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changeid:
+    name: ChangeId GC allocation phases (.NET 10, Ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout BIN-SYNC
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact FLD-DB revision used by the Storage submodule
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build Host adapter and tests
+        shell: bash
+        run: |
+          dotnet build samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Measure only ChangeId GC (1k / 10k / 50k)
+        shell: bash
+        env:
+          COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/changeid-gc-allocation.md
+        run: |
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=changeid-gc-allocation.trx" \
+            --results-directory "$RUNNER_TEMP/changeid-gc-results" \
+            --blame-hang-timeout 3m \
+            --blame-hang-dump-type mini
+
+      - name: Verify and upload phase measurements
+        if: always()
+        shell: bash
+        run: |
+          summary="$RUNNER_TEMP/changeid-gc-allocation.md"
+          if [ ! -f "$summary" ]; then
+            echo "::error::ChangeId GC measurement output was not produced."
+            exit 1
+          fi
+          count="$(grep -c '^COMPOSED_HOST_METADATA_GC_SCALE' "$summary" || true)"
+          if [ "$count" -ne 3 ]; then
+            echo "::error::Expected 3 ChangeId GC measurements, found $count."
+            exit 1
+          fi
+          cp "$summary" changeid-gc-allocation.md
+
+      - name: Upload ChangeId GC diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: changeid-gc-allocation-${{ github.sha }}
+          path: |
+            changeid-gc-allocation.md
+            ${{ runner.temp }}/changeid-gc-results
+          retention-days: 30
+          if-no-files-found: warn
