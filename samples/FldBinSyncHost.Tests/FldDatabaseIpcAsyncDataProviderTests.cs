@@ -3019,10 +3019,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(metadataA.AcceptIncomingBatch(replacementReceiptBatch).IsDuplicate);
             metadataA.AttachNamespaceGcGuard(gcA, trust, scope, nodeA.NodeId);
 
-            // FLD treats an unsealed WAL as an uncertainty barrier for every
-            // receipt identity. Receipt GC must therefore remain fail-closed until
-            // the first physical tombstone-GC admission seals the committed prefix.
-            Assert.Equal(0, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
+            // Receipt GC now seals the committed WAL prefix through its own
+            // Receipt-only Host scan mode and can advance independently of the
+            // physical Tombstone-GC approval-spool path.
+            Assert.Equal(1, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
 
             // Compact only after both the local apply consumer and every interested
             // downstream peer have acknowledged the immutable relay prefix.
@@ -3041,10 +3041,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
             Assert.Equal(2, CountTombstoneChangeIds(metadataB, nodeB.NodeId));
 
-            // Metadata payloads are compacted, but the Host still reports ChangeId
-            // references in its unsealed WAL/Outbox/ApplyJournal index. The first
-            // tombstone-GC admission seals that committed prefix; until then ChangeId
-            // compaction must remain fail-closed on both Hosts.
+            // Receipt GC has sealed the committed WAL prefix, but ChangeId GC
+            // remains independently blocked while the provider's exact operation
+            // identities are still retained by the Host/Metadata reference sets.
             Assert.Equal(0, await adapterA.RunChangeIdGcPassAsync(gcA, trust, 16));
             Assert.Equal(0, await adapterB.RunChangeIdGcPassAsync(gcB, trust, 16));
             Assert.Equal(2, CountTombstoneChangeIds(metadataA, nodeA.NodeId));
@@ -3196,8 +3195,9 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerA, 16));
             Assert.Empty(await ReadAllTombstoneCandidatesAsync(providerB, 16));
 
-            // Receipt GC advances independently after the physical Tombstone sweep.
-            // Commit one bounded receipt page, restart both real Hosts, then resume.
+            // Resume Receipt GC after the physical Tombstone sweep. The first
+            // receipt page was committed above; restart both real Hosts before
+            // consuming the remaining pages.
             Assert.Equal(1, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
 
             await relayInitiator.DisposeAsync(); relayInitiator = null;
@@ -3208,7 +3208,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             await RestartHostAAfterGcPageAsync();
             await RestartHostBAfterGcPageAsync();
 
-            for (int page = 1; page < retiredReceiptBatches.Count; page++)
+            for (int page = 2; page < retiredReceiptBatches.Count; page++)
                 Assert.Equal(1, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
             Assert.Equal(0, await adapterA.RunReceiptGcPassAsync(gcA, trust, limit: 1));
 
