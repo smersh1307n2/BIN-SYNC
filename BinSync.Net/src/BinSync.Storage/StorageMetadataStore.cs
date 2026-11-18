@@ -1009,8 +1009,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (candidates.Count == 0)
             return 0;
 
-        BatchId[] candidateChangeIds = candidates
-            .Select(item => item.Key.ChangeId).Distinct().ToArray();
+        // ChangeLedger is keyed by (namespace, ChangeId), and this candidate
+        // scan is already restricted to one namespace, so these IDs are unique.
+        // Materialize directly instead of allocating a LINQ/Distinct HashSet.
+        BatchId[] candidateChangeIds = new BatchId[candidates.Count];
+        for (int i = 0; i < candidates.Count; i++)
+            candidateChangeIds[i] = candidates[i].Key.ChangeId;
         ReportAllocation("candidate-id-materialization");
         IReadOnlySet<BatchId> hostReferenced =
             await externalScan.FindExternalChangeIdReferencesAsync(
