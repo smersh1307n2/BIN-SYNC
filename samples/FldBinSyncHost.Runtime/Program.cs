@@ -347,7 +347,8 @@ finally
         }
 
         await scheduler.StopAsync();
-        await peerListener.StopAsync();
+        if (peerRuntime is not null)
+            await peerRuntime.StopAsync();
         composition.Dispose();
     }
 
