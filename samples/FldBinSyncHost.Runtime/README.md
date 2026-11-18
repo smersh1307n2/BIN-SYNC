@@ -8,13 +8,16 @@ The process intentionally resembles a long-running application:
 2. Opens a Node WAL and loads the persisted Node checkpoint (or creates and persists the initial test Node).
 3. Connects to a separate, real FLD Database Host process through the FLD IPC provider and remote-apply adapter.
 4. Commits the FLD provider-authoritative Metadata publication cutover, creates FldBinSyncAsyncHostComposition and calls StartAsync.
-5. Only after durable operator-policy restoration and provider/Node recovery does the startup callback start the test peer listener and maintenance scheduler.
-6. Starts a Kestrel HTTP server with authenticated operator routes.
+5. Only after durable operator-policy restoration and provider/Node recovery does the startup callback bind the TCP listener and start the peer-session accept loop and maintenance scheduler.
+6. Each accepted or outbound TCP connection performs the real BIN-SYNC HELLO/HELLO_ACK handshake and becomes a `SyncSession`; inbound batches pass through `FldBinSyncAsyncHostAdapter.ReceiveAndPublishAsync`, and scheduled outbound rounds use `RunOutboundRoundAsync`.
+7. Starts a Kestrel HTTP server with authenticated test-operator routes.
 
 ## Test-only endpoints
 
 - GET /health/live — process liveness.
-- GET /health/ready — startup barrier, listener and scheduler state.
+- GET /health/ready — startup barrier, TCP listener, active SyncSession count and scheduler state.
+- GET /operator/peers — active peer count.
+- POST /admin/peers/connect — initiate an outbound TCP SyncSession to another test Host (`{ host, port }`).
 - GET /operator/gc — diagnostics and durable policy/audit snapshot.
 - POST /operator/gc/policy — generation-checked independent domain policy update.
 - POST /operator/gc/maintenance/once — one bounded pass through the real adapter/lease path (pageLimit 256, ChangeId page limit 4096).
@@ -23,7 +26,7 @@ The process intentionally resembles a long-running application:
 
 All /operator/* and /admin/* routes require a Bearer token supplied through BINSYNC_TEST_HOST_OPERATOR_TOKEN. The token is test input only. The authorizer accepts only the fixed integration-test actor; do not reuse this authentication or authorizer in a real application.
 
-The peer listener speaks only a tiny test banner. It is a lifecycle probe, **not** a BIN-SYNC transport or SyncSession implementation. The periodic scheduler and authenticated one-shot endpoint both invoke the real bounded adapter maintenance path (pageLimit 256, ChangeId page limit 4096); the scheduler stops and trips the local brake on an unexpected pass failure. All StorageNamespaceGcFeatureOptions remain at their default-off values, so the process-level test verifies all three reclaimed counts stay zero and the operator API cannot override the immutable startup proof flags.
+The peer listener uses the repository's `TcpSyncListener`/`TcpSync` transport and real `SyncSession` handshake. It exercises actual framed TCP transport, peer NodeId/epoch negotiation, session lifecycle, inbound batch processing, outbound publication and disconnect cleanup. `BINSYNC_TEST_HOST_ALLOWED_PEERS` can restrict admitted peer NodeIds (comma-separated 32-hex-character IDs); this is a test allowlist, not a production identity provider. The scheduler invokes both the real bounded GC maintenance path (pageLimit 256, ChangeId page limit 4096) and the adapter's outbound round. All StorageNamespaceGcFeatureOptions remain at their default-off values, so the process-level test verifies all three reclaimed counts stay zero and the operator API cannot override the immutable startup proof flags.
 
 ## Process arguments
 
@@ -36,7 +39,8 @@ The Metadata database and FLD database are separate disposable roots. The FLD da
 
 FldBinSyncRuntimeHostTests launches the actual FLD Database Host and this executable Host as separate processes. It verifies:
 
-- listener/scheduler are not started until the composition startup barrier completes;
+- TCP listener/session accept loop and scheduler are not started until the composition startup barrier completes;
+- a real TCP connection completes the BIN-SYNC HELLO/HELLO_ACK exchange, exposes the negotiated peer NodeId and is removed cleanly on disconnect;
 - unauthenticated and invalid-token operator requests are rejected;
 - the HTTP API exposes diagnostics and generation-checked policy changes;
 - the periodic scheduler starts only after recovery and invokes the real bounded adapter round;
@@ -49,7 +53,7 @@ FldBinSyncRuntimeHostTests launches the actual FLD Database Host and this execut
 - the restored generation/audit sequence is checked against a separate operator record, the process-local emergency brake is latched before policy restore, and a new authorized all-off generation is required before any re-enable;
 - missing/unavailable FLD Database Host causes startup to fail without publishing readiness.
 
-The Linux/Windows host-runtime-lifecycle.yml workflow builds and runs this focused process-level test. These results validate the repository's Host integration contract only. They do **not** claim production deployment, production authentication, transport interoperability, power-loss durability, or authorization to enable GC. Production feature switches remain false by default; physical reclamation remains disabled pending a real application integration and its own release review.
+The Linux/Windows host-runtime-lifecycle.yml workflow builds and runs this focused process-level test. These results validate the emulated Host's actual BIN-SYNC TCP transport/session integration and lifecycle only. They do **not** claim production deployment, production authentication/identity, transport interoperability beyond the implemented TCP adapter, power-loss durability, or authorization to enable GC. Production feature switches remain false by default; physical reclamation remains disabled pending a real application integration and its own release review.
 
 ## Backup rollback boundary
 
