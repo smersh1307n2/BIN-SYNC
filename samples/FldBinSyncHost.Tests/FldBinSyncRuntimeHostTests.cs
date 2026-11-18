@@ -99,7 +99,7 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.True(receiptA.RootElement.GetProperty("receiptSequence").GetUInt64() > 0);
 
             using JsonDocument receivedAtB = await WaitForCurrentMutation(
-                clientB, Convert.ToHexString(recordA), fieldId, TimeSpan.FromSeconds(20));
+                clientB, Convert.ToHexString(recordA), fieldId, TimeSpan.FromSeconds(20), peer: clientA);
             Assert.Equal(Convert.ToBase64String(valueA),
                 receivedAtB.RootElement.GetProperty("valueBase64").GetString());
             Assert.Equal(Convert.ToHexString(changeA),
@@ -125,7 +125,7 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.Equal(HttpStatusCode.OK, writeB.StatusCode);
 
             using JsonDocument receivedAtA = await WaitForCurrentMutation(
-                clientA, Convert.ToHexString(recordB), fieldId, TimeSpan.FromSeconds(20));
+                clientA, Convert.ToHexString(recordB), fieldId, TimeSpan.FromSeconds(20), peer: clientB);
             Assert.Equal(Convert.ToBase64String(valueB),
                 receivedAtA.RootElement.GetProperty("valueBase64").GetString());
             Assert.Equal(Convert.ToHexString(changeB),
@@ -547,7 +547,7 @@ public sealed class FldBinSyncRuntimeHostTests
     }
 
     private static async Task<JsonDocument> WaitForCurrentMutation(
-        HttpClient client, string recordIdHex, ushort fieldId, TimeSpan timeout)
+        HttpClient client, string recordIdHex, ushort fieldId, TimeSpan timeout, HttpClient? peer = null)
     {
         DateTime deadline = DateTime.UtcNow + timeout;
         string path = $"/admin/test/current/{recordIdHex}/{fieldId.ToString(CultureInfo.InvariantCulture)}";
@@ -562,7 +562,14 @@ public sealed class FldBinSyncRuntimeHostTests
             await Task.Delay(100);
         }
 
-        throw new TimeoutException($"Remote FLD value {recordIdHex}/{fieldId} was not observed.");
+        string health = await client.GetStringAsync("/health/ready");
+        string peers = await client.GetStringAsync("/operator/peers");
+        string remotePeers = peer is null
+            ? string.Empty
+            : await peer.GetStringAsync("/operator/peers");
+        throw new TimeoutException(
+            $"Remote FLD value {recordIdHex}/{fieldId} was not observed. " +
+            $"receiverHealth={health}; receiverPeers={peers}; senderPeers={remotePeers}");
     }
 
     private static async Task WaitForActivePeer(HttpClient client, int expected, TimeSpan timeout)
