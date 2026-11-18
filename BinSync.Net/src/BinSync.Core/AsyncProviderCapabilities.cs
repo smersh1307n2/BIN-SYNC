@@ -72,7 +72,7 @@ public sealed record ProviderTombstoneGcCandidatePage(
 
 public interface IAsyncProviderTombstoneGc
 {
-    public const int MaximumCandidatePageSize = 256;
+    public const int MaximumCandidatePageSize = 4096;
     ValueTask<ProviderSnapshotHandle> OpenTombstoneGcCandidateSnapshotAsync(
         CancellationToken cancellationToken = default);
     ValueTask<ProviderTombstoneGcCandidatePage> ReadTombstoneGcCandidatePageAsync(
