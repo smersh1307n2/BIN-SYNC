@@ -155,6 +155,149 @@ public sealed class FldBinSyncRuntimeHostTests
     }
 
     [Fact]
+    public async Task Offline_backup_restore_keeps_local_brake_until_new_authorized_policy_generation()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "binsync-stage0-backup-restore-" + Guid.NewGuid().ToString("N"));
+        string metadataRoot = Path.Combine(root, "metadata");
+        string fldRoot = Path.Combine(root, "fld");
+        string backupRoot = Path.Combine(root, "offline-backup");
+        Directory.CreateDirectory(root);
+        Process? databaseHost = null;
+        Process? runtimeHost = null;
+
+        try
+        {
+            databaseHost = StartDatabaseHost(fldRoot);
+            await WaitForDatabaseHost(fldRoot, databaseHost, TimeSpan.FromSeconds(45));
+
+            // Create a durable all-off policy (generation 1), then persist the
+            // emergency stop (generation 2) before making a closed offline backup.
+            runtimeHost = StartRuntimeHost(metadataRoot, fldRoot);
+            (Uri address, _) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            using (var client = CreateClient(address, OperatorToken))
+            {
+                using HttpResponseMessage policy = await client.PostAsJsonAsync(
+                    "/operator/gc/policy",
+                    new
+                    {
+                        expectedGeneration = 0,
+                        reason = "prepare all-off offline backup",
+                        maintenanceStarted = false,
+                        receiptEnabled = false,
+                        changeIdEnabled = false,
+                        tombstoneEnabled = false
+                    });
+                Assert.Equal(HttpStatusCode.OK, policy.StatusCode);
+
+                using HttpResponseMessage stop = await client.PostAsJsonAsync(
+                    "/operator/gc/emergency-stop",
+                    new { reason = "durable stop before offline backup" });
+                Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
+
+                using HttpResponseMessage clean = await client.PostAsJsonAsync(
+                    "/admin/shutdown-clean",
+                    new { reason = "close database before offline backup" });
+                Assert.Equal(HttpStatusCode.OK, clean.StatusCode);
+            }
+            await runtimeHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(0, runtimeHost.ExitCode);
+            runtimeHost.Dispose();
+            runtimeHost = null;
+
+            CopyDirectory(metadataRoot, backupRoot);
+
+            // Advance the live database after the backup so restoring the backup
+            // demonstrably moves policy generation/audit history backwards.
+            runtimeHost = StartRuntimeHost(metadataRoot, fldRoot);
+            (address, _) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            using (var client = CreateClient(address, OperatorToken))
+            {
+                using HttpResponseMessage advance = await client.PostAsJsonAsync(
+                    "/operator/gc/policy",
+                    new
+                    {
+                        expectedGeneration = 2,
+                        reason = "advance policy after offline backup",
+                        maintenanceStarted = false,
+                        receiptEnabled = false,
+                        changeIdEnabled = false,
+                        tombstoneEnabled = false
+                    });
+                Assert.Equal(HttpStatusCode.OK, advance.StatusCode);
+                using JsonDocument advanced = JsonDocument.Parse(await advance.Content.ReadAsStringAsync());
+                Assert.Equal(3UL, advanced.RootElement.GetProperty("generation").GetUInt64());
+
+                using HttpResponseMessage clean = await client.PostAsJsonAsync(
+                    "/admin/shutdown-clean",
+                    new { reason = "close newer database before backup restore" });
+                Assert.Equal(HttpStatusCode.OK, clean.StatusCode);
+            }
+            await runtimeHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(0, runtimeHost.ExitCode);
+            runtimeHost.Dispose();
+            runtimeHost = null;
+
+            Directory.Delete(metadataRoot, recursive: true);
+            CopyDirectory(backupRoot, metadataRoot);
+
+            // The restore brake is latched before StartAsync reads the restored
+            // (older) policy. RestoreAsync must not clear it; only a fresh,
+            // authorized all-off generation may do so.
+            runtimeHost = StartRuntimeHost(metadataRoot, fldRoot, backupRestoreBrake: true);
+            (address, _) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            using (var client = CreateClient(address, OperatorToken))
+            {
+                using JsonDocument restored = JsonDocument.Parse(await client.GetStringAsync("/operator/gc"));
+                JsonElement oldPolicy = restored.RootElement.GetProperty("policy");
+                Assert.Equal(2UL, oldPolicy.GetProperty("generation").GetUInt64());
+                Assert.False(restored.RootElement.GetProperty("runtimeRunning").GetBoolean());
+                Assert.False(restored.RootElement.GetProperty("receiptRuntimeEnabled").GetBoolean());
+                Assert.False(restored.RootElement.GetProperty("changeIdRuntimeEnabled").GetBoolean());
+                Assert.False(restored.RootElement.GetProperty("tombstoneRuntimeEnabled").GetBoolean());
+
+                using HttpResponseMessage reauthorized = await client.PostAsJsonAsync(
+                    "/operator/gc/policy",
+                    new
+                    {
+                        expectedGeneration = 2,
+                        reason = "external operational record verified restored backup; reaffirm all-off before re-enable",
+                        maintenanceStarted = false,
+                        receiptEnabled = false,
+                        changeIdEnabled = false,
+                        tombstoneEnabled = false
+                    });
+                Assert.Equal(HttpStatusCode.OK, reauthorized.StatusCode);
+                using JsonDocument fresh = JsonDocument.Parse(await reauthorized.Content.ReadAsStringAsync());
+                Assert.Equal(3UL, fresh.RootElement.GetProperty("generation").GetUInt64());
+
+                using JsonDocument afterReauthorization = JsonDocument.Parse(
+                    await client.GetStringAsync("/operator/gc"));
+                Assert.False(afterReauthorization.RootElement.GetProperty("runtimeRunning").GetBoolean());
+                Assert.False(afterReauthorization.RootElement.GetProperty("receiptRuntimeEnabled").GetBoolean());
+                Assert.False(afterReauthorization.RootElement.GetProperty("changeIdRuntimeEnabled").GetBoolean());
+                Assert.False(afterReauthorization.RootElement.GetProperty("tombstoneRuntimeEnabled").GetBoolean());
+
+                using HttpResponseMessage clean = await client.PostAsJsonAsync(
+                    "/admin/shutdown-clean",
+                    new { reason = "close restored database after reauthorization" });
+                Assert.Equal(HttpStatusCode.OK, clean.StatusCode);
+            }
+            await runtimeHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(0, runtimeHost.ExitCode);
+            runtimeHost.Dispose();
+            runtimeHost = null;
+        }
+        finally
+        {
+            if (runtimeHost is not null)
+                await KillProcess(runtimeHost);
+            if (databaseHost is not null)
+                await KillProcess(databaseHost);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Startup_without_the_FLD_database_host_fails_before_publishing_readiness()
     {
         string root = Path.Combine(Path.GetTempPath(), "binsync-stage0-runtime-failclosed-" + Guid.NewGuid().ToString("N"));
@@ -186,7 +329,8 @@ public sealed class FldBinSyncRuntimeHostTests
         return client;
     }
 
-    private static Process StartRuntimeHost(string metadataRoot, string fldRoot)
+    private static Process StartRuntimeHost(
+        string metadataRoot, string fldRoot, bool backupRestoreBrake = false)
     {
         string runtime = Path.Combine(AppContext.BaseDirectory, "host-runtime", "FldBinSyncHost.Runtime.dll");
         if (!File.Exists(runtime))
@@ -199,7 +343,7 @@ public sealed class FldBinSyncRuntimeHostTests
             RedirectStandardError = true
         };
         start.Environment["BINSYNC_TEST_HOST_OPERATOR_TOKEN"] = OperatorToken;
-        foreach (string arg in new[]
+        var runtimeArgs = new List<string>
         {
             runtime,
             metadataRoot,
@@ -210,7 +354,10 @@ public sealed class FldBinSyncRuntimeHostTests
             MetadataScopeId.ToString("D"),
             NamespaceId.ToString(CultureInfo.InvariantCulture),
             ProviderClientId.ToString("D")
-        })
+        };
+        if (backupRestoreBrake)
+            runtimeArgs.Add("--test-backup-restore-brake");
+        foreach (string arg in runtimeArgs)
             start.ArgumentList.Add(arg);
 
         return Process.Start(start)
@@ -300,6 +447,18 @@ public sealed class FldBinSyncRuntimeHostTests
             await Task.Delay(100);
         }
         throw new TimeoutException("FLD Database Host did not publish its IPC endpoint.");
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(source, file);
+            string target = Path.Combine(destination, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
+        }
     }
 
     private static async Task KillProcess(Process process)
