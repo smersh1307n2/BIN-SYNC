@@ -461,7 +461,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 
             ReadOnlyMemory<byte> authorNodeId = (flags & 4) != 0
                 ? entry.Slice(35, 16) : ReadOnlyMemory<byte>.Empty;
-            ushort keyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(entry.Slice(51, 2));
+            ushort keyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(entry.Span.Slice(51, 2));
             ReadOnlyMemory<byte> changeId = (flags & 8) != 0
                 ? entry.Slice(53, 16) : ReadOnlyMemory<byte>.Empty;
             if (authorNodeId.Length != 16 || changeId.Length != 16)
@@ -469,7 +469,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 
             candidates.Add(new ProviderMutation
             {
-                RecordId = _recordIdResolver(entry.Span.Slice(0, 16)),
+                RecordId = _recordIdResolver(entry.Slice(0, 16)),
                 FieldId = fieldId,
                 IsTombstone = isTombstone,
                 IsRecordTombstone = isRecordTombstone,
@@ -479,8 +479,8 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 KeyEpoch = keyEpoch,
                 Value = Array.Empty<byte>(),
                 ChangeId = BatchId.From(changeId.Span),
-                OriginAuthorEpoch = BinaryPrimitives.ReadUInt32LittleEndian(entry.Slice(69, 4)),
-                OriginSequence = BinaryPrimitives.ReadUInt64LittleEndian(entry.Slice(73, 8))
+                OriginAuthorEpoch = BinaryPrimitives.ReadUInt32LittleEndian(entry.Span.Slice(69, 4)),
+                OriginSequence = BinaryPrimitives.ReadUInt64LittleEndian(entry.Span.Slice(73, 8))
             });
         }
 
