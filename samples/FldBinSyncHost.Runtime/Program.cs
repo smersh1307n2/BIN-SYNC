@@ -209,6 +209,19 @@ try
         {
             return Results.BadRequest(new { error = exception.Message });
         }
+        catch (Exception exception) when (exception.Message.Contains(
+            "GC lease owner may only access its reference scan", StringComparison.Ordinal))
+        {
+            return Results.Problem(
+                title: "FLD Host is performing a GC reference scan; retry the test write.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Test local-change endpoint failed: {exception}");
+            return Results.Problem(title: "Test local-change failed.", detail: exception.ToString(),
+                statusCode: StatusCodes.Status500InternalServerError);
+        }
     });
 
     app.MapGet("/admin/test/current/{recordIdHex}/{fieldId:int}", async (
