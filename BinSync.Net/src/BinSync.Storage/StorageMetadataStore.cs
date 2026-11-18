@@ -5339,14 +5339,28 @@ private static bool ValidateIncomingBatchForStaging(
         byte[] value = new byte[16];
         BinaryPrimitives.WriteUInt64LittleEndian(value, acknowledged);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), highWatermark);
-        using (var snapshot = _storage.OpenSnapshot())
+        bool exists;
+        ulong previousAcknowledged;
+        ulong previousHighWatermark;
+        if (storageKind == 5)
         {
-            bool exists = snapshot.TryGet(key, out byte[]? existing);
-            if (exists && existing!.AsSpan().SequenceEqual(value))
-                return;
-            if (!exists && acknowledged == 0 && highWatermark == 0)
-                return;
+            var streamKey = new RelayKey(namespaceId, author);
+            // The ACK map is populated only when the durable watermark row exists;
+            // a newly-created relay stream can have a high watermark but no ACK row yet.
+            exists = current.RelayAck.TryGetValue(streamKey, out previousAcknowledged);
+            current.RelayHighWatermarks.TryGetValue(streamKey, out previousHighWatermark);
         }
+        else
+        {
+            var streamKey = new OutboundKey(namespaceId, author);
+            exists = current.OutboundAck.TryGetValue(streamKey, out previousAcknowledged);
+            current.OutboundHighWatermarks.TryGetValue(streamKey, out previousHighWatermark);
+        }
+
+        if (exists && previousAcknowledged == acknowledged && previousHighWatermark == highWatermark)
+            return;
+        if (!exists && acknowledged == 0 && highWatermark == 0)
+            return;
 
         using var batch = _storage.BeginWriteBatch();
         ulong actualBaseCommitSeq = _storage.LastCommitSeq;
