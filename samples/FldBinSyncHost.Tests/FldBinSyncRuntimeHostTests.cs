@@ -204,10 +204,10 @@ public sealed class FldBinSyncRuntimeHostTests
                 throw new InvalidOperationException(
                     $"Integration Host exited with {process.ExitCode}: {await process.StandardError.ReadToEndAsync()}");
 
-            Task<string?> read = process.StandardOutput.ReadLineAsync();
+            TimeSpan remaining = deadline - DateTime.UtcNow;
             string? line;
-            try { line = await read.WaitAsync(TimeSpan.FromSeconds(1)); }
-            catch (TimeoutException) { continue; }
+            try { line = await process.StandardOutput.ReadLineAsync().WaitAsync(remaining); }
+            catch (TimeoutException) { break; }
 
             if (line is null)
                 continue;
