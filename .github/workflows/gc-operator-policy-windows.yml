@@ -8,6 +8,7 @@ on:
       - 'samples/FldBinSyncHost/FldBinSyncGcOperatorPolicy.cs'
       - 'samples/FldBinSyncHost/FldBinSyncAsyncHostComposition.cs'
       - 'samples/FldBinSyncHost/FldBinSyncGcHostOperations.cs'
+      - 'samples/FldBinSyncHost/README.md'
       - 'samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncAsyncGcReadinessTests.cs'

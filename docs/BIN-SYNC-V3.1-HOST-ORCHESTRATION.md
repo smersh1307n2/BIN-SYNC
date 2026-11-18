@@ -153,7 +153,7 @@ The process-isolated sample adapter `FldBinSyncAsyncHostAdapter` exposes:
 
 Readiness is deliberately weaker than candidate authorization. The compactor still validates each Receipt's retired transport epoch and receive-chain fence; each ChangeId's signed origin frontier and all Metadata/Host references; and each field/record tombstone's signed origin proof, installed FULL_REPLACE generation, exact provider identity and Host reference/pin state. A readiness report must never be used to turn on a feature flag.
 
-All three `StorageNamespaceGcFeatureOptions` switches remain false by default. The embedding application owns cadence, scheduling, logging, retention policy and the operator kill switch. The sample performs one bounded round only; it does not create a background timer or silently enable GC.
+All three `StorageNamespaceGcFeatureOptions` switches remain false by default. The embedding application owns cadence, scheduling, logging and the authenticated endpoint. The sample exposes the operator diagnostics, independent policy update and emergency-stop actions, and performs one bounded round only; it does not create a background timer or silently enable GC.
 
 
 ### Stable blocker codes and durable operator policy contract

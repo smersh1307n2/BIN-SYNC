@@ -276,40 +276,32 @@ operations through its authenticated operator endpoint and supply its real
 identity/authorization provider. Physical GC remains disabled until the
 application lifecycle and the remaining V3 release gates are verified.
 
-### Runtime emergency stop API
+### Runtime emergency stop and operator API
 
-`FldBinSyncAsyncHostAdapter` accepts an optional
-`FldBinSyncGcMaintenanceControl`. When omitted, it creates a stopped control;
-therefore no physical-GC pass can start until the host explicitly opens it.
-The control is process-local and starts with all three domains disabled. Hosts may inject a shared control in the adapter constructor or use the adapter's public `GcMaintenanceControl` property:
+The low-level `FldBinSyncGcMaintenanceControl` remains process-local and starts
+stopped with every domain disabled. It cancels in-flight bounded operations when
+stopped, but it is not the production configuration interface. Do not manually
+call `Start()`/`SetEnabled()` in the application scheduler: use
+`composition.Operator.UpdatePolicyAsync`, which authenticates the actor,
+records an audit event, checks the expected generation and applies each domain
+independently without overriding immutable startup proof flags.
 
-- Call `Start()` to open the global maintenance gate.
-- Call `SetEnabled(FldBinSyncGcDomain.Receipt, true)`,
-  `SetEnabled(FldBinSyncGcDomain.ChangeId, true)` or
-  `SetEnabled(FldBinSyncGcDomain.Tombstone, true)` only for individually approved
-  domains. The corresponding durable `StorageNamespaceGcFeatureOptions` switch
-  must also have been enabled when the GC store was constructed.
-- Call `Stop()` for an emergency stop. It closes all domain gates and cancels
-  linked cancellation tokens for in-flight bounded page operations. A stopped
-  control must be started again and each domain explicitly re-enabled.
-- The legacy per-domain pass methods and combined metadata/tombstone methods use
-  the same runtime gate; they cannot bypass it.
-
-This control is an in-process emergency brake, not durable operator policy:
-process restart returns it to stopped/all-disabled. Production still needs a
-durable, authenticated operator control plane and audit trail. A cancellation
-requested after a page's durable commit may stop only the next operation; it
-cannot roll back an already committed page. Always inspect durable state and
-readiness after stopping or restarting.
+For first response, call `composition.Operator.EmergencyStop()` in each local
+Host process. Then call `EmergencyStopDurablyAsync(actorId, reason)` to persist
+the all-domains-off policy and wait for active per-domain leases to drain. If
+the durable commit fails, the local latch remains set; do not restart or
+re-enable GC until an authorized all-off policy commit is verified. A stop
+cannot roll back a page that already committed durably; inspect the operator
+diagnostics and readiness again after stopping or restarting.
 
 
 ### Durable operator policy contract and readiness blocker codes
 
-The sample now defines `IFldBinSyncGcOperatorPolicyStore`, `IFldBinSyncGcOperatorAuthorizer` and `FldBinSyncGcOperatorPolicyCoordinator`. This is an application integration contract, not a built-in durable store or identity provider. The host must supply a store that atomically compare-and-swaps the policy generation and appends the corresponding audit entry in one durable transaction. A store implementation must reject corrupt records and mismatched (scope, local replica, namespace) bindings.
+The sample defines `IFldBinSyncGcOperatorPolicyStore`, `IFldBinSyncGcOperatorAuthorizer` and `FldBinSyncGcOperatorPolicyCoordinator`, and includes the concrete `StorageFldBinSyncGcOperatorPolicyStore`. It stores policy and audit in one atomic `StorageWriteBatch` on the same `StorageDatabase` as Metadata, and uses OS file-share locks for per-domain cross-process leases. The application supplies the real `IFldBinSyncGcOperatorAuthorizer` and authenticated endpoint; it does not need to implement another policy store. The store rejects corrupt records and mismatched (scope, local replica, namespace) bindings.
 
 Each committed update carries a strictly increasing policy generation and audit sequence, actor identity, action, reason, affected domains and UTC audit timestamp. The timestamp is audit metadata only; it is never a GC horizon or deletion criterion. The coordinator authenticates/authorizes the actor through the host-supplied authorizer, rejects stale expected generations, commits the policy/audit pair before opening runtime gates, and serializes updates/restores within one coordinator instance. The durable store's atomic compare-and-swap remains mandatory across multiple processes.
 
-For the async Host adapter, call `RecoverBeforeAcceptingSessionsAsync` as the startup barrier. It first calls the configured policy coordinator's `RestoreAsync`, then runs provider/Node recovery; only after it completes may the application accept peer sessions or start maintenance scheduling. If durable policy is required (the adapter default) but no coordinator is configured, startup fails before recovery. Missing policy leaves the runtime stopped; corrupt, mismatched or unavailable policy also stops it and propagates the error. A persisted policy can only restrict the independent startup `StorageNamespaceGcFeatureOptions`; it cannot override a false startup flag. `EmergencyStop()` remains the immediate process-local brake. `EmergencyStopDurablyAsync(actorId, reason)` additionally commits an audited all-domains-disabled policy for restart-safe shutdown; if that durable commit fails, keep the local process stopped and do not restart it until a disabled policy is committed.
+Prefer `FldBinSyncAsyncHostComposition.StartAsync` as the application startup barrier. It restores durable policy, completes provider/Node recovery, and only then invokes the callback that starts peer sessions and maintenance scheduling. If recovery fails, the callback is never invoked and the local emergency brake is latched. For more complex application startup state machines, `RecoverBeforeAcceptingSessionsAsync` remains the lower-level barrier. Missing policy leaves the runtime stopped; corrupt, mismatched or unavailable policy stops it and propagates the error. A persisted policy can only restrict immutable startup `StorageNamespaceGcFeatureOptions`; it cannot override a false startup flag. Production code must use `composition.Operator.UpdatePolicyAsync` rather than calling raw runtime `Start/SetEnabled` methods. `EmergencyStop()` remains the immediate process-local brake; `EmergencyStopDurablyAsync(actorId, reason)` commits an audited all-domains-disabled policy for restart-safe shutdown.
 
 `FldBinSyncGcDomainReadiness.Blockers` exposes stable `FldBinSyncGcBlockerCode` identifiers alongside the existing human-readable `BlockedReasons` strings. Unknown future messages map to `Unclassified` rather than being silently treated as a known condition. Consumers should alert on the stable code and retain the message for operator context; neither a blocker code nor a readiness snapshot authorizes candidate deletion.
 
