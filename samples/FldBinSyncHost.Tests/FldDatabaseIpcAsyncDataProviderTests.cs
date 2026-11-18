@@ -501,6 +501,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     [InlineData(1_000)]
     [InlineData(10_000)]
     [InlineData(50_000)]
+    [InlineData(1_000)]
     [InlineData(100_000)]
     [InlineData(250_000)]
     public async Task Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references(
@@ -883,9 +884,36 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 allocationStages.TryGetValue(stage, out long previous);
                 allocationStages[stage] = checked(previous + bytes);
             };
-            var adapter = CreateTestAdapter(
-                coordinator, provider, remoteApply, _ => { });
-            EnableAllGcDomainsForTest(adapter);
+            // Stage 3 is a durable Tombstone-only policy: Receipt and ChangeId
+            // stay disabled at both the operator-policy and runtime layers.
+            using var gcRuntime = new FldBinSyncGcMaintenanceControl();
+            var policyBinding = new FldBinSyncGcOperatorPolicyBinding(
+                Guid.NewGuid(), local, checked((int)namespaceId));
+            var policyStore = new StorageFldBinSyncGcOperatorPolicyStore(nodeStorage, metadata);
+            var policyCoordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+                policyBinding, policyStore, new AllowGcOperatorAuthorizer(), gcRuntime);
+            FldBinSyncGcOperatorPolicy canaryPolicy = await policyCoordinator.UpdateAsync(new(
+                policyBinding, 0, "test-operator", "isolated Tombstone-only Stage 3 canary",
+                MaintenanceStarted: true,
+                ReceiptEnabled: false,
+                ChangeIdEnabled: false,
+                TombstoneEnabled: true));
+            Assert.Equal(1UL, canaryPolicy.Generation);
+
+            var adapter = new FldBinSyncAsyncHostAdapter(
+                coordinator, provider, remoteApply, _ => { },
+                gcPolicyCoordinator: policyCoordinator);
+            Assert.True(gcRuntime.IsRunning);
+            Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.Receipt));
+            Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.ChangeId));
+            Assert.True(gcRuntime.IsEnabled(FldBinSyncGcDomain.Tombstone));
+
+            FldBinSyncAsyncGcReadinessReport readiness =
+                await adapter.GetGcReadinessAsync(gc, trust);
+            Assert.False(readiness.Receipts.Enabled);
+            Assert.False(readiness.ChangeIds.Enabled);
+            Assert.True(readiness.Tombstones.Enabled);
+            Assert.True(readiness.Tombstones.PrerequisitesSatisfied);
 
             // Count the actual metadata pages before timing. The benchmark then
             // records provider page/spool counters for the GC pass itself.
