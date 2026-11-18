@@ -437,31 +437,50 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
                 throw new InvalidOperationException("The FLD tombstone-candidate snapshot is not active.");
         }
 
-        FldProviderSnapshotMetadataPage page = await _client.ReadSnapshotPageAsync(
+        ReadOnlyMemory<byte> response = await _client.ReadSnapshotPagePayloadAsync(
             handle, afterIndex, limit, cancellationToken).ConfigureAwait(false);
+        var page = FldDatabaseIpcProtocol.DecodeSnapshotPageResponseView(response);
         Interlocked.Increment(ref _tombstoneCandidatePagesRead);
-        var candidates = new List<ProviderMutation>(page.Entries.Count);
-        foreach (FldProviderSnapshotEntryMetadata metadata in page.Entries)
+        var candidates = new List<ProviderMutation>(page.Count);
+        for (int i = 0; i < page.Count; i++)
         {
-            if (!metadata.IsTombstone && !metadata.IsRecordTombstone)
+            ReadOnlyMemory<byte> entry = page.Entries.Slice(
+                i * FldDatabaseIpcProtocol.SnapshotPageEntryBytes,
+                FldDatabaseIpcProtocol.SnapshotPageEntryBytes);
+            ushort fieldId = BinaryPrimitives.ReadUInt16LittleEndian(entry.Slice(16, 2));
+            uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(entry.Slice(18, 4));
+            ulong wall = BinaryPrimitives.ReadUInt64LittleEndian(entry.Slice(22, 8));
+            uint logical = BinaryPrimitives.ReadUInt32LittleEndian(entry.Slice(30, 4));
+            byte flags = entry.Span[34];
+            bool isTombstone = (flags & 1) != 0;
+            bool isRecordTombstone = (flags & 2) != 0;
+            if (!isTombstone && !isRecordTombstone)
                 continue;
-            if (metadata.AuthorNodeId.Length != 16 || metadata.ChangeId.Length != 16)
+            if (valueLength != 0)
+                throw new InvalidDataException("FLD tombstone snapshot entries cannot contain values.");
+
+            ReadOnlyMemory<byte> authorNodeId = (flags & 4) != 0
+                ? entry.Slice(35, 16) : ReadOnlyMemory<byte>.Empty;
+            ushort keyEpoch = BinaryPrimitives.ReadUInt16LittleEndian(entry.Slice(51, 2));
+            ReadOnlyMemory<byte> changeId = (flags & 8) != 0
+                ? entry.Slice(53, 16) : ReadOnlyMemory<byte>.Empty;
+            if (authorNodeId.Length != 16 || changeId.Length != 16)
                 continue;
 
             candidates.Add(new ProviderMutation
             {
-                RecordId = _recordIdResolver(metadata.RecordId),
-                FieldId = metadata.FieldId,
-                IsTombstone = metadata.IsTombstone,
-                IsRecordTombstone = metadata.IsRecordTombstone,
-                HlcWall = metadata.HlcWall,
-                HlcLogical = metadata.HlcLogical,
-                AuthorNodeId = NodeId.From(metadata.AuthorNodeId),
-                KeyEpoch = metadata.KeyEpoch,
+                RecordId = _recordIdResolver(entry[..16]),
+                FieldId = fieldId,
+                IsTombstone = isTombstone,
+                IsRecordTombstone = isRecordTombstone,
+                HlcWall = wall,
+                HlcLogical = logical,
+                AuthorNodeId = NodeId.From(authorNodeId),
+                KeyEpoch = keyEpoch,
                 Value = Array.Empty<byte>(),
-                ChangeId = BatchId.From(metadata.ChangeId),
-                OriginAuthorEpoch = metadata.OriginAuthorEpoch,
-                OriginSequence = metadata.OriginSequence
+                ChangeId = BatchId.From(changeId),
+                OriginAuthorEpoch = BinaryPrimitives.ReadUInt32LittleEndian(entry.Slice(69, 4)),
+                OriginSequence = BinaryPrimitives.ReadUInt64LittleEndian(entry.Slice(73, 8))
             });
         }
 
