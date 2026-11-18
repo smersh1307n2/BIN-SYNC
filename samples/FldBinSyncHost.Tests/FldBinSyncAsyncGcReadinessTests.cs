@@ -71,6 +71,98 @@ public sealed class FldBinSyncAsyncGcReadinessTests
         }
     }
 
+
+    [Fact]
+    public async Task Startup_reads_durable_policy_before_first_provider_recovery_call()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-gc-startup-order-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 953);
+            using var metadata = new StorageMetadataStore(storage);
+            byte[] nodeBytes = new byte[16];
+            nodeBytes[^1] = 0x53;
+            NodeId localReplica = NodeId.From(nodeBytes);
+            var node = new NodeBuilder().WithNodeId(localReplica).WithEpoch(1).Build();
+            var events = new List<string>();
+            var binding = new FldBinSyncGcOperatorPolicyBinding(Guid.NewGuid(), localReplica, 19);
+            var policy = new FldBinSyncGcOperatorPolicy(
+                binding, 1, 1, "operator", "startup remains disabled",
+                MaintenanceStarted: false, ReceiptEnabled: false,
+                ChangeIdEnabled: false, TombstoneEnabled: false);
+            var policyStore = new RecordingPolicyStore(policy, events);
+            using var runtime = new FldBinSyncGcMaintenanceControl();
+            var policyCoordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+                binding, policyStore, new AllowPolicyAuthorizer(), runtime);
+            IAsyncDataProvider provider =
+                DispatchProxy.Create<IAsyncDataProvider, RecordingStartupProxy>();
+            ((RecordingStartupProxy)(object)provider).Events = events;
+            IAsyncProviderRemoteBatchCommitStore remoteApply =
+                DispatchProxy.Create<IAsyncProviderRemoteBatchCommitStore, RecordingStartupProxy>();
+            ((RecordingStartupProxy)(object)remoteApply).Events = events;
+
+            var coordinator = new AsyncStorageSyncCoordinator(node, metadata, "gc-startup-order", 19);
+            var adapter = new FldBinSyncAsyncHostAdapter(
+                coordinator, provider, remoteApply, _ => { },
+                gcPolicyCoordinator: policyCoordinator);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(
+                () => adapter.RecoverBeforeAcceptingSessionsAsync());
+
+            Assert.Equal("policy.read", events[0]);
+            Assert.Contains(events, item => item.StartsWith("provider.", StringComparison.Ordinal) ||
+                item.StartsWith("remote-apply.", StringComparison.Ordinal));
+            Assert.DoesNotContain("provider.before-policy", events);
+            Assert.DoesNotContain("remote-apply.before-policy", events);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    public class RecordingStartupProxy : DispatchProxy
+    {
+        public List<string> Events { get; set; } = new();
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            Events.Add("provider." + targetMethod?.Name);
+            throw new InvalidOperationException("Reached provider recovery after policy restore.");
+        }
+    }
+
+    private sealed class RecordingPolicyStore(
+        FldBinSyncGcOperatorPolicy policy,
+        List<string> events) : IFldBinSyncGcOperatorPolicyStore
+    {
+        public ValueTask<FldBinSyncGcOperatorPolicy?> ReadAsync(
+            FldBinSyncGcOperatorPolicyBinding binding,
+            CancellationToken cancellationToken = default)
+        {
+            events.Add("policy.read");
+            if (binding != policy.Binding)
+                throw new InvalidDataException("Unexpected policy binding.");
+            return ValueTask.FromResult<FldBinSyncGcOperatorPolicy?>(policy);
+        }
+
+        public ValueTask<bool> TryCommitAsync(
+            ulong expectedGeneration,
+            FldBinSyncGcOperatorPolicy replacement,
+            FldBinSyncGcOperatorAuditEntry auditEntry,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(false);
+
+        public ValueTask<IAsyncDisposable?> TryAcquireMaintenanceLeaseAsync(
+            FldBinSyncGcOperatorPolicyBinding binding,
+            ulong expectedGeneration,
+            FldBinSyncGcDomain domain,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IAsyncDisposable?>(null);
+    }
+
     public class ThrowIfStartupRecoveryRunsProxy : DispatchProxy
     {
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
