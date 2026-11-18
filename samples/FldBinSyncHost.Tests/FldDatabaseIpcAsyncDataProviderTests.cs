@@ -705,10 +705,10 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                     remoteCursor += (ulong)count;
                     previousRemoteDigest = batchDigest;
                     remoteBatchIndex++;
-                    int applied = start + count;
+                    int appliedCount = start + count;
                     if (candidateCount >= 100_000 &&
-                        (applied == candidateCount || applied % 25_600 == 0))
-                        MarkStage($"{phase} {applied}/{candidateCount}");
+                        (appliedCount == candidateCount || appliedCount % 25_600 == 0))
+                        MarkStage($"{phase} {appliedCount}/{candidateCount}");
                 }
                 MarkStage(phase + "-complete");
             }
