@@ -2214,7 +2214,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (identityKey is not null)
         {
             current.IsPersisted = true;
-            current.PersistedEntries[new StorageDatabase.StorageKey(identityKey)] = (identityKey, identityValue!);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(identityKey)] = (identityKey, identityValue!);
         }
         current.PendingApplies.Remove(applyToken);
         current.CompletedPendingApplies.Add(applyToken,
@@ -2252,9 +2252,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         foreach (var key in newRequiredStreams) current.RequiredPeerStreams.Add(key);
 
         foreach (var write in writes)
-            current.PersistedEntries[new StorageDatabase.StorageKey(write.Key)] = (write.Key, write.Value);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(write.Key)] = (write.Key, write.Value);
         foreach (var delete in deletes)
-            current.PersistedEntries.Remove(new StorageDatabase.StorageKey(delete));
+            current.PersistedEntries.Remove(StorageDatabase.StorageKey.FromOwned(delete));
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return receipt;
@@ -2636,11 +2636,11 @@ private static bool ValidateIncomingBatchForStaging(
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
         if (identityKey is not null)
-            current.PersistedEntries[new StorageDatabase.StorageKey(identityKey)] = (identityKey, identityValue!);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(identityKey)] = (identityKey, identityValue!);
         foreach (var write in writes)
-            current.PersistedEntries[new StorageDatabase.StorageKey(write.Key)] = (write.Key, write.Value);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(write.Key)] = (write.Key, write.Value);
         if (legacyChainDeleteKey is not null)
-            current.PersistedEntries.Remove(new StorageDatabase.StorageKey(legacyChainDeleteKey));
+            current.PersistedEntries.Remove(StorageDatabase.StorageKey.FromOwned(legacyChainDeleteKey));
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return receipt;
@@ -3034,7 +3034,7 @@ private static bool ValidateIncomingBatchForStaging(
             foreach (var update in updates)
             {
                 state.ChangeLedger[update.LedgerKey] = update.Value;
-                state.PersistedEntries[new StorageDatabase.StorageKey(update.StorageKey)] =
+                state.PersistedEntries[StorageDatabase.StorageKey.FromOwned(update.StorageKey)] =
                     (update.StorageKey, update.Encoded);
             }
             state.StorageCommitSeq = _storage.LastCommitSeq;
@@ -3423,7 +3423,7 @@ private static bool ValidateIncomingBatchForStaging(
                 return false;
             byte[] key = EncodeBaselineApplyMarkerKey(
                 partitionKey, acceptedRoster.NamespaceId, acceptedRoster.RosterGeneration, generation);
-            if (!current.PersistedEntries.TryGetValue(new StorageDatabase.StorageKey(key), out var row))
+            if (!current.PersistedEntries.TryGetValue(StorageDatabase.StorageKey.FromOwned(key), out var row))
                 return false;
             byte[] value = row.Value;
             byte[] expectedRosterDigest = NamespaceRosterProtocol.ComputeDigest(acceptedRoster);
@@ -4070,7 +4070,7 @@ private static bool ValidateIncomingBatchForStaging(
             byte[] markerValue = EncodeBaselineApplyMarker(
                 acceptedRoster, generation, snapshotDigest, evidenceDigest,
                 reports.Count, snapshotEntryCount ?? 0);
-            if (current.PersistedEntries.TryGetValue(new StorageDatabase.StorageKey(markerKey), out var priorMarker))
+            if (current.PersistedEntries.TryGetValue(StorageDatabase.StorageKey.FromOwned(markerKey), out var priorMarker))
             {
                 if (priorMarker.Value.AsSpan().SequenceEqual(markerValue))
                     return false;
@@ -5208,7 +5208,7 @@ private static bool ValidateIncomingBatchForStaging(
         current.IsPersisted = true;
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
-        current.PersistedEntries[new StorageDatabase.StorageKey(key)] = (key, value);
+        current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(key)] = (key, value);
         return commitSeq;
     }
 
@@ -5279,7 +5279,7 @@ private static bool ValidateIncomingBatchForStaging(
         current.Receipts[key] = refreshed;
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
-        current.PersistedEntries[new StorageDatabase.StorageKey(storageKey)] = (storageKey, value);
+        current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(storageKey)] = (storageKey, value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
     }
@@ -5295,7 +5295,7 @@ private static bool ValidateIncomingBatchForStaging(
         byte[] value = new byte[16];
         BinaryPrimitives.WriteUInt64LittleEndian(value, acknowledged);
         BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(8), highWatermark);
-        var storageKey = new StorageDatabase.StorageKey(key);
+        var storageKey = StorageDatabase.StorageKey.FromOwned(key);
         if (current.PersistedEntries.TryGetValue(storageKey, out var existing) &&
             existing.Value.AsSpan().SequenceEqual(value))
             return;
@@ -5315,7 +5315,7 @@ private static bool ValidateIncomingBatchForStaging(
             current.OutboundAck[new OutboundKey(namespaceId, author)] = acknowledged;
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
-        current.PersistedEntries[new StorageDatabase.StorageKey(key)] = (key, value);
+        current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(key)] = (key, value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
     }
@@ -5378,7 +5378,7 @@ private static bool ValidateIncomingBatchForStaging(
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
         foreach (var key in keys)
-            current.PersistedEntries.Remove(new StorageDatabase.StorageKey(key));
+            current.PersistedEntries.Remove(StorageDatabase.StorageKey.FromOwned(key));
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return removedSequences.Count;
@@ -5510,9 +5510,9 @@ private static bool ValidateIncomingBatchForStaging(
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
         if (identityKey is not null)
-            current.PersistedEntries[new StorageDatabase.StorageKey(identityKey)] = (identityKey, identityValue!);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(identityKey)] = (identityKey, identityValue!);
         foreach (var write in writes)
-            current.PersistedEntries[new StorageDatabase.StorageKey(write.Key)] = (write.Key, write.Value);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(write.Key)] = (write.Key, write.Value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
     }
@@ -5541,8 +5541,8 @@ private static bool ValidateIncomingBatchForStaging(
         batch.Put(storageKey, value);
         CommitPartitionBatch(batch, partitionKey, current);
         if (identityKey is not null)
-            current.PersistedEntries[new StorageDatabase.StorageKey(identityKey)] = (identityKey, identityValue!);
-        current.PersistedEntries[new StorageDatabase.StorageKey(storageKey)] = (storageKey, value);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(identityKey)] = (identityKey, identityValue!);
+        current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(storageKey)] = (storageKey, value);
         current.OutboundLeases[key] = lease;
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
@@ -5570,7 +5570,7 @@ private static bool ValidateIncomingBatchForStaging(
         current.CompletedPeerBaselines.Add(peer);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
-        current.PersistedEntries[new StorageDatabase.StorageKey(key)] = (key, value);
+        current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(key)] = (key, value);
     }
 
     private void PersistPendingApply(
@@ -5598,9 +5598,9 @@ private static bool ValidateIncomingBatchForStaging(
         current.PendingApplies.Add(applyToken, value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
-        current.PersistedEntries[new StorageDatabase.StorageKey(key)] = (key, encoded);
+        current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(key)] = (key, encoded);
         if (identityKey is not null)
-            current.PersistedEntries[new StorageDatabase.StorageKey(identityKey)] = (identityKey, identityValue!);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(identityKey)] = (identityKey, identityValue!);
     }
 
     private void CommitPeerMetadataDelta(
@@ -5655,11 +5655,11 @@ private static bool ValidateIncomingBatchForStaging(
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
         if (identityKey is not null)
-            current.PersistedEntries[new StorageDatabase.StorageKey(identityKey)] = (identityKey, identityValue!);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(identityKey)] = (identityKey, identityValue!);
         foreach (var key in deletes)
-            current.PersistedEntries.Remove(new StorageDatabase.StorageKey(key));
+            current.PersistedEntries.Remove(StorageDatabase.StorageKey.FromOwned(key));
         foreach (var write in writes)
-            current.PersistedEntries[new StorageDatabase.StorageKey(write.Key)] = (write.Key, write.Value);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(write.Key)] = (write.Key, write.Value);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         ReportAllocation("metadata-cache-publish");
@@ -5786,12 +5786,12 @@ private static bool ValidateIncomingBatchForStaging(
         if (ReferenceEquals(current.PersistedEntries, EmptyEntries))
             current.PersistedEntries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
         if (identityKey is not null)
-            current.PersistedEntries[new StorageDatabase.StorageKey(identityKey)] = (identityKey, identityValue!);
-        current.PersistedEntries[new StorageDatabase.StorageKey(streamKey)] = (streamKey, streamValue);
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(identityKey)] = (identityKey, identityValue!);
+        current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(streamKey)] = (streamKey, streamValue);
         if (requiredKey is not null)
-            current.PersistedEntries[new StorageDatabase.StorageKey(requiredKey)] = (requiredKey, Array.Empty<byte>());
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(requiredKey)] = (requiredKey, Array.Empty<byte>());
         if (rosterRowKey is not null)
-            current.PersistedEntries[new StorageDatabase.StorageKey(rosterRowKey)] = (rosterRowKey, Array.Empty<byte>());
+            current.PersistedEntries[StorageDatabase.StorageKey.FromOwned(rosterRowKey)] = (rosterRowKey, Array.Empty<byte>());
     }
 
     private static readonly Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)> EmptyEntries = new();
@@ -5850,7 +5850,7 @@ private static bool ValidateIncomingBatchForStaging(
     {
         byte[] root = PartitionRoot(partition);
         var entries = new Dictionary<StorageDatabase.StorageKey, (byte[] Key, byte[] Value)>();
-        void Add(byte[] key, byte[] value) => entries.Add(new StorageDatabase.StorageKey(key), (key, value));
+        void Add(byte[] key, byte[] value) => entries.Add(StorageDatabase.StorageKey.FromOwned(key), (key, value));
         Add(StorageKey(root, 0, ReadOnlySpan<byte>.Empty), EncodePartitionIdentity(partition));
 
         foreach (var pair in state.Receipts)
@@ -6046,7 +6046,7 @@ private static bool ValidateIncomingBatchForStaging(
         {
             rowSeen = true;
             state.PersistedEntries.Add(
-                new StorageDatabase.StorageKey(row.Key), (row.Key, row.Value));
+                StorageDatabase.StorageKey.FromOwned(row.Key), (row.Key, row.Value));
             ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
             if (suffix.Length < 1) throw new InvalidDataException("Metadata storage key is truncated.");
             byte kind = suffix[0];
