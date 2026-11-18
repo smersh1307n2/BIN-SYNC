@@ -365,17 +365,26 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
         return new ValueTask<ulong>(_client.GetOutboxHighWatermarkAsync(cancellationToken));
     }
 
-    public async ValueTask<ProviderSnapshotHandle> OpenSnapshotAsync(
+    public ValueTask<ProviderSnapshotHandle> OpenSnapshotAsync(
         CancellationToken cancellationToken = default)
+        => OpenSnapshotCoreAsync(transient: false, addSnapshotBarrier: true, cancellationToken);
+
+    private async ValueTask<ProviderSnapshotHandle> OpenSnapshotCoreAsync(
+        bool transient,
+        bool addSnapshotBarrier,
+        CancellationToken cancellationToken)
     {
         ThrowIfUnavailable(cancellationToken);
-        FldDatabaseIpcSnapshotHandle handle = await _client.OpenSnapshotAsync(
-            Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+        Guid operationId = Guid.NewGuid();
+        FldDatabaseIpcSnapshotHandle handle = transient
+            ? await _client.OpenTransientSnapshotAsync(operationId, cancellationToken).ConfigureAwait(false)
+            : await _client.OpenSnapshotAsync(operationId, cancellationToken).ConfigureAwait(false);
         lock (_gate)
         {
             ThrowIfDisposed();
             _snapshots.Add(handle.SnapshotToken, handle);
-            _snapshotBarriers.Add(handle.SourceFeedWatermark);
+            if (addSnapshotBarrier)
+                _snapshotBarriers.Add(handle.SourceFeedWatermark);
         }
         return new ProviderSnapshotHandle(handle.SnapshotToken, handle.SourceFeedWatermark);
     }
@@ -408,7 +417,8 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 
     public ValueTask<ProviderSnapshotHandle> OpenTombstoneGcCandidateSnapshotAsync(
         CancellationToken cancellationToken = default)
-        => OpenSnapshotAsync(cancellationToken);
+        => OpenSnapshotCoreAsync(
+            transient: true, addSnapshotBarrier: false, cancellationToken);
 
     public async ValueTask<ProviderTombstoneGcCandidatePage> ReadTombstoneGcCandidatePageAsync(
         Guid snapshotToken, int afterIndex, int limit,
