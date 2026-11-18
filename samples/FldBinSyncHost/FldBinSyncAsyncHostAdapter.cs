@@ -157,10 +157,24 @@ public sealed class FldBinSyncAsyncHostAdapter
     /// Recover PendingApply and publish the captured provider feed before the host
     /// begins accepting peer sessions.
     /// </summary>
-    public Task<AsyncStorageStartupRecoveryResult> RecoverBeforeAcceptingSessionsAsync(
+    public async Task<AsyncStorageStartupRecoveryResult> RecoverBeforeAcceptingSessionsAsync(
         CancellationToken cancellationToken = default)
-        => _coordinator.RecoverBeforeAcceptingSessionsAsync(
-            _provider, _remoteApply, _persistNode, _publicationLimit, cancellationToken);
+    {
+        // Startup is the only safe point to restore operator intent: peer sessions
+        // must not be accepted, and no maintenance scheduler may start, until the
+        // durable policy has been validated. Missing policy leaves GC stopped;
+        // corrupt/unavailable policy fails closed and prevents startup recovery.
+        if (_requireDurableOperatorPolicy && _gcPolicyCoordinator is null)
+            throw new InvalidOperationException(
+                "Durable GC operator policy coordinator is required before accepting peer sessions.");
+
+        if (_gcPolicyCoordinator is not null)
+            await _gcPolicyCoordinator.RestoreAsync(cancellationToken).ConfigureAwait(false);
+
+        return await _coordinator.RecoverBeforeAcceptingSessionsAsync(
+            _provider, _remoteApply, _persistNode, _publicationLimit, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public Task<int> PublishLocalChangesAsync(CancellationToken cancellationToken = default)
         => _coordinator.PublishLocalChangesAsync(
