@@ -8,6 +8,7 @@ on:
       - 'samples/FldBinSyncHost/FldBinSyncGcOperatorPolicy.cs'
       - 'samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs'
+      - 'samples/FldBinSyncHost.Tests/FldBinSyncAsyncGcReadinessTests.cs'
       - 'samples/FldBinSyncHost.Tests/StorageFldBinSyncGcOperatorPolicyStoreTests.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj'
       - 'samples/FldBinSyncHost.LeaseLockProbe/**'
