@@ -483,29 +483,40 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
     {
         ThrowIfUnavailable(cancellationToken);
         ArgumentNullException.ThrowIfNull(approvedCandidates);
-        var candidates = new FldTombstoneGcCandidate[approvedCandidates.Count];
-        for (int i = 0; i < candidates.Length; i++)
+        byte[] payload = FldDatabaseIpcProtocol.CreateTombstoneGcApprovalSpoolAppendBuffer(
+            spoolToken, approvedCandidates.Count);
+        for (int i = 0; i < approvedCandidates.Count; i++)
         {
             ProviderMutation mutation = approvedCandidates[i]
                 ?? throw new ArgumentException("Approved tombstone candidate cannot be null.", nameof(approvedCandidates));
-            if (mutation.IsRecordTombstone == mutation.IsTombstone)
-                throw new ArgumentException("Only record or field tombstones may be approved for GC.", nameof(approvedCandidates));
+            if (mutation.IsRecordTombstone == mutation.IsTombstone ||
+                (mutation.IsRecordTombstone && mutation.FieldId != FldLifecycle.FieldId) ||
+                (mutation.IsTombstone && mutation.FieldId == FldLifecycle.FieldId) ||
+                mutation.HlcWall == 0 || mutation.OriginAuthorEpoch == 0 ||
+                mutation.OriginSequence == 0)
+                throw new ArgumentException("Approved tombstone candidate is not canonical.", nameof(approvedCandidates));
 
-            byte[] recordId = new byte[16];
-            byte[] changeId = new byte[16];
-            byte[] authorNodeId = new byte[16];
-            mutation.RecordId.WriteTo(recordId);
-            mutation.ChangeId.WriteTo(changeId);
-            mutation.AuthorNodeId.WriteTo(authorNodeId);
-            candidates[i] = new FldTombstoneGcCandidate(
-                recordId, mutation.FieldId, changeId, authorNodeId,
-                mutation.HlcWall, mutation.HlcLogical,
-                mutation.OriginAuthorEpoch, mutation.OriginSequence,
-                mutation.IsRecordTombstone, mutation.IsTombstone);
+            int offset = FldDatabaseIpcProtocol.TombstoneGcApprovalSpoolAppendHeaderBytes +
+                i * FldDatabaseIpcProtocol.TombstoneGcCandidateBytes;
+            Span<byte> entry = payload.AsSpan(offset, FldDatabaseIpcProtocol.TombstoneGcCandidateBytes);
+            mutation.RecordId.WriteTo(entry[..16]);
+            BinaryPrimitives.WriteUInt16LittleEndian(entry[16..], mutation.FieldId);
+            mutation.ChangeId.WriteTo(entry.Slice(18, 16));
+            mutation.AuthorNodeId.WriteTo(entry.Slice(34, 16));
+            if (entry[..16].IndexOfAnyExcept((byte)0) < 0 ||
+                entry.Slice(18, 16).IndexOfAnyExcept((byte)0) < 0 ||
+                entry.Slice(34, 16).IndexOfAnyExcept((byte)0) < 0)
+                throw new ArgumentException("Approved tombstone candidate identities must be nonzero.", nameof(approvedCandidates));
+
+            BinaryPrimitives.WriteUInt64LittleEndian(entry[50..], mutation.HlcWall);
+            BinaryPrimitives.WriteUInt32LittleEndian(entry[58..], mutation.HlcLogical);
+            BinaryPrimitives.WriteUInt32LittleEndian(entry[62..], mutation.OriginAuthorEpoch);
+            BinaryPrimitives.WriteUInt64LittleEndian(entry[66..], mutation.OriginSequence);
+            entry[74] = mutation.IsRecordTombstone ? (byte)1 : (byte)2;
         }
 
-        await _client.AppendTombstoneGcApprovalSpoolAsync(
-            spoolToken, candidates, cancellationToken).ConfigureAwait(false);
+        await _client.AppendTombstoneGcApprovalSpoolPayloadAsync(
+            payload, cancellationToken).ConfigureAwait(false);
         Interlocked.Increment(ref _tombstoneApprovalBatchesAppended);
     }
 
