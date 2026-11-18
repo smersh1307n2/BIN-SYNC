@@ -927,7 +927,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.Empty(await ReadAllTombstoneCandidatesAsync(provider, tombstonePageSize));
             MarkStage("candidate-snapshot-empty-check-complete");
 
-            string hostDiagnosticsPath = Path.Combine(root, "host-gc-diagnostics.log");
+            string hostDiagnosticsPath = Path.Combine(hostRoot, "host-gc-diagnostics.log");
             string hostDiagnostics = File.Exists(hostDiagnosticsPath)
                 ? string.Join('|', File.ReadAllLines(hostDiagnosticsPath))
                 : "missing";
