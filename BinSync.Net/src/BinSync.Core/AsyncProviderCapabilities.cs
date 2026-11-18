@@ -151,6 +151,17 @@ public interface IAsyncApplicationGcReferenceScanner
     ValueTask<IAsyncApplicationGcReferenceScan> OpenScanAsync(
         string scopeId, NodeId localReplica, int namespaceId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Opens the stable Host reference snapshot after sealing the committed WAL prefix.
+    /// Providers without a dedicated seal operation may retain their ordinary scan
+    /// semantics; process-isolated FLD providers override this method with the explicit
+    /// Receipt-GC scan mode. Physical Tombstone GC is not enabled by this capability.
+    /// </summary>
+    ValueTask<IAsyncApplicationGcReferenceScan> OpenReceiptGcScanAsync(
+        string scopeId, NodeId localReplica, int namespaceId,
+        CancellationToken cancellationToken = default)
+        => OpenScanAsync(scopeId, localReplica, namespaceId, cancellationToken);
 }
 
 public interface IAsyncApplicationGcReferenceScan : IAsyncDisposable
