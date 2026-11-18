@@ -1,4 +1,4 @@
-name: BIN-SYNC executable Host lifecycle
+name: BIN-SYNC executable Host lifecycle and TCP data flow
 
 on:
   push:
@@ -69,7 +69,7 @@ jobs:
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
 
-      - name: Test authenticated operator API, startup barrier and process restart
+      - name: Test two-Host TCP data flow, operator API, restart and backup rollback
         shell: bash
         run: |
           dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
