@@ -39,7 +39,7 @@ Workflow: `.github/workflows/gc-endurance-stage4.yml`
 
 This test provides repeated cross-platform evidence for the implemented algorithms, disposable Host composition and lifecycle, durable policy behavior, FLD IPC path, peer-retirement/rejoin scenarios, and recovery after the crash cuts covered by existing canaries.
 
-It cannot prove behavior with a future production transport, real application identity provider, independent operational anti-rollback authority, real-world network partitions, physical power loss, or an application Host that does not yet exist. The test Host uses a deliberately test-only TCP listener and operator authorizer. Those remaining items require the future application environment and must not be represented as covered by Stage 4.
+It cannot prove behavior with a production identity provider, independently managed operator credentials/anti-rollback authority, real-world network partitions, physical power loss, or a production application Host that does not yet exist. The executable test Host now uses the repository's actual `TcpSyncListener`/`TcpSync` transport and `SyncSession` HELLO/HELLO_ACK path, plus a deliberately test-only peer allowlist and operator authorizer. The TCP transport/session path is exercised, but production identity and operational controls remain unimplemented. Those remaining items require a future application environment and must not be represented as covered by Stage 4.
 
 ## Release interpretation
 
