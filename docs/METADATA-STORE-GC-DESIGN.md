@@ -322,3 +322,21 @@ The decoded partition cache was also unbounded. It is now a four-entry LRU. Evic
 PersistStreamWatermark no longer opens a Storage snapshot just to compare a watermark; it uses the decoded ACK/high-watermark state, preserving the distinction between an absent durable row and a persisted zero ACK.
 
 These changes remove the duplicate encoded row-value retention and unnecessary snapshot collection copies; they do not change the durable FLD row format or enable any physical GC. Cumulative allocation totals are not a proxy for retained heap. Follow-up measurement must use a fresh process, force full GC after loading 50k/100k payload-bearing rows, and report managed retained bytes, LOH, current WorkingSet and peak WorkingSet separately. Continue to profile RelaySequenceIndexes and EncodeIncomingBatch only after this retained-memory baseline exists.
+
+
+## ChangeId GC page-size default (2026-11-18)
+
+The Host maintenance API now separates the ChangeId page bound from the Receipt/Tombstone bound. ChangeId compaction defaults to **4096 candidates per page**; callers can lower it through `changeIdLimit` (1–4096). Receipt compaction retains its 256 default, and provider Tombstone pages remain clamped to the provider maximum (256). This does not enable any GC domain: startup feature flags remain false and the runtime maintenance control starts stopped.
+
+Evidence from the composed FLD IPC Host test on BIN-SYNC commit `fd307ba6578f9311a7133977556abc2b203062cd`, workflow `44250693028` (all six measurements passed), 50,000 ChangeId candidates:
+
+| Page limit | Pages | Elapsed | Cumulative allocated |
+|---:|---:|---:|---:|
+| 256 | 196 | 2,111 ms | 171.28 MB |
+| 1024 | 49 | 1,164 ms | 60.75 MB |
+| 2048 | 25 | 666 ms | 43.79 MB |
+| 4096 | 13 | 723 ms | 35.85 MB |
+
+A prior independent run (`44247560518`) showed the same allocation gap: 35.86 MB at 4096 versus 172.86 MB at 256. The 4096 setting was selected because it minimizes cumulative allocations while remaining close to the fastest observed time; 2048 was about 56 ms faster in one run but allocated about 7.94 MB more. The 256 default caused repeated B-tree/StorageWriteBatch work across 196 passes; measured allocations in FLD storage commit and Metadata revalidation commit were each about 4x higher than at 4096.
+
+These are cumulative allocation and elapsed-time measurements, **not retained heap measurements**. PeakWorkingSet in the current multi-case test process is contaminated by earlier theory cases and cannot be used as a per-limit peak. Follow-up must capture current WorkingSet and managed retained heap after full GC in isolated processes before claiming a peak-memory bound. No production GC activation is authorized by these measurements.
