@@ -56,7 +56,16 @@ FldDatabaseIpcAsyncDataProvider? provider = null;
 FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
 FldBinSyncAsyncHostComposition? composition = null;
 var peerListener = new TestPeerListener();
-var scheduler = new TestMaintenanceScheduler();
+var scheduler = new TestMaintenanceScheduler(
+    cancellationToken => composition!.Operator.RunOneMaintenanceRoundAsync(
+        pageLimit: 256,
+        changeIdPageLimit: 4096,
+        cancellationToken: cancellationToken),
+    exception =>
+    {
+        Console.Error.WriteLine($"Test maintenance scheduler stopped: {exception.Message}");
+        composition!.Operator.EmergencyStop();
+    });
 WebApplication? app = null;
 bool durableStopCommitted = false;
 
@@ -403,16 +412,27 @@ internal sealed class TestPeerListener
 
 internal sealed class TestMaintenanceScheduler
 {
+    private readonly Func<CancellationToken, Task> _runMaintenance;
+    private readonly Action<Exception> _onFailure;
     private CancellationTokenSource? _stop;
     private Task? _loop;
     private long _ticks;
+    private int _running;
 
-    public bool IsRunning => _stop is not null && !_stop.IsCancellationRequested;
+    public TestMaintenanceScheduler(
+        Func<CancellationToken, Task> runMaintenance,
+        Action<Exception> onFailure)
+    {
+        _runMaintenance = runMaintenance;
+        _onFailure = onFailure;
+    }
+
+    public bool IsRunning => Volatile.Read(ref _running) != 0;
     public long TickCount => Interlocked.Read(ref _ticks);
 
     public void Start()
     {
-        if (_stop is not null)
+        if (Interlocked.Exchange(ref _running, 1) != 0)
             throw new InvalidOperationException("The test maintenance scheduler is already running.");
         _stop = new CancellationTokenSource();
         _loop = RunAsync(_stop.Token);
@@ -422,12 +442,31 @@ internal sealed class TestMaintenanceScheduler
     {
         using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
         while (await timer.WaitForNextTickAsync(cancellationToken))
-            Interlocked.Increment(ref _ticks);
+        {
+            try
+            {
+                // Exercise the real bounded adapter/lease path. All physical-GC
+                // startup proof flags are false in this test Host.
+                await _runMaintenance(cancellationToken);
+                Interlocked.Increment(ref _ticks);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                _onFailure(exception);
+                Interlocked.Exchange(ref _running, 0);
+                return;
+            }
+        }
     }
 
     public async Task StopAsync()
     {
         CancellationTokenSource? stop = Interlocked.Exchange(ref _stop, null);
+        Interlocked.Exchange(ref _running, 0);
         if (stop is null)
             return;
         stop.Cancel();
