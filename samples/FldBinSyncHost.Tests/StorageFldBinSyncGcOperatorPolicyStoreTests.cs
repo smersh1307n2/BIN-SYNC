@@ -150,7 +150,7 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
                 firstStore.TryCommitAsync(1, first, firstAudit).AsTask(),
                 secondStore.TryCommitAsync(1, second, secondAudit).AsTask());
 
-            Assert.Single(committed.Where(value => value));
+            Assert.Single(committed, value => value);
             FldBinSyncGcOperatorPolicy persisted = Assert.IsType<FldBinSyncGcOperatorPolicy>(
                 await firstStore.ReadAsync(Binding()));
             Assert.Equal(2UL, persisted.Generation);
@@ -317,6 +317,15 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
         {
             try { Directory.Delete(root, recursive: true); } catch { }
         }
+    }
+
+    private sealed class AllowAllAuthorizer : IFldBinSyncGcOperatorAuthorizer
+    {
+        public ValueTask<bool> AuthorizeAsync(
+            string actorId,
+            FldBinSyncGcOperatorPolicyBinding binding,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(true);
     }
 
     private static void CopyDirectory(string source, string destination)
