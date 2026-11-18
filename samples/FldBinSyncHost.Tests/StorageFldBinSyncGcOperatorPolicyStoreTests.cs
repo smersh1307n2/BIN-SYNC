@@ -165,6 +165,80 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
     }
 
     [Fact]
+    public async Task Cross_process_lease_owner_death_unblocks_policy_update_and_reacquisition()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-gc-policy-process-lease-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 977);
+            using var metadata = new StorageMetadataStore(storage);
+            var store = new StorageFldBinSyncGcOperatorPolicyStore(storage, metadata);
+            var (initial, initialAudit) = Next(1, 1, changeId: true);
+            Assert.True(await store.TryCommitAsync(0, initial, initialAudit));
+
+            string leasePath = (string)typeof(StorageFldBinSyncGcOperatorPolicyStore)
+                .GetMethod("LeasePath", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Instance)!
+                .Invoke(store, new object[] { Binding(), FldBinSyncGcDomain.ChangeId })!;
+            string probePath = Path.Combine(AppContext.BaseDirectory,
+                "lease-probe", "FldBinSyncHost.LeaseLockProbe.dll");
+            Assert.True(File.Exists(probePath), $"Lease lock probe was not built: {probePath}");
+
+            var start = new System.Diagnostics.ProcessStartInfo("dotnet")
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+            start.ArgumentList.Add(probePath);
+            start.ArgumentList.Add(leasePath);
+            using System.Diagnostics.Process owner =
+                System.Diagnostics.Process.Start(start) ??
+                throw new InvalidOperationException("Could not start the lease owner process.");
+            try
+            {
+                string? ready = await owner.StandardOutput.ReadLineAsync()
+                    .WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal("READY", ready);
+
+                var (replacement, replacementAudit) = Next(2, 2, changeId: true);
+                replacement = replacement with { Reason = "cross-process lease release" };
+                replacementAudit = replacementAudit with { Reason = "cross-process lease release" };
+                Task<bool> update = store.TryCommitAsync(
+                    1, replacement, replacementAudit).AsTask();
+                await Task.Delay(200);
+                Assert.False(update.IsCompleted,
+                    "A policy update must wait while another process owns the domain lease.");
+
+                owner.Kill(entireProcessTree: true);
+                await owner.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.True(await update.WaitAsync(TimeSpan.FromSeconds(5)));
+
+                IAsyncDisposable? reacquired = await store.TryAcquireMaintenanceLeaseAsync(
+                    Binding(), 2, FldBinSyncGcDomain.ChangeId);
+                Assert.NotNull(reacquired);
+                await reacquired!.DisposeAsync();
+            }
+            finally
+            {
+                if (!owner.HasExited)
+                {
+                    owner.Kill(entireProcessTree: true);
+                    await owner.WaitForExitAsync();
+                }
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Corrupt_persisted_policy_fails_closed_during_restore()
     {
         string directory = Path.Combine(Path.GetTempPath(),
