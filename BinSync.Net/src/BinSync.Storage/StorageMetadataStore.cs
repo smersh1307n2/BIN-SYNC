@@ -5639,7 +5639,16 @@ private static bool ValidateIncomingBatchForStaging(
         foreach (var write in writes)
             batch.Put(write.Key, write.Value);
         ReportAllocation("metadata-batch-staging");
-        CommitPartitionBatch(batch, partitionKey, current);
+        Action<string, long>? previousStorageObserver = _storage.AllocationObserver;
+        _storage.AllocationObserver = allocationObserver;
+        try
+        {
+            CommitPartitionBatch(batch, partitionKey, current);
+        }
+        finally
+        {
+            _storage.AllocationObserver = previousStorageObserver;
+        }
         ReportAllocation("fld-storage-commit");
 
         publish();
