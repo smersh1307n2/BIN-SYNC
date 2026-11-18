@@ -9,6 +9,7 @@ on:
       - 'samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncAsyncGcReadinessTests.cs'
+      - 'samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs'
       - 'samples/FldBinSyncHost.Tests/StorageFldBinSyncGcOperatorPolicyStoreTests.cs'
       - 'samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj'
       - 'samples/FldBinSyncHost.LeaseLockProbe/**'
@@ -67,14 +68,14 @@ jobs:
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
 
-      - name: Test policy, corruption, backup and cross-process lease behavior
+      - name: Test policy, cross-process lease, startup ordering and ChangeId GC
         shell: bash
         run: |
           dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
-            --filter "FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests" \
+            --filter "FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale" \
             --logger "console;verbosity=normal" \
             --logger "trx;LogFileName=gc-operator-policy-windows.trx" \
             --results-directory "$RUNNER_TEMP/gc-operator-policy-test-results" \
