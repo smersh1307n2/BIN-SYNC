@@ -1133,10 +1133,17 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
+            long managedHeapBefore = GC.GetTotalMemory(forceFullCollection: true);
             long allocatedBefore = GC.GetTotalAllocatedBytes(precise: true);
+            int gen0Before = GC.CollectionCount(0);
+            int gen1Before = GC.CollectionCount(1);
+            int gen2Before = GC.CollectionCount(2);
             using Process process = Process.GetCurrentProcess();
+            process.Refresh();
+            long workingSetBefore = process.WorkingSet64;
             long peakWorkingSetBefore = process.PeakWorkingSet64;
             hostWorker!.Refresh();
+            long hostWorkingSetBefore = hostWorker.WorkingSet64;
             long hostPeakWorkingSetBefore = hostWorker.PeakWorkingSet64;
             var stopwatch = Stopwatch.StartNew();
             int totalReclaimed = 0;
@@ -1155,9 +1162,15 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             }
             stopwatch.Stop();
             long allocatedBytes = GC.GetTotalAllocatedBytes(precise: true) - allocatedBefore;
+            int gen0Collections = GC.CollectionCount(0) - gen0Before;
+            int gen1Collections = GC.CollectionCount(1) - gen1Before;
+            int gen2Collections = GC.CollectionCount(2) - gen2Before;
+            long managedHeapAfter = GC.GetTotalMemory(forceFullCollection: true);
             process.Refresh();
+            long workingSetAfter = process.WorkingSet64;
             long peakWorkingSet = process.PeakWorkingSet64;
             hostWorker!.Refresh();
+            long hostWorkingSetAfter = hostWorker.WorkingSet64;
             long hostPeakWorkingSet = hostWorker.PeakWorkingSet64;
 
             Assert.Equal(candidateCount, totalReclaimed);
@@ -1168,10 +1181,13 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             string metrics =
                 $"COMPOSED_HOST_METADATA_GC_SCALE Candidates={candidateCount} PageLimit={gcPageLimit} Pages={pages} " +
                 $"ElapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3} " +
-                $"AllocatedBytes={allocatedBytes} TestProcessPeakWorkingSetBytes={peakWorkingSet} " +
-                $"TestProcessPeakBeforeBytes={peakWorkingSetBefore} " +
-                $"HostProcessPeakWorkingSetBytes={hostPeakWorkingSet} " +
-                $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore} " +
+                $"AllocatedBytes={allocatedBytes} ManagedHeapBeforeBytes={managedHeapBefore} " +
+                $"ManagedHeapAfterBytes={managedHeapAfter} TestProcessWorkingSetBeforeBytes={workingSetBefore} " +
+                $"TestProcessWorkingSetAfterBytes={workingSetAfter} TestProcessPeakWorkingSetBytes={peakWorkingSet} " +
+                $"TestProcessPeakBeforeBytes={peakWorkingSetBefore} HostProcessWorkingSetBeforeBytes={hostWorkingSetBefore} " +
+                $"HostProcessWorkingSetAfterBytes={hostWorkingSetAfter} HostProcessPeakWorkingSetBytes={hostPeakWorkingSet} " +
+                $"HostProcessPeakBeforeBytes={hostPeakWorkingSetBefore} Gen0Collections={gen0Collections} " +
+                $"Gen1Collections={gen1Collections} Gen2Collections={gen2Collections} " +
                 $"AllocationStages={string.Join(';', changeIdAllocationStages.Select(pair => $"{pair.Key}:{pair.Value}"))}";
             Console.WriteLine(metrics);
 
@@ -1185,11 +1201,11 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
                 string summaryLine =
                     $"- **{candidateCount:N0} candidates (page limit {gcPageLimit})**: {pages} pages; " +
                     $"{stopwatch.Elapsed.TotalMilliseconds:F3} ms; " +
-                    $"{allocatedBytes:N0} allocated bytes; " +
-                    $"test-process peak WS {peakWorkingSet:N0} bytes " +
-                    $"(before {peakWorkingSetBefore:N0}); " +
-                    $"Host-process peak WS {hostPeakWorkingSet:N0} bytes " +
-                    $"(before {hostPeakWorkingSetBefore:N0})." +
+                    $"{allocatedBytes:N0} allocated bytes; retained managed heap {managedHeapBefore:N0}→{managedHeapAfter:N0}; " +
+                    $"test WS {workingSetBefore:N0}→{workingSetAfter:N0} bytes; " +
+                    $"Host WS {hostWorkingSetBefore:N0}→{hostWorkingSetAfter:N0} bytes; " +
+                    $"peak WS test {peakWorkingSet:N0}, Host {hostPeakWorkingSet:N0}; " +
+                    $"GC collections Gen0/1/2 {gen0Collections}/{gen1Collections}/{gen2Collections}." +
                     Environment.NewLine;
                 string? directory = Path.GetDirectoryName(measurementFile);
                 if (!string.IsNullOrWhiteSpace(directory))
