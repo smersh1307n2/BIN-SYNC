@@ -88,8 +88,8 @@ jobs:
             exit 1
           fi
           count="$(grep -c '^COMPOSED_HOST_METADATA_GC_SCALE' "$summary" || true)"
-          if [ "$count" -ne 3 ]; then
-            echo "::error::Expected 3 ChangeId GC measurements, found $count."
+          if [ "$count" -ne 4 ]; then
+            echo "::error::Expected 4 ChangeId GC measurements, found $count."
             exit 1
           fi
           cp "$summary" changeid-gc-allocation.md
