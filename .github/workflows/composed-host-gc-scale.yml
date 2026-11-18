@@ -72,27 +72,47 @@ jobs:
         env:
           COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/composed-host-metadata-gc-scale.md
         run: |
+          run_case() {
+            local name="$1"
+            local filter="$2"
+            echo "::group::Isolated GC measurement: $name"
+            dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+              -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+              -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+              -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+              --filter "$filter" \
+              --logger "console;verbosity=normal" \
+              --logger "trx;LogFileName=$name.trx" \
+              --results-directory "$RUNNER_TEMP/fld-host-gc-scale-test-results/$name" \
+              --blame-hang-timeout 5m \
+              --blame-hang-dump-type mini
+            echo "::endgroup::"
+          }
+
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            # Keep routine CI focused: one representative Tombstone GC scale point.
-            filter="FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: 50000"
+            # Routine CI: one representative Tombstone GC point, in its own test process.
             expected=1
+            run_case "tombstone-50000" \
+              "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: 50000"
           else
-            # Full 8-point matrix is reserved for manual and weekly evidence runs.
-            filter="FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale|FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale"
-            expected=8
+            # Each cardinality/page-size pair gets a fresh dotnet test process so
+            # WorkingSet and PeakWorkingSet cannot inherit earlier theory cases.
+            expected=11
+            for count in 1000 10000 50000 100000 250000; do
+              run_case "tombstone-$count" \
+                "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: $count"
+            done
+            run_case "changeid-1000-4096" \
+              "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 1000&DisplayName~gcPageLimit: 4096"
+            run_case "changeid-10000-4096" \
+              "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 10000&DisplayName~gcPageLimit: 4096"
+            for limit in 4096 256 1024 2048; do
+              run_case "changeid-50000-$limit" \
+                "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 50000&DisplayName~gcPageLimit: $limit"
+            done
           fi
           echo "Expected measurement cases: $expected"
           echo "$expected" > "$RUNNER_TEMP/expected-gc-measurements.txt"
-          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
-            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
-            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
-            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
-            --filter "$filter" \
-            --logger "console;verbosity=normal" \
-            --logger "trx;LogFileName=fld-host-gc-scale.trx" \
-            --results-directory "$RUNNER_TEMP/fld-host-gc-scale-test-results" \
-            --blame-hang-timeout 5m \
-            --blame-hang-dump-type mini
 
       - name: Verify and upload composed Host GC scale measurements
         shell: bash
