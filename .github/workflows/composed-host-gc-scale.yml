@@ -71,6 +71,7 @@ jobs:
         shell: bash
         env:
           COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/composed-host-metadata-gc-scale.md
+          GC_SCALE_FULL: ${{ contains(github.event.head_commit.message, '[gc-scale-full]') }}
         run: |
           run_case() {
             local name="$1"
@@ -89,7 +90,7 @@ jobs:
             echo "::endgroup::"
           }
 
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GC_SCALE_FULL" != "true" ]; then
             # Routine CI: one representative Tombstone GC point, in its own test process.
             expected=1
             run_case "tombstone-50000" \
