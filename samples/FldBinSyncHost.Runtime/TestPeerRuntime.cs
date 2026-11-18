@@ -21,6 +21,10 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
     private TcpSyncListener? _listener;
     private Task? _acceptLoop;
     private int _running;
+    private long _outboundRounds;
+    private long _outboundBatches;
+    private long _inboundBatches;
+    private string? _lastError;
 
     public TestPeerRuntime(
         Node node,
@@ -47,6 +51,17 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
     public bool IsRunning => Volatile.Read(ref _running) != 0;
     public int Port => _listener?.Port ?? 0;
     public int ActivePeers => _sessions.Count;
+    public long OutboundRounds => Interlocked.Read(ref _outboundRounds);
+    public long OutboundBatches => Interlocked.Read(ref _outboundBatches);
+    public long InboundBatches => Interlocked.Read(ref _inboundBatches);
+    public string? LastError => Volatile.Read(ref _lastError);
+    public IReadOnlyList<string> ActivePeerIds => _sessions.Keys
+        .Select(static id => Convert.ToHexString(id.ToArray()))
+        .OrderBy(static id => id, StringComparer.Ordinal)
+        .ToArray();
+
+    private void RecordError(Exception exception)
+        => Volatile.Write(ref _lastError, exception.ToString());
 
     public void Start()
     {
@@ -84,30 +99,49 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
         return session.PeerNodeId;
     }
 
-    public Task<int> RunOutboundRoundAsync(CancellationToken cancellationToken = default)
+    public async Task<int> RunOutboundRoundAsync(CancellationToken cancellationToken = default)
     {
-        SyncSession[] sessions = _sessions.Values.ToArray();
-        return sessions.Length == 0
-            ? Task.FromResult(0)
-            : _composition.Adapter.RunOutboundRoundAsync(sessions, cancellationToken);
+        Interlocked.Increment(ref _outboundRounds);
+        try
+        {
+            SyncSession[] sessions = _sessions.Values.ToArray();
+            int sent = sessions.Length == 0
+                ? 0
+                : await _composition.Adapter.RunOutboundRoundAsync(sessions, cancellationToken)
+                    .ConfigureAwait(false);
+            Interlocked.Add(ref _outboundBatches, sent);
+            return sent;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            RecordError(exception);
+            throw;
+        }
     }
 
     private async Task AcceptLoopAsync(TcpSyncListener listener, CancellationToken cancellationToken)
     {
-        try
+        while (!cancellationToken.IsCancellationRequested)
         {
-            while (!cancellationToken.IsCancellationRequested)
+            SyncSession session;
+            try
             {
-                SyncSession session = await listener.AcceptAsync(
+                session = await listener.AcceptAsync(
                     _node, Capabilities, ct: cancellationToken).ConfigureAwait(false);
-                if (!TryRegister(session))
-                    await session.DisposeAsync().ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+            catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested) { break; }
+            catch (SocketException) when (cancellationToken.IsCancellationRequested) { break; }
+            catch (IOException) when (cancellationToken.IsCancellationRequested) { break; }
+            catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                RecordError(exception);
+                continue;
+            }
+
+            if (!TryRegister(session))
+                await session.DisposeAsync().ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested) { }
-        catch (SocketException) when (cancellationToken.IsCancellationRequested) { }
-        catch (IOException) when (cancellationToken.IsCancellationRequested) { }
     }
 
     private bool TryRegister(SyncSession session)
@@ -133,8 +167,9 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                await _composition.Adapter.ReceiveAndPublishAsync(
+                _ = await _composition.Adapter.ReceiveAndPublishAsync(
                     session, _sessions.Values.ToArray(), cancellationToken).ConfigureAwait(false);
+                Interlocked.Increment(ref _inboundBatches);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -148,6 +183,7 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
         }
         catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
         {
+            RecordError(exception);
             Console.Error.WriteLine($"Test peer session {session.PeerNodeId} failed: {exception}");
         }
         finally
