@@ -865,17 +865,20 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             ThrowIfDisposed(cancellationToken);
             var referenced = new HashSet<BatchId>();
             const int batchLimit = FldDatabaseIpcGcProtocol.MaxChangeIdBatchCount;
+            // One bounded scratch buffer is reused for every IPC chunk. The client
+            // encodes the chunk synchronously before its first await, so reuse after
+            // completion cannot mutate an in-flight request.
+            byte[] packedIds = new byte[checked(batchLimit * 16)];
             for (int offset = 0; offset < changeIds.Count; offset += batchLimit)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 int count = Math.Min(batchLimit, changeIds.Count - offset);
-                // Keep the IPC batch contiguous. BatchId is a pair of value-type
-                // limbs, so WriteTo avoids one 16-byte array allocation per identity.
-                byte[] packedIds = new byte[checked(count * 16)];
+                // BatchId is a pair of value-type limbs; WriteTo avoids one 16-byte
+                // array allocation per identity.
                 for (int i = 0; i < count; i++)
                     changeIds[offset + i].WriteTo(packedIds.AsSpan(i * 16, 16));
                 bool[] results = await _client.HasGcChangeIdReferencesAsync(
-                    _scanToken, packedIds, count, cancellationToken).ConfigureAwait(false);
+                    _scanToken, packedIds.AsMemory(0, count * 16), count, cancellationToken).ConfigureAwait(false);
                 for (int i = 0; i < count; i++)
                     if (results[i]) referenced.Add(changeIds[offset + i]);
             }
