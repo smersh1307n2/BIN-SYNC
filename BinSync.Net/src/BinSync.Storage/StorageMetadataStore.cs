@@ -908,7 +908,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
             if (candidates.Count == 0)
                 return 0;
-            byte[][] deletes = candidates.Select(item => item.StorageKey).ToArray();
+            IReadOnlyList<byte[]> deletes = new ChangeIdTupleStorageKeyView(candidates);
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
                 () =>
@@ -6832,6 +6832,27 @@ private static bool ValidateIncomingBatchForStaging(
     // value into every candidate; any ledger update replaces this record instance.
     private readonly record struct ChangeIdGcCandidate(
         LedgerKey Key, ChangeLedgerValue Value, byte[]? StorageKey);
+
+    private sealed class ChangeIdTupleStorageKeyView : IReadOnlyList<byte[]>
+    {
+        private readonly IReadOnlyList<(LedgerKey Key, byte[] StorageKey)> _candidates;
+
+        public ChangeIdTupleStorageKeyView(
+            IReadOnlyList<(LedgerKey Key, byte[] StorageKey)> candidates)
+            => _candidates = candidates;
+
+        public int Count => _candidates.Count;
+        public byte[] this[int index] => _candidates[index].StorageKey;
+
+        public IEnumerator<byte[]> GetEnumerator()
+        {
+            for (int i = 0; i < _candidates.Count; i++)
+                yield return _candidates[i].StorageKey;
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
+    }
 
     private sealed class ChangeIdStorageKeyView : IReadOnlyList<byte[]>
     {
