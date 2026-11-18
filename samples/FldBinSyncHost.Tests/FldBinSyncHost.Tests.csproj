@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="../FldBinSyncHost/FldBinSyncHost.csproj" />
     <ProjectReference Include="../FldBinSyncHost.LeaseLockProbe/FldBinSyncHost.LeaseLockProbe.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../FldBinSyncHost.Runtime/FldBinSyncHost.Runtime.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="$(Fld1DatabaseHostProject)" ReferenceOutputAssembly="false" />
   </ItemGroup>
   <Target Name="CopyFldBinSyncLeaseLockProbe" AfterTargets="Build">
@@ -29,5 +30,11 @@
       <_LeaseLockProbeFiles Include="$(MSBuildThisFileDirectory)../FldBinSyncHost.LeaseLockProbe/bin/$(Configuration)/net10.0/*" />
     </ItemGroup>
     <Copy SourceFiles="@(_LeaseLockProbeFiles)" DestinationFolder="$(OutDir)lease-probe" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="CopyFldBinSyncRuntimeHost" AfterTargets="Build">
+    <ItemGroup>
+      <_RuntimeHostFiles Include="$(MSBuildThisFileDirectory)../FldBinSyncHost.Runtime/bin/$(Configuration)/net10.0/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_RuntimeHostFiles)" DestinationFolder="$(OutDir)host-runtime" SkipUnchangedFiles="true" />
   </Target>
 </Project>
