@@ -100,7 +100,7 @@ jobs:
             expected=11
             for count in 1000 10000 50000 100000 250000; do
               run_case "tombstone-$count" \
-                "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: $count"
+                "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: $count)"
             done
             run_case "changeid-1000-4096" \
               "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 1000&DisplayName~gcPageLimit: 4096"
