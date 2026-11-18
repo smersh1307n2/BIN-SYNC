@@ -161,6 +161,7 @@ public sealed class FldBinSyncRuntimeHostTests
         string metadataRoot = Path.Combine(root, "metadata");
         string fldRoot = Path.Combine(root, "fld");
         string backupRoot = Path.Combine(root, "offline-backup");
+        string externalOperatorRecord = Path.Combine(root, "operator-record.txt");
         Directory.CreateDirectory(root);
         Process? databaseHost = null;
         Process? runtimeHost = null;
@@ -173,7 +174,7 @@ public sealed class FldBinSyncRuntimeHostTests
             // Create a durable all-off policy (generation 1), then persist the
             // emergency stop (generation 2) before making a closed offline backup.
             runtimeHost = StartRuntimeHost(metadataRoot, fldRoot);
-            (Uri address, _) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            Uri address = (await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45))).Address;
             using (var client = CreateClient(address, OperatorToken))
             {
                 using HttpResponseMessage policy = await client.PostAsJsonAsync(
@@ -205,11 +206,14 @@ public sealed class FldBinSyncRuntimeHostTests
             runtimeHost = null;
 
             CopyDirectory(metadataRoot, backupRoot);
+            // This record is deliberately outside the database backup. It models
+            // the operator's independently retained evidence for restore review.
+            await File.WriteAllTextAsync(externalOperatorRecord, "generation=2\nauditSequence=2\nallDomainsOff=true\n");
 
             // Advance the live database after the backup so restoring the backup
             // demonstrably moves policy generation/audit history backwards.
             runtimeHost = StartRuntimeHost(metadataRoot, fldRoot);
-            (address, _) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            address = (await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45))).Address;
             using (var client = CreateClient(address, OperatorToken))
             {
                 using HttpResponseMessage advance = await client.PostAsJsonAsync(
@@ -247,9 +251,19 @@ public sealed class FldBinSyncRuntimeHostTests
             (address, _) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
             using (var client = CreateClient(address, OperatorToken))
             {
+                string[] operatorRecord = await File.ReadAllLinesAsync(externalOperatorRecord);
+                Assert.Contains("generation=2", operatorRecord);
+                Assert.Contains("auditSequence=2", operatorRecord);
+                Assert.Contains("allDomainsOff=true", operatorRecord);
+
                 using JsonDocument restored = JsonDocument.Parse(await client.GetStringAsync("/operator/gc"));
                 JsonElement oldPolicy = restored.RootElement.GetProperty("policy");
                 Assert.Equal(2UL, oldPolicy.GetProperty("generation").GetUInt64());
+                Assert.Equal(2UL, oldPolicy.GetProperty("auditSequence").GetUInt64());
+                Assert.False(oldPolicy.GetProperty("maintenanceStarted").GetBoolean());
+                Assert.False(oldPolicy.GetProperty("receiptEnabled").GetBoolean());
+                Assert.False(oldPolicy.GetProperty("changeIdEnabled").GetBoolean());
+                Assert.False(oldPolicy.GetProperty("tombstoneEnabled").GetBoolean());
                 Assert.False(restored.RootElement.GetProperty("runtimeRunning").GetBoolean());
                 Assert.False(restored.RootElement.GetProperty("receiptRuntimeEnabled").GetBoolean());
                 Assert.False(restored.RootElement.GetProperty("changeIdRuntimeEnabled").GetBoolean());
