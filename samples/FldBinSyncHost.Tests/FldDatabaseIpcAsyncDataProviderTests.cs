@@ -934,6 +934,8 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     [InlineData(10_000, 4096)]
     [InlineData(50_000, 4096)]
     [InlineData(50_000, 256)]
+    [InlineData(50_000, 1024)]
+    [InlineData(50_000, 2048)]
     public async Task Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan(
         int candidateCount, int gcPageLimit)
     {

@@ -62,7 +62,7 @@ jobs:
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
 
-      - name: Measure only ChangeId GC (1k / 10k / 50k)
+      - name: Measure only ChangeId GC (1k / 10k / 50k, page-size sweep)
         shell: bash
         env:
           COMPOSED_HOST_METADATA_GC_SCALE_FILE: ${{ runner.temp }}/changeid-gc-allocation.md
@@ -88,8 +88,8 @@ jobs:
             exit 1
           fi
           count="$(grep -c '^COMPOSED_HOST_METADATA_GC_SCALE' "$summary" || true)"
-          if [ "$count" -ne 4 ]; then
-            echo "::error::Expected 4 ChangeId GC measurements, found $count."
+          if [ "$count" -ne 6 ]; then
+            echo "::error::Expected 6 ChangeId GC measurements, found $count."
             exit 1
           fi
           cp "$summary" changeid-gc-allocation.md
