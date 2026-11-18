@@ -447,10 +447,10 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
             ReadOnlyMemory<byte> entry = page.Entries.Slice(
                 i * FldDatabaseIpcProtocol.SnapshotPageEntryBytes,
                 FldDatabaseIpcProtocol.SnapshotPageEntryBytes);
-            ushort fieldId = BinaryPrimitives.ReadUInt16LittleEndian(entry.Slice(16, 2));
-            uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(entry.Slice(18, 4));
-            ulong wall = BinaryPrimitives.ReadUInt64LittleEndian(entry.Slice(22, 8));
-            uint logical = BinaryPrimitives.ReadUInt32LittleEndian(entry.Slice(30, 4));
+            ushort fieldId = BinaryPrimitives.ReadUInt16LittleEndian(entry.Span.Slice(16, 2));
+            uint valueLength = BinaryPrimitives.ReadUInt32LittleEndian(entry.Span.Slice(18, 4));
+            ulong wall = BinaryPrimitives.ReadUInt64LittleEndian(entry.Span.Slice(22, 8));
+            uint logical = BinaryPrimitives.ReadUInt32LittleEndian(entry.Span.Slice(30, 4));
             byte flags = entry.Span[34];
             bool isTombstone = (flags & 1) != 0;
             bool isRecordTombstone = (flags & 2) != 0;
@@ -469,16 +469,16 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 
             candidates.Add(new ProviderMutation
             {
-                RecordId = _recordIdResolver(entry.Slice(0, 16)),
+                RecordId = _recordIdResolver(entry.Span.Slice(0, 16)),
                 FieldId = fieldId,
                 IsTombstone = isTombstone,
                 IsRecordTombstone = isRecordTombstone,
                 HlcWall = wall,
                 HlcLogical = logical,
-                AuthorNodeId = NodeId.From(authorNodeId),
+                AuthorNodeId = NodeId.From(authorNodeId.Span),
                 KeyEpoch = keyEpoch,
                 Value = Array.Empty<byte>(),
-                ChangeId = BatchId.From(changeId),
+                ChangeId = BatchId.From(changeId.Span),
                 OriginAuthorEpoch = BinaryPrimitives.ReadUInt32LittleEndian(entry.Slice(69, 4)),
                 OriginSequence = BinaryPrimitives.ReadUInt64LittleEndian(entry.Slice(73, 8))
             });
