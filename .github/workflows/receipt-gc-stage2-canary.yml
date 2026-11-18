@@ -6,6 +6,7 @@ on:
       - feature/fld-external-storage
     paths:
       - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
+      - 'BinSync.Net/src/BinSync.Core/AsyncProviderCapabilities.cs'
       - 'samples/FldBinSyncHost/**'
       - 'samples/FldBinSyncHost.Tests/**'
       - 'samples/FldBinSyncHost.Runtime/**'
@@ -80,13 +81,18 @@ jobs:
             --logger "console;verbosity=normal" \
             --blame-hang-timeout 3m
 
-      - name: Verify retired Receipt GC replay fence survives restart and bounded page continuation
+      - name: Verify FLD Host Receipt scan seals WAL with Tombstone GC disabled
         shell: bash
         run: |
-          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
-            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
-            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
-            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release \
+            --filter "FullyQualifiedName~Host_gc_reference_scan_exposes_one_immutable_reference_index_and_is_session_owned" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 3m
+
+      - name: Verify bounded Receipt pages and replay fence survive restart
+        shell: bash
+        run: |
+          dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release \
             --filter "FullyQualifiedName~Receipt_gc_retires_old_epoch_rejoins_new_epoch_and_keeps_replay_fence_after_restart" \
             --logger "console;verbosity=normal" \
             --blame-hang-timeout 3m
