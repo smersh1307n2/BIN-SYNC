@@ -42,8 +42,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Equal(1UL, store.GetOutboundHighWatermark(
                 "bounded-partition-cache-1", local, namespaceId, local));
             Assert.Equal(4, store.CachedPartitionCount);
+            ulong lease = store.AcquireOutboundLease(
+                "bounded-partition-cache-1", local, namespaceId, local, Guid.NewGuid());
             Assert.Single(store.ReadOutbound(
-                "bounded-partition-cache-1", local, namespaceId, local, 1, 0, 10).Items);
+                "bounded-partition-cache-1", local, namespaceId, local, lease, 0, 10).Items);
         }
         finally
         {
