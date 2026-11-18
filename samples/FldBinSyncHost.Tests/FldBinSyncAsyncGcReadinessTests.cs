@@ -73,7 +73,7 @@ public sealed class FldBinSyncAsyncGcReadinessTests
 
 
     [Fact]
-    public async Task Startup_reads_durable_policy_before_first_provider_recovery_call()
+    public async Task Startup_restores_policy_before_provider_recovery_capability_check()
     {
         string directory = Path.Combine(Path.GetTempPath(),
             "binsync-gc-startup-order-" + Guid.NewGuid().ToString("N"));
@@ -97,40 +97,26 @@ public sealed class FldBinSyncAsyncGcReadinessTests
             var policyCoordinator = new FldBinSyncGcOperatorPolicyCoordinator(
                 binding, policyStore, new AllowPolicyAuthorizer(), runtime);
             IAsyncDataProvider provider =
-                DispatchProxy.Create<IAsyncDataProvider, RecordingStartupProxy>();
-            ((RecordingStartupProxy)(object)provider).Events = events;
+                DispatchProxy.Create<IAsyncDataProvider, ThrowIfStartupRecoveryRunsProxy>();
             IAsyncProviderRemoteBatchCommitStore remoteApply =
-                DispatchProxy.Create<IAsyncProviderRemoteBatchCommitStore, RecordingStartupProxy>();
-            ((RecordingStartupProxy)(object)remoteApply).Events = events;
+                DispatchProxy.Create<IAsyncProviderRemoteBatchCommitStore, ThrowIfStartupRecoveryRunsProxy>();
 
             var coordinator = new AsyncStorageSyncCoordinator(node, metadata, "gc-startup-order", 19);
             var adapter = new FldBinSyncAsyncHostAdapter(
                 coordinator, provider, remoteApply, _ => { },
                 gcPolicyCoordinator: policyCoordinator);
 
-            await Assert.ThrowsAsync<InvalidOperationException>(
+            // Restore must finish before the coordinator begins recovery. This
+            // deliberately incomplete provider reaches the coordinator's capability
+            // preflight, which must happen only after the durable policy read.
+            await Assert.ThrowsAsync<NotSupportedException>(
                 () => adapter.RecoverBeforeAcceptingSessionsAsync());
 
-            Assert.Equal("policy.read", events[0]);
-            Assert.Contains(events, item => item.StartsWith("provider.", StringComparison.Ordinal) ||
-                item.StartsWith("remote-apply.", StringComparison.Ordinal));
-            Assert.DoesNotContain("provider.before-policy", events);
-            Assert.DoesNotContain("remote-apply.before-policy", events);
+            Assert.Equal(new[] { "policy.read" }, events);
         }
         finally
         {
             try { Directory.Delete(directory, recursive: true); } catch { }
-        }
-    }
-
-    public class RecordingStartupProxy : DispatchProxy
-    {
-        public List<string> Events { get; set; } = new();
-
-        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
-        {
-            Events.Add("provider." + targetMethod?.Name);
-            throw new InvalidOperationException("Reached provider recovery after policy restore.");
         }
     }
 
