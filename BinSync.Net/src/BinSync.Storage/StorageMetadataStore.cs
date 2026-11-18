@@ -23,7 +23,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 {
     private readonly object _gate;
     private readonly StorageMetadataWriterAdmission _writerAdmission;
+    // Keep decoded Metadata partitions as a small LRU. The durable FLD rows are
+    // authoritative; cold partitions are cheap to rehydrate compared with retaining
+    // every scope/replica's payload-bearing state for the lifetime of this store.
+    private const int MaxCachedPartitions = 4;
     private readonly Dictionary<PartitionKey, PartitionState> _partitions = new();
+    private readonly LinkedList<PartitionKey> _partitionLru = new();
+    private readonly Dictionary<PartitionKey, LinkedListNode<PartitionKey>> _partitionLruNodes = new();
     private readonly StorageDatabase _storage;
     private readonly string? _directory;
     private readonly bool _deleteOnDispose;
@@ -5141,6 +5147,8 @@ private static bool ValidateIncomingBatchForStaging(
         _disposed = true;
         if (_ownsStorage) _storage.Dispose();
         _partitions.Clear();
+        _partitionLru.Clear();
+        _partitionLruNodes.Clear();
         if (_deleteOnDispose && _directory is { } directory)
         {
             try { Directory.Delete(directory, recursive: true); }
@@ -5157,9 +5165,50 @@ private static bool ValidateIncomingBatchForStaging(
     {
         if (TryGetPartition(key, out var state)) return state;
         state = new PartitionState { StorageCommitSeq = _storage.LastCommitSeq };
-        _partitions.Add(key, state);
+        CachePartition(key, state);
         return state;
     }
+
+    private void CachePartition(PartitionKey key, PartitionState state)
+    {
+        if (_partitions.ContainsKey(key))
+        {
+            _partitions[key] = state;
+            TouchCachedPartition(key);
+            return;
+        }
+
+        _partitions.Add(key, state);
+        _partitionLruNodes.Add(key, _partitionLru.AddLast(key));
+        while (_partitions.Count > MaxCachedPartitions)
+        {
+            LinkedListNode<PartitionKey> oldest = _partitionLru.First!;
+            _partitionLru.RemoveFirst();
+            _partitionLruNodes.Remove(oldest.Value);
+            _partitions.Remove(oldest.Value);
+        }
+    }
+
+    private void TouchCachedPartition(PartitionKey key)
+    {
+        if (!_partitionLruNodes.TryGetValue(key, out LinkedListNode<PartitionKey>? node) ||
+            ReferenceEquals(node, _partitionLru.Last))
+            return;
+        _partitionLru.Remove(node);
+        _partitionLru.AddLast(node);
+    }
+
+    private void RemoveCachedPartition(PartitionKey key)
+    {
+        _partitions.Remove(key);
+        if (_partitionLruNodes.TryGetValue(key, out LinkedListNode<PartitionKey>? node))
+        {
+            _partitionLru.Remove(node);
+            _partitionLruNodes.Remove(key);
+        }
+    }
+
+    internal int CachedPartitionCount => _partitions.Count;
 
     private static byte[] PartitionRevisionKey(PartitionKey partitionKey)
     {
@@ -5206,8 +5255,14 @@ private static bool ValidateIncomingBatchForStaging(
     private bool TryGetPartition(PartitionKey key, out PartitionState state)
     {
         ulong currentCommitSeq = _storage.LastCommitSeq;
-        if (_partitions.TryGetValue(key, out state!) && state.StorageCommitSeq == currentCommitSeq)
-            return true;
+        if (_partitions.TryGetValue(key, out state!))
+        {
+            if (state.StorageCommitSeq == currentCommitSeq)
+            {
+                TouchCachedPartition(key);
+                return true;
+            }
+        }
 
         byte[] root = PartitionRoot(key);
         using var snapshot = _storage.OpenSnapshot();
@@ -5223,6 +5278,7 @@ private static bool ValidateIncomingBatchForStaging(
                     // share the same StorageDatabase commit sequence. They must not
                     // invalidate the decoded Metadata partition cache.
                     state.StorageCommitSeq = snapshot.CommitSeq;
+                    TouchCachedPartition(key);
                     return true;
                 }
             }
@@ -5236,7 +5292,7 @@ private static bool ValidateIncomingBatchForStaging(
             key, root, EnumeratePartitionRows(snapshot, root), snapshot.CommitSeq);
         if (decoded is null)
         {
-            _partitions.Remove(key);
+            RemoveCachedPartition(key);
             state = null!;
             return false;
         }
@@ -5244,7 +5300,7 @@ private static bool ValidateIncomingBatchForStaging(
         if (snapshot.TryGet(PartitionRevisionKey(key), out byte[]? decodedRevision))
             decoded.MetadataRevision = DecodePartitionRevision(decodedRevision!);
         state = decoded;
-        _partitions[key] = state;
+        CachePartition(key, state);
         return true;
     }
 
