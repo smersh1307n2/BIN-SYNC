@@ -469,7 +469,7 @@ public sealed class FldDatabaseIpcAsyncDataProvider : IAsyncDataProvider, IAsync
 
             candidates.Add(new ProviderMutation
             {
-                RecordId = _recordIdResolver(entry[..16]),
+                RecordId = _recordIdResolver(entry.Slice(0, 16)),
                 FieldId = fieldId,
                 IsTombstone = isTombstone,
                 IsRecordTombstone = isRecordTombstone,
