@@ -1144,7 +1144,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             while (true)
             {
                 FldBinSyncAsyncGcPassResult pass = await adapter.RunGcMaintenanceAsync(
-                    gc, trust, limit: gcPageLimit).WaitAsync(TimeSpan.FromMinutes(3));
+                    gc, trust, changeIdLimit: gcPageLimit).WaitAsync(TimeSpan.FromMinutes(3));
                 int reclaimed = pass.ChangeIdsReclaimed;
                 if (reclaimed == 0)
                     break;

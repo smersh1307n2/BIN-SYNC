@@ -116,6 +116,9 @@ public sealed record FldBinSyncAsyncGcPassResult(
 /// </summary>
 public sealed class FldBinSyncAsyncHostAdapter
 {
+    /// <summary>Measured bounded default for ChangeId compaction; receipt and tombstone pages remain independently bounded.</summary>
+    public const int DefaultChangeIdGcPageLimit = 4096;
+
     private readonly AsyncStorageSyncCoordinator _coordinator;
     private readonly IAsyncDataProvider _provider;
     private readonly IAsyncProviderRemoteBatchCommitStore _remoteApply;
@@ -339,10 +342,13 @@ public sealed class FldBinSyncAsyncHostAdapter
         StorageNamespaceGcStore gcStore,
         TrustStore trustStore,
         int limit = 256,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int changeIdLimit = DefaultChangeIdGcPageLimit)
     {
         if (limit is < 1 or > 4096)
             throw new ArgumentOutOfRangeException(nameof(limit));
+        if (changeIdLimit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(changeIdLimit));
 
         FldBinSyncAsyncGcReadinessReport readiness =
             await GetGcReadinessAsync(gcStore, trustStore, cancellationToken).ConfigureAwait(false);
@@ -366,7 +372,7 @@ public sealed class FldBinSyncAsyncHostAdapter
                 cancellationToken.ThrowIfCancellationRequested();
                 changeIds = await RunGcDomainAsync(
                     FldBinSyncGcDomain.ChangeId, gcStore.IsChangeIdGcProofEnabled,
-                    ct => _coordinator.CompactChangeLedgerAsync(referenceScanner, limit, ct),
+                    ct => _coordinator.CompactChangeLedgerAsync(referenceScanner, changeIdLimit, ct),
                     cancellationToken).ConfigureAwait(false);
             }
         }
@@ -444,8 +450,11 @@ public sealed class FldBinSyncAsyncHostAdapter
         StorageNamespaceGcStore gcStore,
         TrustStore trustStore,
         int limit = 256,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int changeIdLimit = DefaultChangeIdGcPageLimit)
     {
+        if (changeIdLimit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(changeIdLimit));
         if (_provider is not IAsyncApplicationGcReferenceScanner referenceScanner)
             throw new NotSupportedException(
                 "The configured async provider does not expose Host-owned GC reference scans.");
@@ -456,7 +465,7 @@ public sealed class FldBinSyncAsyncHostAdapter
             cancellationToken).ConfigureAwait(false);
         int changeIds = await RunGcDomainAsync(
             FldBinSyncGcDomain.ChangeId, gcStore.IsChangeIdGcProofEnabled,
-            ct => _coordinator.CompactChangeLedgerAsync(referenceScanner, limit, ct),
+            ct => _coordinator.CompactChangeLedgerAsync(referenceScanner, changeIdLimit, ct),
             cancellationToken).ConfigureAwait(false);
         return (changeIds, receipts);
     }
@@ -464,7 +473,7 @@ public sealed class FldBinSyncAsyncHostAdapter
     public Task<int> RunChangeIdGcPassAsync(
         StorageNamespaceGcStore gcStore,
         TrustStore trustStore,
-        int limit = 256,
+        int limit = DefaultChangeIdGcPageLimit,
         CancellationToken cancellationToken = default)
     {
         if (_provider is not IAsyncApplicationGcReferenceScanner referenceScanner)
