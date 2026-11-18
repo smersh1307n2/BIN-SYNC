@@ -969,7 +969,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             return 0;
 
         var partitionKey = new PartitionKey(scopeId, localReplica);
-        List<(LedgerKey Key, OperationOrigin Origin)> candidates;
+        List<ChangeIdGcCandidate> candidates;
         Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier;
         lock (_gate)
         {
@@ -993,7 +993,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return 0;
 
             HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
-            candidates = new List<(LedgerKey, OperationOrigin)>(Math.Min(limit, current.ChangeLedger.Count));
+            candidates = new List<ChangeIdGcCandidate>(Math.Min(limit, current.ChangeLedger.Count));
             foreach (var pair in current.ChangeLedger)
             {
                 if (pair.Key.NamespaceId != namespaceId)
@@ -1003,7 +1003,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     liveChangeIds.Contains(pair.Key.ChangeId) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
-                candidates.Add((pair.Key, origin));
+                candidates.Add(new ChangeIdGcCandidate(pair.Key, origin, null));
                 if (candidates.Count == limit)
                     break;
             }
@@ -1015,16 +1015,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         // ChangeLedger is keyed by (namespace, ChangeId), and this candidate
         // scan is already restricted to one namespace, so these IDs are unique.
-        // Materialize directly instead of allocating a LINQ/Distinct HashSet.
-        BatchId[] candidateChangeIds = new BatchId[candidates.Count];
-        for (int i = 0; i < candidates.Count; i++)
-            candidateChangeIds[i] = candidates[i].Key.ChangeId;
+        // Expose them through a zero-copy IReadOnlyList view instead of allocating
+        // a second 16-byte-per-entry BatchId array.
+        var candidateChangeIds = new ChangeIdCandidateView(candidates);
         ReportAllocation("candidate-id-materialization");
         IReadOnlySet<BatchId> hostReferenced =
             await externalScan.FindExternalChangeIdReferencesAsync(
                 candidateChangeIds, cancellationToken).ConfigureAwait(false);
         ReportAllocation("host-reference-ipc-scan");
-        if (hostReferenced.Count >= candidateChangeIds.Length)
+        if (hostReferenced.Count >= candidateChangeIds.Count)
             return 0;
 
         long revalidationStart = allocationObserver is null
@@ -1047,9 +1046,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
             ReportAllocation("metadata-revalidation-live-set");
             byte[] partitionRoot = PartitionRoot(partitionKey);
-            var approved = new List<(LedgerKey Key, byte[] StorageKey)>(candidates.Count);
-            foreach ((LedgerKey key, OperationOrigin origin) in candidates)
+            // Compact approved entries in the candidate list itself. A second
+            // List<(LedgerKey, byte[])> duplicates a large backing array for every
+            // GC page; the candidate list is no longer needed after Host revalidation.
+            int approvedCount = 0;
+            for (int i = 0; i < candidates.Count; i++)
             {
+                ChangeIdGcCandidate candidate = candidates[i];
+                LedgerKey key = candidate.Key;
+                OperationOrigin origin = candidate.Origin;
                 if (hostReferenced.Contains(key.ChangeId) ||
                     liveChangeIds.Contains(key.ChangeId) ||
                     !current.ChangeLedger.TryGetValue(key, out ChangeLedgerValue? currentValue) ||
@@ -1057,23 +1062,28 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
 
-                approved.Add((key, ChangeLedgerStorageKey(partitionRoot, namespaceId, key.ChangeId)));
+                candidates[approvedCount++] = candidate with
+                {
+                    StorageKey = ChangeLedgerStorageKey(partitionRoot, namespaceId, key.ChangeId)
+                };
             }
             ReportAllocation("metadata-revalidation-approved-candidates");
-            if (approved.Count == 0)
+            if (approvedCount == 0)
                 return 0;
 
-            byte[][] deletes = approved.Select(item => item.StorageKey).ToArray();
+            byte[][] deletes = new byte[approvedCount][];
+            for (int i = 0; i < approvedCount; i++)
+                deletes[i] = candidates[i].StorageKey!;
             ReportAllocation("metadata-revalidation-delete-array");
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
                 () =>
                 {
-                    foreach (var item in approved)
-                        current.ChangeLedger.Remove(item.Key);
+                    for (int i = 0; i < approvedCount; i++)
+                        current.ChangeLedger.Remove(candidates[i].Key);
                 });
             ReportAllocation("metadata-revalidation-storage-commit");
-            int reclaimed = approved.Count;
+            int reclaimed = approvedCount;
             if (allocationObserver is not null)
             {
                 allocationObserver("metadata-revalidation-total",
@@ -6818,6 +6828,28 @@ private static bool ValidateIncomingBatchForStaging(
     private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct LegacyReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
+    private readonly record struct ChangeIdGcCandidate(
+        LedgerKey Key, OperationOrigin Origin, byte[]? StorageKey);
+
+    private sealed class ChangeIdCandidateView : IReadOnlyList<BatchId>
+    {
+        private readonly IReadOnlyList<ChangeIdGcCandidate> _candidates;
+
+        public ChangeIdCandidateView(IReadOnlyList<ChangeIdGcCandidate> candidates)
+            => _candidates = candidates;
+
+        public int Count => _candidates.Count;
+        public BatchId this[int index] => _candidates[index].Key.ChangeId;
+
+        public IEnumerator<BatchId> GetEnumerator()
+        {
+            for (int i = 0; i < _candidates.Count; i++)
+                yield return _candidates[i].Key.ChangeId;
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
+    }
     private readonly record struct RelayKey(int NamespaceId, NodeId Author);
     private readonly record struct OutboundKey(int NamespaceId, NodeId Author);
     private readonly record struct OriginStreamKey(int NamespaceId, NodeId Author, uint AuthorEpoch);
