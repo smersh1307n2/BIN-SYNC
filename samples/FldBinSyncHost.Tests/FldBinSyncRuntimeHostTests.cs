@@ -570,6 +570,22 @@ public sealed class FldBinSyncRuntimeHostTests
 
     private static Process StartRuntimeHost(
         string metadataRoot, string fldRoot, bool backupRestoreBrake = false)
+        => StartRuntimeHost(
+            metadataRoot, fldRoot, MetadataPartition, LocalAuthor, ScopeId,
+            MetadataScopeId, NamespaceId, ProviderClientId,
+            allowedPeerIds: null, backupRestoreBrake);
+
+    private static Process StartRuntimeHost(
+        string metadataRoot,
+        string fldRoot,
+        ulong metadataPartition,
+        byte[] nodeId,
+        string scopeId,
+        Guid metadataScopeId,
+        ushort namespaceId,
+        Guid providerClientId,
+        string? allowedPeerIds = null,
+        bool backupRestoreBrake = false)
     {
         string runtime = Path.Combine(AppContext.BaseDirectory, "host-runtime", "FldBinSyncHost.Runtime.dll");
         if (!File.Exists(runtime))
@@ -582,17 +598,19 @@ public sealed class FldBinSyncRuntimeHostTests
             RedirectStandardError = true
         };
         start.Environment["BINSYNC_TEST_HOST_OPERATOR_TOKEN"] = OperatorToken;
+        if (allowedPeerIds is not null)
+            start.Environment["BINSYNC_TEST_HOST_ALLOWED_PEERS"] = allowedPeerIds;
         var runtimeArgs = new List<string>
         {
             runtime,
             metadataRoot,
             fldRoot,
-            MetadataPartition.ToString(CultureInfo.InvariantCulture),
-            Convert.ToHexString(LocalAuthor),
-            ScopeId,
-            MetadataScopeId.ToString("D"),
-            NamespaceId.ToString(CultureInfo.InvariantCulture),
-            ProviderClientId.ToString("D")
+            metadataPartition.ToString(CultureInfo.InvariantCulture),
+            Convert.ToHexString(nodeId),
+            scopeId,
+            metadataScopeId.ToString("D"),
+            namespaceId.ToString(CultureInfo.InvariantCulture),
+            providerClientId.ToString("D")
         };
         if (backupRestoreBrake)
             runtimeArgs.Add("--test-backup-restore-brake");
@@ -632,6 +650,9 @@ public sealed class FldBinSyncRuntimeHostTests
     }
 
     private static Process StartDatabaseHost(string root)
+        => StartDatabaseHost(root, LocalAuthor);
+
+    private static Process StartDatabaseHost(string root, byte[] localAuthor)
     {
         AssemblyMetadataAttribute metadata = typeof(FldBinSyncRuntimeHostTests).Assembly
             .GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -657,7 +678,7 @@ public sealed class FldBinSyncRuntimeHostTests
 #endif
             "--no-build", "--no-launch-profile", "--", root,
             NamespaceId.ToString(CultureInfo.InvariantCulture),
-            Convert.ToHexString(LocalAuthor)
+            Convert.ToHexString(localAuthor)
         })
             start.ArgumentList.Add(arg);
 
