@@ -90,7 +90,7 @@ jobs:
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
-            --filter "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references&DisplayName~candidateCount: 1000)" \
+            --filter "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references&DisplayName~candidateCount: 1000&DisplayName!~candidateCount: 10000" \
             --logger "console;verbosity=normal" \
             --blame-hang-timeout 5m
 
