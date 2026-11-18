@@ -42,6 +42,14 @@ FldBinSyncRuntimeHostTests launches the actual FLD Database Host and this execut
 - emergency stop commits an audited durable all-domains-off policy;
 - an ungraceful Host process death followed by a fresh process restores the same disabled policy;
 - authenticated shutdown commits a durable stop before the process exits;
+- offline backup is copied only after a clean close with a durable all-off policy; a later policy generation is created, then the older complete Metadata directory is restored;
+- the restored generation/audit sequence is checked against a separate operator record, the process-local emergency brake is latched before policy restore, and a new authorized all-off generation is required before any re-enable;
 - missing/unavailable FLD Database Host causes startup to fail without publishing readiness.
 
 The Linux/Windows host-runtime-lifecycle.yml workflow builds and runs this focused process-level test. These results validate the repository's Host integration contract only. They do **not** claim production deployment, production authentication, transport interoperability, power-loss durability, or authorization to enable GC. Production feature switches remain false by default; physical reclamation remains disabled pending a real application integration and its own release review.
+
+## Backup rollback boundary
+
+The policy store has **no independent anti-rollback authority**: restoring an older complete Metadata database can roll policy generation and audit sequence backwards. The process-level test therefore keeps its approval record outside the database backup, verifies the restored generation and audit sequence against that record, starts the Host with the test-only backup-restore brake latched before policy restore, and commits a new authorized all-domains-off generation. The test simulates the operator procedure; it does not create a cryptographic anti-rollback anchor. Production must keep GC disabled after any restore until an independently retained operational record is checked and a new authorized all-off policy is committed.
+
+Offline backup is permitted by the test Host only after a durable all-domains-off policy is read back. The test-only /admin/shutdown-clean endpoint then latches the local brake and closes the process without creating another policy generation, allowing the closed Metadata directory to be copied as one unit.
