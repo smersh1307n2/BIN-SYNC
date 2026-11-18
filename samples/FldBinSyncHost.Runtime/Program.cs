@@ -89,6 +89,7 @@ try
     });
 
     WebApplicationBuilder builder = WebApplication.CreateBuilder();
+    builder.Logging.ClearProviders();
     builder.WebHost.UseUrls("http://127.0.0.1:0");
     app = builder.Build();
 
