@@ -271,3 +271,23 @@ Exact focused run `44222282767` passed all 3 cases (1k/10k/50k) at BIN-SYNC HEAD
 The live-count lookup and metadata-cache key costs are now effectively removed from this path. The largest remaining measured component is B+ tree COW apply/publish (47.3 MB), followed by metadata batch staging (13.4 MB). These are the next profiling targets. No physical GC flag is enabled, and these measurements do not authorize Receipt, ChangeId or Tombstone GC.
 
 This section records implementation/test scope only; it does not enable Receipt, ChangeId or Tombstone GC.
+
+## 2026-11-18 — ChangeId GC storage allocation follow-up
+
+The 50k-candidate ChangeId GC measurement now completes in **595.982 ms** with **86,840,072 B** of cumulative test-process allocations (13 bounded storage batches). Against the original instrumented baseline (225,708,800 B / 1,968.280 ms), this is **61.5% fewer allocations** and **69.7% less elapsed time**. Timing is environment-dependent; allocation totals are the more stable comparison.
+
+The B+ tree copy-on-write allocation path was reduced from 47,310,512 B to 33,088,280 B (**30.1% lower**) through four bounded changes: reuse one key-reader delegate per ApplyBatch and skip path construction for candidate leaf lookups; read existing leaf entries through the allocation-free StorageBTreeLeafPageView while validating order during merge; encode leaf pages directly from a list range; and encode internal pages directly from a child-list range without pageChildren/separator staging arrays. The latest 50k COW phase breakdown is:
+
+| Phase | Allocated bytes |
+|---|---:|
+| Find/group | 7,365,640 |
+| Leaf decode/merge | 17,742,136 |
+| Leaf page write | 4,062,984 |
+| Internal path rewrite | 3,912,064 |
+| ApplyBatch total | 33,088,280 |
+
+Metadata batch staging fell from 13,387,760 B to 2,612,920 B (**80.5% lower**) by reserving the known StorageWriteBatch mutation count and staging immutable key/value arrays through internal no-copy methods. Public Put/Delete methods retain their defensive-copy behavior.
+
+Other 50k phases: WAL batch encoding 3,852,416 B; tree mutation sorting 2,000,976 B; live-count validation 3,040 B; root publication 310,808 B; metadata cache publish 816 B; candidate discovery 3,766,592 B; candidate ID materialization 6,267,888 B; Host reference IPC scan 4,326,304 B. The encompassing `metadata-revalidation-and-commit` phase reports 65,275,992 B and **overlaps** the nested metadata-batch-staging, FLD storage commit/COW and metadata-cache-publish phases; do not sum it with those subphases. Subtracting the nested measured phases leaves about 18.34 MB of Host-side revalidation/materialization overhead, which is the next profiling target.
+
+Peak working-set values remain process high-water marks, not retained heap. No physical Receipt, ChangeId, Tombstone or Ghost GC was enabled by these measurements; all physical GC flags remain default-off.

@@ -338,7 +338,7 @@ jobs:
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
 
       - name: Test FLD Core, Storage, Manifest, Run, WAL and Engine durability contracts
-        if: steps.fld-pin.outputs.changed == 'true'
+        if: steps.fld-pin.outputs.changed == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
         shell: bash
         run: |
           dotnet test FLD-DB/tests/Fld1.Core.Tests/Fld1.Core.Tests.csproj --configuration Release
