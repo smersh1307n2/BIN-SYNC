@@ -355,8 +355,10 @@ provider-authoritative publication cutover, invokes the composition startup
 barrier, and exposes the operator surface through a loopback Kestrel API with
 test-only Bearer authentication.
 
-Its peer listener and scheduler are lifecycle probes, not production transport
-or physical-GC execution. The process-level Linux/Windows tests validate
+Its peer listener is a lifecycle probe, not a production transport. Its periodic
+scheduler and authenticated one-shot maintenance endpoint invoke the real
+bounded adapter path, but all startup proof flags remain false and every domain
+must report zero reclaimed items. The process-level Linux/Windows tests validate
 startup ordering, authorization, durable policy updates, emergency stop,
 process restart, offline backup restore/re-authorization and fail-closed startup.
 The backup test verifies an external operator record; the policy store itself
