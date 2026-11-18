@@ -881,6 +881,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                         liveChangeIds.Add(operation.ChangeId);
 
             var candidates = new List<(LedgerKey Key, byte[] StorageKey)>(Math.Min(limit, current.ChangeLedger.Count));
+            byte[] partitionRoot = PartitionRoot(partitionKey);
             foreach (var pair in current.ChangeLedger)
             {
                 if (pair.Key.NamespaceId != namespaceId)
@@ -894,10 +895,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
                     continue;
 
-                byte[] suffix = new byte[18];
-                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
-                pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
-                candidates.Add((pair.Key, StorageKey(PartitionRoot(partitionKey), 3, suffix)));
+                candidates.Add((pair.Key, ChangeLedgerStorageKey(partitionRoot, namespaceId, pair.Key.ChangeId)));
                 if (candidates.Count == limit)
                     break;
             }
@@ -1042,6 +1040,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             // since the initial scan, so this signed horizon is still current.
             HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
             ReportAllocation("metadata-revalidation-live-set");
+            byte[] partitionRoot = PartitionRoot(partitionKey);
             var approved = new List<(LedgerKey Key, byte[] StorageKey)>(candidates.Count);
             foreach ((LedgerKey key, OperationOrigin origin) in candidates)
             {
@@ -1052,10 +1051,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
 
-                byte[] suffix = new byte[18];
-                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)namespaceId));
-                key.ChangeId.WriteTo(suffix.AsSpan(2));
-                approved.Add((key, StorageKey(PartitionRoot(partitionKey), 3, suffix)));
+                approved.Add((key, ChangeLedgerStorageKey(partitionRoot, namespaceId, key.ChangeId)));
             }
             ReportAllocation("metadata-revalidation-approved-candidates");
             if (approved.Count == 0)
@@ -5858,6 +5854,17 @@ private static bool ValidateIncomingBatchForStaging(
         root.CopyTo(key, 0);
         key[root.Length] = kind;
         suffix.CopyTo(key.AsSpan(root.Length + 1));
+        return key;
+    }
+
+    private static byte[] ChangeLedgerStorageKey(byte[] partitionRoot, int namespaceId, BatchId changeId)
+    {
+        byte[] key = new byte[partitionRoot.Length + 1 + 18];
+        partitionRoot.CopyTo(key, 0);
+        key[partitionRoot.Length] = 3;
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            key.AsSpan(partitionRoot.Length + 1), checked((ushort)namespaceId));
+        changeId.WriteTo(key.AsSpan(partitionRoot.Length + 3));
         return key;
     }
 
