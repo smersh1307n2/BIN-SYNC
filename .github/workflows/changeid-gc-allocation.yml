@@ -87,12 +87,12 @@ jobs:
           # Run each data point in a fresh testhost process. This isolates current
           # and peak process memory from earlier theory cases in the same test run.
           run_case "changeid-1000-4096" \
-            "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 1000&DisplayName~gcPageLimit: 4096"
+            "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 1000,&DisplayName~gcPageLimit: 4096"
           run_case "changeid-10000-4096" \
-            "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 10000&DisplayName~gcPageLimit: 4096"
+            "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 10000,&DisplayName~gcPageLimit: 4096"
           for limit in 4096 256 1024 2048; do
             run_case "changeid-50000-$limit" \
-              "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 50000&DisplayName~gcPageLimit: $limit"
+              "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 50000,&DisplayName~gcPageLimit: $limit"
           done
 
       - name: Verify and upload phase measurements
