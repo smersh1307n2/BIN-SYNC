@@ -244,6 +244,13 @@ try
         {
             return Results.BadRequest(new { error = exception.Message });
         }
+        catch (Exception exception) when (exception.Message.Contains(
+            "GC lease owner may only access its reference scan", StringComparison.Ordinal))
+        {
+            return Results.Problem(
+                title: "FLD Host is performing a GC reference scan; retry the test read.",
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
         catch (Exception exception)
         {
             Console.Error.WriteLine($"Test current-value endpoint failed: {exception}");
