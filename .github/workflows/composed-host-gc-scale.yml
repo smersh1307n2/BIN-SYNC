@@ -153,3 +153,5 @@ jobs:
           if-no-files-found: error
 
 # Diagnostic marker: keep this workflow eligible for the isolated 250k tombstone rerun.
+
+# Re-run validation against the currently pinned FLD Storage revision.

@@ -400,3 +400,5 @@ jobs:
             ${{ runner.temp }}/fld-host-integration-test-results
           retention-days: 14
           if-no-files-found: ignore
+
+# Re-run validation against the currently pinned FLD Storage revision.

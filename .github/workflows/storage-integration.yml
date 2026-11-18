@@ -62,3 +62,5 @@ jobs:
           name: binsync-fld-storage-integration-${{ matrix.os }}
           path: "**/TestResults/*.trx"
           if-no-files-found: ignore
+
+# Re-run validation against the currently pinned FLD Storage revision.
