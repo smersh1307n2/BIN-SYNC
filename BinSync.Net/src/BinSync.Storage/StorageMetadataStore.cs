@@ -5510,7 +5510,6 @@ private static bool ValidateIncomingBatchForStaging(
             batch.Put(identityKey, identityValue!);
         batch.Put(storageKey, value);
         CommitPartitionBatch(batch, partitionKey, current);
-            current.PersistedEntries = new Dictionary<string, (byte[] Key, byte[] Value)>(StringComparer.Ordinal);
         if (identityKey is not null)
             current.PersistedEntries[Convert.ToHexString(identityKey)] = (identityKey, identityValue!);
         current.PersistedEntries[Convert.ToHexString(storageKey)] = (storageKey, value);
