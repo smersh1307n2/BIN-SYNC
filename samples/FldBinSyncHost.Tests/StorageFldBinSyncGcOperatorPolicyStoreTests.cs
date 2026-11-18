@@ -278,6 +278,48 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
     }
 
     [Fact]
+    public async Task Corrupt_latest_audit_record_fails_closed_during_policy_restore()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-gc-policy-audit-corrupt-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 978);
+            using var metadata = new StorageMetadataStore(storage);
+            var store = new StorageFldBinSyncGcOperatorPolicyStore(storage, metadata);
+            var (policy, audit) = Next(1, 1, changeId: true);
+            Assert.True(await store.TryCommitAsync(0, policy, audit));
+            byte[] key = (byte[])typeof(StorageFldBinSyncGcOperatorPolicyStore)
+                .GetMethod("AuditKey", System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Static)!
+                .Invoke(null, new object[] { Binding(), 1UL })!;
+            using (StorageWriteBatch batch = storage.BeginWriteBatch())
+            {
+                batch.Put(key, new byte[] { 0x00, 0x01 });
+                batch.Commit();
+            }
+
+            using var runtime = new FldBinSyncGcMaintenanceControl();
+            runtime.Start();
+            runtime.SetEnabled(FldBinSyncGcDomain.ChangeId, true);
+            var coordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+                Binding(), store, new AllowAllAuthorizer(), runtime);
+
+            await Assert.ThrowsAsync<InvalidDataException>(async () =>
+                await coordinator.RestoreAsync());
+
+            Assert.False(runtime.IsRunning);
+            Assert.False(runtime.IsEnabled(FldBinSyncGcDomain.ChangeId));
+            Assert.Throws<InvalidDataException>(() => store.ReadAudit(Binding()));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Closed_database_backup_restores_policy_and_audit_without_restoring_live_leases()
     {
         string root = Path.Combine(Path.GetTempPath(),

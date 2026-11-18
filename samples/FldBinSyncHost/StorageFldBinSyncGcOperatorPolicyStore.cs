@@ -45,10 +45,20 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStore : IFldBinSyncGcOperat
     {
         cancellationToken.ThrowIfCancellationRequested();
         ValidateBinding(binding);
-        return ValueTask.FromResult(
-            _storage.TryGet(PolicyKey(binding), out byte[]? value)
-                ? DecodePolicy(value!, binding)
-                : null);
+        if (!_storage.TryGet(PolicyKey(binding), out byte[]? value))
+        {
+            using StorageSnapshot emptySnapshot = _storage.OpenSnapshot();
+            if (emptySnapshot.ScanPrefix(AuditPrefix(binding), ReadOnlySpan<byte>.Empty, 1).Count != 0)
+                throw new InvalidDataException("GC operator audit exists without its policy record.");
+            return ValueTask.FromResult<FldBinSyncGcOperatorPolicy?>(null);
+        }
+
+        FldBinSyncGcOperatorPolicy policy = DecodePolicy(value!, binding);
+        byte[] auditKey = AuditKey(binding, policy.AuditSequence);
+        if (!_storage.TryGet(auditKey, out byte[]? auditBytes))
+            throw new InvalidDataException("The latest GC operator policy audit record is missing.");
+        ValidatePolicyAudit(policy, DecodeAudit(auditKey, auditBytes!, binding));
+        return ValueTask.FromResult<FldBinSyncGcOperatorPolicy?>(policy);
     }
 
     public async ValueTask<bool> TryCommitAsync(
@@ -93,8 +103,18 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStore : IFldBinSyncGcOperat
         if (batch.TryGet(policyKey, out byte[]? currentBytes))
         {
             FldBinSyncGcOperatorPolicy current = DecodePolicy(currentBytes!, policy.Binding);
+            byte[] currentAuditKey = AuditKey(policy.Binding, current.AuditSequence);
+            if (!batch.TryGet(currentAuditKey, out byte[]? currentAuditBytes))
+                throw new InvalidDataException("The latest GC operator policy audit record is missing.");
+            ValidatePolicyAudit(current, DecodeAudit(currentAuditKey, currentAuditBytes!, policy.Binding));
             currentGeneration = current.Generation;
             currentAuditSequence = current.AuditSequence;
+        }
+        else
+        {
+            using StorageSnapshot emptySnapshot = _storage.OpenSnapshot();
+            if (emptySnapshot.ScanPrefix(AuditPrefix(policy.Binding), ReadOnlySpan<byte>.Empty, 1).Count != 0)
+                throw new InvalidDataException("GC operator audit exists without its policy record.");
         }
 
         if (currentGeneration != expectedGeneration)
@@ -165,6 +185,22 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStore : IFldBinSyncGcOperat
         for (int i = 0; i < entries.Count; i++)
             result[i] = DecodeAudit(entries[i].Key, entries[i].Value, binding);
         return result;
+    }
+
+    private static void ValidatePolicyAudit(
+        FldBinSyncGcOperatorPolicy policy,
+        FldBinSyncGcOperatorAuditEntry audit)
+    {
+        if (audit.Binding != policy.Binding ||
+            audit.Sequence != policy.AuditSequence ||
+            audit.PolicyGeneration != policy.Generation ||
+            audit.ActorId != policy.UpdatedBy ||
+            audit.Reason != policy.Reason ||
+            audit.MaintenanceStarted != policy.MaintenanceStarted ||
+            audit.ReceiptEnabled != policy.ReceiptEnabled ||
+            audit.ChangeIdEnabled != policy.ChangeIdEnabled ||
+            audit.TombstoneEnabled != policy.TombstoneEnabled)
+            throw new InvalidDataException("The latest GC operator audit record does not match its policy.");
     }
 
     private static bool IsDomainEnabled(FldBinSyncGcOperatorPolicy policy, FldBinSyncGcDomain domain)
