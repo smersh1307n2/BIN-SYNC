@@ -5,9 +5,9 @@ This project is an **executable test Host**, not a production application and no
 The process intentionally resembles a long-running application:
 
 1. Opens and owns one BIN-SYNC Metadata StorageDatabase partition.
-2. Loads the persisted Node checkpoint (or creates and persists the initial test Node).
+2. Opens a Node WAL and loads the persisted Node checkpoint (or creates and persists the initial test Node).
 3. Connects to a separate, real FLD Database Host process through the FLD IPC provider and remote-apply adapter.
-4. Creates FldBinSyncAsyncHostComposition and calls StartAsync.
+4. Commits the FLD provider-authoritative Metadata publication cutover, creates FldBinSyncAsyncHostComposition and calls StartAsync.
 5. Only after durable operator-policy restoration and provider/Node recovery does the startup callback start the test peer listener and maintenance scheduler.
 6. Starts a Kestrel HTTP server with authenticated operator routes.
 
@@ -41,6 +41,7 @@ FldBinSyncRuntimeHostTests launches the actual FLD Database Host and this execut
 - a disabled startup proof flag cannot be overridden by the operator endpoint;
 - emergency stop commits an audited durable all-domains-off policy;
 - an ungraceful Host process death followed by a fresh process restores the same disabled policy;
-- authenticated shutdown commits a durable stop before the process exits.
+- authenticated shutdown commits a durable stop before the process exits;
+- missing/unavailable FLD Database Host causes startup to fail without publishing readiness.
 
 The Linux/Windows host-runtime-lifecycle.yml workflow builds and runs this focused process-level test. These results validate the repository's Host integration contract only. They do **not** claim production deployment, production authentication, transport interoperability, power-loss durability, or authorization to enable GC. Production feature switches remain false by default; physical reclamation remains disabled pending a real application integration and its own release review.
