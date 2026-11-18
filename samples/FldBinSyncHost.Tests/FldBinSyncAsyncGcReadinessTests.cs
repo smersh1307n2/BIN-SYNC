@@ -86,4 +86,24 @@ public sealed class FldBinSyncAsyncGcReadinessTests
         Assert.Equal(FldBinSyncGcBlockerCode.RuntimeGateDisabled, blockers[1].Code);
         Assert.Equal(reasons, readiness.BlockedReasons);
     }
+
+    [Fact]
+    public void Change_id_gc_host_entry_points_default_to_4096_while_other_domains_stay_at_256()
+    {
+        static object? DefaultOf(string methodName, string parameterName)
+        {
+            var method = typeof(FldBinSyncAsyncHostAdapter).GetMethods()
+                .Single(method => method.Name == methodName);
+            return method.GetParameters()
+                .Single(parameter => parameter.Name == parameterName)
+                .DefaultValue;
+        }
+
+        Assert.Equal(4096, FldBinSyncAsyncHostAdapter.DefaultChangeIdGcPageLimit);
+        Assert.Equal(4096, DefaultOf(nameof(FldBinSyncAsyncHostAdapter.RunChangeIdGcPassAsync), "limit"));
+        Assert.Equal(4096, DefaultOf(nameof(FldBinSyncAsyncHostAdapter.RunGcMaintenanceAsync), "changeIdLimit"));
+        Assert.Equal(4096, DefaultOf(nameof(FldBinSyncAsyncHostAdapter.RunMetadataGcPassAsync), "changeIdLimit"));
+        Assert.Equal(256, DefaultOf(nameof(FldBinSyncAsyncHostAdapter.RunGcMaintenanceAsync), "limit"));
+        Assert.Equal(256, DefaultOf(nameof(FldBinSyncAsyncHostAdapter.RunMetadataGcPassAsync), "limit"));
+    }
 }
