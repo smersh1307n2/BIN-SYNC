@@ -1306,7 +1306,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
     }
 
     [Fact]
-    public async Task Async_host_adapter_compacts_receipt_but_preserves_relay_referenced_changeid()
+    public async Task Async_host_adapter_changeid_only_canary_preserves_live_relay_reference_then_reclaims()
     {
         string hostRoot = Path.Combine(
             Path.GetTempPath(), "fld-binsync-host-metadata-gc-" + Guid.NewGuid().ToString("N"));
@@ -1565,7 +1565,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
             Assert.False(gcRuntime.IsEnabled(FldBinSyncGcDomain.Tombstone));
 
             // An already-open provider snapshot is a global GC veto. The IPC scan
-            // exposes the pin and both Metadata compaction domains must stop before
+            // exposes the pin and the enabled ChangeId domain must stop before
             // candidate deletion, even though the signed control plane is otherwise ready.
             ProviderSnapshotHandle pinnedSnapshot = await provider.OpenSnapshotAsync();
             FldBinSyncAsyncGcReadinessReport pinnedReadiness =
