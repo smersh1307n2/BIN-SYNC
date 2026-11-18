@@ -512,7 +512,7 @@ public sealed class FldDatabaseIpcAsyncDataProviderTests
         const string scope = "fld-host-tombstone-gc-scale";
         const int seedBatchSize = 256;
         const int remoteBatchSize = 4_096;
-        const int tombstonePageSize = 4_096;
+        const int tombstonePageSize = 256;
         byte[] localAuthorBytes = Id(0x65);
         NodeId local = NodeId.From(localAuthorBytes);
         NodeId authority = NodeId.From(Id(0x11));
