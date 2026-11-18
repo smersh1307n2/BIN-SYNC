@@ -55,6 +55,7 @@ public sealed class LiveRecordReferenceFilterTests
         const int namespaceId = 19;
         NodeId local = NodeId.From(Id(0x41));
         NodeId peer = NodeId.From(Id(0x42));
+        NodeId authorStream = NodeId.From(Id(0x44));
         try
         {
             using var storage = StorageDatabase.Open(directory, 954);
@@ -62,7 +63,7 @@ public sealed class LiveRecordReferenceFilterTests
 
             metadata.RegisterInterestedPeer(scope, local, peer, 1, namespaceId);
             metadata.CompletePeerInitialSync(scope, local, peer, 1, namespaceId,
-                new[] { new MetadataPeerStreamBaseline(peer, 0, 3) });
+                new[] { new MetadataPeerStreamBaseline(authorStream, 0, 3) });
             var reservation = new MetadataOutboundBatchReservation
             {
                 BatchId = BatchId.From(Id(0x43)),
@@ -74,9 +75,9 @@ public sealed class LiveRecordReferenceFilterTests
                 Payload = new byte[] { 0x45 }
             };
             metadata.ReserveOutboundBatch(
-                scope, local, peer, 1, namespaceId, peer, reservation);
+                scope, local, peer, 1, namespaceId, authorStream, reservation);
             metadata.MarkOutboundBatchPushed(
-                scope, local, peer, 1, namespaceId, peer, reservation.BatchId);
+                scope, local, peer, 1, namespaceId, authorStream, reservation.BatchId);
 
             Assert.False(metadata.TryCreateLiveRecordReferenceFilter(
                 scope, local, namespaceId, out _));
