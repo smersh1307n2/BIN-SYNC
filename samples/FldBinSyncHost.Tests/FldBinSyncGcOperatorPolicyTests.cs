@@ -79,6 +79,39 @@ public sealed class FldBinSyncGcOperatorPolicyTests
     }
 
     [Fact]
+    public async Task Durable_emergency_stop_is_audited_and_survives_coordinator_restart()
+    {
+        var store = new TestPolicyStore();
+        using var runtime = new FldBinSyncGcMaintenanceControl();
+        var coordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+            Binding(), store, new AllowAllAuthorizer(), runtime);
+        await coordinator.UpdateAsync(new(Binding(), 0, "operator-1", "enable ChangeId only",
+            true, false, true, false));
+
+        FldBinSyncGcOperatorPolicy stopped = await coordinator.EmergencyStopDurablyAsync(
+            "operator-1", "incident response: stop all metadata maintenance");
+
+        Assert.Equal(2UL, stopped.Generation);
+        Assert.False(stopped.MaintenanceStarted);
+        Assert.False(stopped.ReceiptEnabled);
+        Assert.False(stopped.ChangeIdEnabled);
+        Assert.False(stopped.TombstoneEnabled);
+        Assert.Equal("EmergencyStop", store.Audit[^1].Action);
+        Assert.False(runtime.IsRunning);
+
+        using var restartedRuntime = new FldBinSyncGcMaintenanceControl();
+        var restartedCoordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+            Binding(), store, new AllowAllAuthorizer(), restartedRuntime);
+        FldBinSyncGcOperatorPolicy? restored = await restartedCoordinator.RestoreAsync();
+
+        Assert.Equal(stopped, restored);
+        Assert.False(restartedRuntime.IsRunning);
+        Assert.False(restartedRuntime.IsEnabled(FldBinSyncGcDomain.Receipt));
+        Assert.False(restartedRuntime.IsEnabled(FldBinSyncGcDomain.ChangeId));
+        Assert.False(restartedRuntime.IsEnabled(FldBinSyncGcDomain.Tombstone));
+    }
+
+    [Fact]
     public async Task Unauthorized_or_wrong_binding_request_is_rejected()
     {
         var store = new TestPolicyStore();
