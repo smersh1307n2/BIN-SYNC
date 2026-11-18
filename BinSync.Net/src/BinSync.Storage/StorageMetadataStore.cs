@@ -33,6 +33,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
     // Optional test-only observer; null in production keeps this diagnostic path inert.
     internal Action<string, long>? TombstoneGcAllocationObserver { get; set; }
+    // Optional test-only phase observer; null in production keeps this path inert.
+    internal Action<string, long>? ChangeIdGcAllocationObserver { get; set; }
     private bool _disposed;
 
     public StorageMetadataStore(string directory, ulong partitionId = 301, bool deleteOnDispose = false)
@@ -930,15 +932,27 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (limit <= 0 || limit > 4096) throw new ArgumentOutOfRangeException(nameof(limit));
         ArgumentNullException.ThrowIfNull(externalReferences);
 
+        Action<string, long>? allocationObserver = ChangeIdGcAllocationObserver;
+        long allocationCheckpoint = allocationObserver is null ? 0 : GC.GetTotalAllocatedBytes(precise: true);
+        void ReportAllocation(string phase)
+        {
+            if (allocationObserver is null) return;
+            long allocated = GC.GetTotalAllocatedBytes(precise: true);
+            allocationObserver(phase, allocated - allocationCheckpoint);
+            allocationCheckpoint = allocated;
+        }
+
         await using IAsyncApplicationGcReferenceScan externalScan =
             await externalReferences.OpenScanAsync(scopeId, localReplica, namespaceId, cancellationToken)
                 .ConfigureAwait(false);
+        ReportAllocation("host-scan-open");
         using IDisposable writerAdmission = await _writerAdmission.EnterAsync(cancellationToken).ConfigureAwait(false);
         ApplicationDraftHorizon draftHorizon =
             await externalScan.GetUnpublishedLocalDraftHorizonAsync(cancellationToken).ConfigureAwait(false);
         if (draftHorizon.Count == 0 &&
             (draftHorizon.MaxHlcWall != 0 || draftHorizon.MaxHlcLogical != 0))
             throw new InvalidDataException("Async Host GC scanner returned an HLC maximum for an empty draft horizon.");
+        ReportAllocation("writer-admission-and-draft-horizon");
 
         if (externalScan.HasSnapshotPin)
             return 0; // An immutable provider snapshot may still retain identities from the captured generation.
@@ -990,15 +1004,18 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     break;
             }
         }
+        ReportAllocation("metadata-candidate-discovery");
 
         if (candidates.Count == 0)
             return 0;
 
         BatchId[] candidateChangeIds = candidates
             .Select(item => item.Key.ChangeId).Distinct().ToArray();
+        ReportAllocation("candidate-id-materialization");
         IReadOnlySet<BatchId> hostReferenced =
             await externalScan.FindExternalChangeIdReferencesAsync(
                 candidateChangeIds, cancellationToken).ConfigureAwait(false);
+        ReportAllocation("host-reference-ipc-scan");
         if (hostReferenced.Count >= candidateChangeIds.Length)
             return 0;
 
@@ -1043,7 +1060,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     foreach (var item in approved)
                         current.ChangeLedger.Remove(item.Key);
                 });
-            return approved.Count;
+            int reclaimed = approved.Count;
+            ReportAllocation("metadata-revalidation-and-commit");
+            return reclaimed;
         }
     }
 
