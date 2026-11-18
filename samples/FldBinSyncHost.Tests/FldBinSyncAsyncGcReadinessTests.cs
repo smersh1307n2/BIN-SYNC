@@ -120,6 +120,98 @@ public sealed class FldBinSyncAsyncGcReadinessTests
         }
     }
 
+    [Fact]
+    public async Task Production_composition_restores_changeid_only_policy_and_durable_stop_survives_restart()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-gc-changeid-canary-policy-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 954);
+            byte[] nodeBytes = new byte[16];
+            nodeBytes[^1] = 0x54;
+            NodeId localReplica = NodeId.From(nodeBytes);
+            const int namespaceId = 20;
+            Guid metadataScopeId = Guid.NewGuid();
+            var binding = new FldBinSyncGcOperatorPolicyBinding(
+                metadataScopeId, localReplica, namespaceId);
+
+            // Seed a real policy+audit transaction in the same StorageDatabase
+            // later used by the production composition.
+            using (var seedMetadata = new StorageMetadataStore(storage))
+            using (var seedRuntime = new FldBinSyncGcMaintenanceControl())
+            {
+                var seedStore = new StorageFldBinSyncGcOperatorPolicyStore(storage, seedMetadata);
+                var seedCoordinator = new FldBinSyncGcOperatorPolicyCoordinator(
+                    binding, seedStore, new AllowPolicyAuthorizer(), seedRuntime);
+                FldBinSyncGcOperatorPolicy enabled = await seedCoordinator.UpdateAsync(
+                    new(binding, 0, "operator", "isolated ChangeId canary",
+                        MaintenanceStarted: true,
+                        ReceiptEnabled: false,
+                        ChangeIdEnabled: true,
+                        TombstoneEnabled: false));
+                Assert.Equal(1UL, enabled.Generation);
+            }
+
+            var trustStore = new TrustStore();
+            IAsyncDataProvider provider =
+                DispatchProxy.Create<IAsyncDataProvider, ThrowIfStartupRecoveryRunsProxy>();
+            IAsyncProviderRemoteBatchCommitStore remoteApply =
+                DispatchProxy.Create<IAsyncProviderRemoteBatchCommitStore, ThrowIfStartupRecoveryRunsProxy>();
+            var node = new NodeBuilder().WithNodeId(localReplica).WithEpoch(1).Build();
+
+            // Startup must restore the durable ChangeId-only operator policy before
+            // provider recovery. The deliberately incomplete provider stops recovery
+            // after policy restore; no peer session can be accepted by this fixture.
+            using (var composition = FldBinSyncAsyncHostComposition.Create(
+                storage, node, "gc-changeid-canary", metadataScopeId, namespaceId,
+                trustStore, provider, remoteApply, _ => { }, new AllowPolicyAuthorizer(),
+                new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true)))
+            {
+                await Assert.ThrowsAsync<NotSupportedException>(
+                    () => composition.RecoverBeforeAcceptingSessionsAsync());
+
+                Assert.True(composition.RuntimeControl.IsRunning);
+                Assert.True(composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.ChangeId));
+                Assert.False(composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Receipt));
+                Assert.False(composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Tombstone));
+                Assert.True(composition.NamespaceGcStore.IsChangeIdGcProofEnabled);
+                Assert.False(composition.NamespaceGcStore.IsReceiptGcProofEnabled);
+                Assert.False(composition.NamespaceGcStore.IsTombstoneGcProofEnabled);
+
+                FldBinSyncGcOperatorPolicy stopped =
+                    await composition.PolicyCoordinator.EmergencyStopDurablyAsync(
+                        "operator", "stop isolated ChangeId canary");
+                Assert.Equal(2UL, stopped.Generation);
+                Assert.False(stopped.MaintenanceStarted);
+                Assert.False(stopped.ChangeIdEnabled);
+                Assert.False(stopped.ReceiptEnabled);
+                Assert.False(stopped.TombstoneEnabled);
+                Assert.False(composition.RuntimeControl.IsRunning);
+            }
+
+            // A fresh process composition must restore the durable all-off policy,
+            // even though the startup ChangeId proof option is still configured.
+            using (var restarted = FldBinSyncAsyncHostComposition.Create(
+                storage, node, "gc-changeid-canary", metadataScopeId, namespaceId,
+                trustStore, provider, remoteApply, _ => { }, new AllowPolicyAuthorizer(),
+                new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true)))
+            {
+                await Assert.ThrowsAsync<NotSupportedException>(
+                    () => restarted.RecoverBeforeAcceptingSessionsAsync());
+                Assert.False(restarted.RuntimeControl.IsRunning);
+                Assert.False(restarted.RuntimeControl.IsEnabled(FldBinSyncGcDomain.ChangeId));
+                Assert.False(restarted.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Receipt));
+                Assert.False(restarted.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Tombstone));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
     private sealed class RecordingPolicyStore(
         FldBinSyncGcOperatorPolicy policy,
         List<string> events) : IFldBinSyncGcOperatorPolicyStore
