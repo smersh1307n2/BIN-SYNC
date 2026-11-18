@@ -291,3 +291,18 @@ Metadata batch staging fell from 13,387,760 B to 2,612,920 B (**80.5% lower**) b
 Other 50k phases: WAL batch encoding 3,852,416 B; tree mutation sorting 2,000,976 B; live-count validation 3,040 B; root publication 310,808 B; metadata cache publish 816 B; candidate discovery 3,766,592 B; candidate ID materialization 6,267,888 B; Host reference IPC scan 4,326,304 B. The encompassing `metadata-revalidation-and-commit` phase reports 65,275,992 B and **overlaps** the nested metadata-batch-staging, FLD storage commit/COW and metadata-cache-publish phases; do not sum it with those subphases. Subtracting the nested measured phases leaves about 18.34 MB of Host-side revalidation/materialization overhead, which is the next profiling target.
 
 Peak working-set values remain process high-water marks, not retained heap. No physical Receipt, ChangeId, Tombstone or Ghost GC was enabled by these measurements; all physical GC flags remain default-off.
+
+## 2026-11-18 — Host-side ChangeId GC materialization follow-up
+
+The 50k ChangeId GC allocation total is now **69,596,416 B** in the repeated focused run (13 bounded storage batches), versus the original 225,708,800 B baseline: **69.2% fewer cumulative allocations**. The repeated run measured 554.562 ms; the first run on the same commit was 926.324 ms, confirming substantial runner timing noise. Allocation measurements were stable (69.53–69.60 MB); use allocation totals rather than a single elapsed-time sample for comparisons.
+
+Two additional per-candidate allocation sources were removed:
+
+- Candidate IDs are materialized directly into an exact-sized `BatchId[]`. `LedgerKey` is keyed by (namespace, ChangeId), and the candidate scan is restricted to one namespace, so `Distinct()` was redundant. Candidate-ID materialization fell from 6,267,888 B to 800,312 B (**87.2% lower**).
+- The ChangeLedger partition root is now computed once per GC batch, not once per candidate. A dedicated encoder writes the fixed namespace/ChangeId suffix directly into the final storage-key array, avoiding a temporary suffix array. Approved-candidate materialization fell from 18,002,056 B to 6,404,376 B (**64.4% lower**).
+
+Latest 50k phase values: candidate discovery 3,766,424 B; candidate-ID materialization 800,312 B; Host reference IPC scan 4,324,384 B; revalidation live-set rebuild 2,080 B; approved-candidate materialization 6,404,376 B; delete-reference array 401,560 B; metadata batch staging 2,612,920 B; B+ tree ApplyBatch 33,078,800 B. The encompassing `metadata-revalidation-total` is 53,669,552 B and includes the nested storage commit phases; it must not be summed with them. The nested `metadata-revalidation-storage-commit` is also inclusive of batch staging, FLD storage commit/COW and metadata cache publish.
+
+All exact-head checks for BIN-SYNC commit `3fb90b1eab19327c8ad4b773b65e0a5b684dde1f` passed: ChangeId GC allocation run `44227221270` (including repeated attempt), composed Host smoke `44227221336`, FLD Storage Integration `44227221265`, and BinSync.Net `44227221397`. FLD .NET and Windows crash/recovery checks passed on the pinned Storage commit `6dfeeb0d326edfcc95af5026de3a53bf0608d77d`.
+
+No physical Receipt/ChangeId/Tombstone/Ghost GC was enabled. Remaining high-value profiling targets are the B+ tree COW leaf merge (17.74 MB), Host reference IPC scan (4.32 MB), and approved-candidate materialization (6.40 MB). Any further change must preserve the signed retention proof, the Host reference scan, the writer-admission boundary and the existing transaction atomicity.
