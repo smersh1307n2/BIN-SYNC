@@ -2359,14 +2359,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             CommitPartitionBatch(storageBatch, partitionKey, current);
         }
 
-        // PendingApply deletion is already durable in the write batch; the disk-backed
-        // view observes it immediately without publishing a resident dictionary mutation.
-        // Completed-apply marker is already durable in the write batch; do not retain it in RAM.
-        if (isNewReceipt)
-        {
-
-        current.StorageCommitSeq = _storage.LastCommitSeq;
-        current.IsPersisted = true;
+        // PendingApply deletion and the completed-apply marker are already durable
+        // in this batch. CommitPartitionBatch has published the new revision; no
+        // resident dictionary mutation or duplicate commit-sequence update is needed.
         return receipt;
     }
 
