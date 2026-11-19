@@ -70,12 +70,26 @@ var scheduler = new TestMaintenanceScheduler(
         // Tombstone replacement remains an idle-window operation: unlike Receipt
         // and ChangeId compaction, its final FLD checkpoint is an atomic namespace
         // generation rewrite and is deliberately not placed on the live-peer path.
-        bool hasActivePeers = peerRuntime is not null && peerRuntime.ActivePeers > 0;
-        await composition!.Operator.RunOneMaintenanceSliceAsync(
-            pageLimit: 256,
-            changeIdPageLimit: 4096,
-            allowTombstone: !hasActivePeers,
-            cancellationToken: cancellationToken);
+        if (peerRuntime is null)
+        {
+            await composition!.Operator.RunOneMaintenanceSliceAsync(
+                pageLimit: 256,
+                changeIdPageLimit: 4096,
+                allowTombstone: true,
+                cancellationToken: cancellationToken);
+        }
+        else
+        {
+            // A Tombstone generation rewrite is admitted only after atomically
+            // fencing new peer sessions and confirming that the active set is empty.
+            // With live peers, Receipt/ChangeId slices still run and Sync remains live.
+            using IDisposable? idleWindow = peerRuntime.TryAcquireIdleMaintenanceWindow();
+            await composition!.Operator.RunOneMaintenanceSliceAsync(
+                pageLimit: 256,
+                changeIdPageLimit: 4096,
+                allowTombstone: idleWindow is not null,
+                cancellationToken: cancellationToken);
+        }
         if (peerRuntime is not null)
             await peerRuntime.RunOutboundRoundAsync(cancellationToken);
     },
