@@ -1558,6 +1558,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         var page = store.ReadRelayForPeer(scope, local, downstream, 2, 7, author, 10);
         var item = Assert.Single(page.Items);
         Assert.Equal(1UL, item.Sequence);
+        Assert.Equal(1UL, page.ScannedThrough);
         Assert.Equal(author, item.OriginalAuthor);
         Assert.Equal(Batch(102), item.ChangeId);
         Assert.Equal(envelope, item.Payload);
