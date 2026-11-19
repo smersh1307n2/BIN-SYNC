@@ -5320,7 +5320,8 @@ private bool ValidateIncomingBatchForStaging(
     private PartitionState GetOrCreatePartition(PartitionKey key)
     {
         if (TryGetPartition(key, out var state)) return state;
-        state = new PartitionState(CreatePendingApplyMap(key), CreatePeerStreamMap(key)) { StorageCommitSeq = _storage.LastCommitSeq };
+        state = new PartitionState(CreatePendingApplyMap(key), CreatePeerStreamMap(key),
+            CreateRequiredPeerStreamSet(key), CreateInterestedPeerSet(key)) { StorageCommitSeq = _storage.LastCommitSeq };
         CachePartition(key, state);
         return state;
     }
@@ -5368,6 +5369,7 @@ private bool ValidateIncomingBatchForStaging(
     internal int CachedRelayHeaderCount => _partitions.Values.Sum(state => state.Relay.Values.Sum(items => items.Count));
     internal int CachedPendingApplyCount => 0;
     internal int CachedPeerStreamCount => 0;
+    internal int CachedPeerRosterIndexCount => 0;
 
     private static byte[] PartitionRevisionKey(PartitionKey partitionKey)
     {
@@ -6214,7 +6216,7 @@ private bool ValidateIncomingBatchForStaging(
         const int pageSize = 512;
         for (byte kind = 0; kind <= 26; kind++)
         {
-            if (kind is 1 or 3 or 12 or 13 or 15 or 20 or 21) continue;
+            if (kind is 1 or 3 or 12 or 13 or 15 or 16 or 17 or 20 or 21) continue;
             byte[] prefix = new byte[root.Length + 1];
             root.CopyTo(prefix, 0);
             prefix[^1] = kind;
@@ -6236,7 +6238,8 @@ private bool ValidateIncomingBatchForStaging(
         IEnumerable<StorageEntry> rows,
         ulong commitSeq)
     {
-        var state = new PartitionState(CreatePendingApplyMap(partition), CreatePeerStreamMap(partition))
+        var state = new PartitionState(CreatePendingApplyMap(partition), CreatePeerStreamMap(partition),
+            CreateRequiredPeerStreamSet(partition), CreateInterestedPeerSet(partition))
         { StorageCommitSeq = commitSeq, IsPersisted = true };
         bool identitySeen = false;
         bool rowSeen = false;
@@ -6394,27 +6397,15 @@ private bool ValidateIncomingBatchForStaging(
                     break;
                 }
                 case 17:
-                {
+                    // Interested-peer roster rows are exact-key / paged disk state.
                     RequireLength(key, 22);
                     RequireLength(row.Value, 0);
-                    state.InterestedPeers.Add(new InterestedPeerKey(
-                        BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        NodeId.From(key.Slice(2, 16)),
-                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18))));
                     break;
-                }
                 case 16:
-                {
+                    // Required peer-stream membership is exact-key / paged disk state.
                     RequireLength(key, 38);
                     RequireLength(row.Value, 0);
-                    var requiredKey = new PeerStreamKey(
-                        NodeId.From(key.Slice(18, 16)),
-                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(34)),
-                        BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        NodeId.From(key.Slice(2, 16)));
-                    state.RequiredPeerStreams.Add(requiredKey);
                     break;
-                }
                 case 15:
                     // Peer-stream progress is disk-primary. The facade performs exact
                     // key reads and bounded scans only for operations that need it.
@@ -7884,6 +7875,22 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             () => EnumeratePeerStreams(partitionKey),
             key => TryReadPeerStream(partitionKey, key));
 
+    private DiskKeySet<PeerStreamKey> CreateRequiredPeerStreamSet(PartitionKey partitionKey)
+        => new(
+            () => EnumerateRequiredPeerStreams(partitionKey),
+            key => ContainsStorageKey(EncodeRequiredPeerStreamKey(partitionKey, key)));
+
+    private DiskKeySet<InterestedPeerKey> CreateInterestedPeerSet(PartitionKey partitionKey)
+        => new(
+            () => EnumerateInterestedPeers(partitionKey),
+            key => ContainsStorageKey(EncodeInterestedPeerKey(partitionKey, key)));
+
+    private bool ContainsStorageKey(byte[] key)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        return snapshot.TryGet(key, out _);
+    }
+
     private IEnumerable<KeyValuePair<Guid, PendingApplyValue>> EnumeratePendingApplies(
         PartitionKey partitionKey)
     {
@@ -7914,6 +7921,55 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         return snapshot.TryGet(key, out byte[]? value)
             ? new PendingApplyValue(DecodeIncomingBatch(value!))
             : null;
+    }
+
+    private IEnumerable<PeerStreamKey> EnumerateRequiredPeerStreams(PartitionKey partitionKey)
+    {
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 16, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                byte[] key = row.Key;
+                int offset = prefix.Length;
+                if (key.Length - offset != 38 || row.Value.Length != 0)
+                    throw new InvalidDataException("Required peer-stream storage row is invalid.");
+                yield return new PeerStreamKey(
+                    NodeId.From(key.AsSpan(offset + 18, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(offset + 34)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
+                    NodeId.From(key.AsSpan(offset + 2, 16)));
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
+    private IEnumerable<InterestedPeerKey> EnumerateInterestedPeers(PartitionKey partitionKey)
+    {
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 17, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                byte[] key = row.Key;
+                int offset = prefix.Length;
+                if (key.Length - offset != 22 || row.Value.Length != 0)
+                    throw new InvalidDataException("Interested-peer storage row is invalid.");
+                yield return new InterestedPeerKey(
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
+                    NodeId.From(key.AsSpan(offset + 2, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(offset + 18)));
+            }
+            if (page.Count < pageSize) yield break;
+        }
     }
 
     private IEnumerable<KeyValuePair<PeerStreamKey, PeerStreamStateValue>> EnumeratePeerStreams(
@@ -7999,6 +8055,31 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             => GetEnumerator();
     }
 
+    private sealed class DiskKeySet<T> : IEnumerable<T>
+    {
+        private readonly Func<IEnumerable<T>> _enumerate;
+        private readonly Func<T, bool> _contains;
+
+        public static DiskKeySet<T> Empty { get; } = new(
+            () => Array.Empty<T>(), _ => false);
+
+        public DiskKeySet(Func<IEnumerable<T>> enumerate, Func<T, bool> contains)
+        {
+            _enumerate = enumerate ?? throw new ArgumentNullException(nameof(enumerate));
+            _contains = contains ?? throw new ArgumentNullException(nameof(contains));
+        }
+
+        public bool Contains(T key) => _contains(key);
+
+        // Call sites publish these only after the matching Storage batch commits.
+        // Storage remains authoritative; this facade deliberately keeps no shadow set.
+        public bool Add(T key) => false;
+        public bool Remove(T key) => false;
+
+        public IEnumerator<T> GetEnumerator() => _enumerate().GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private sealed class PeerStreamMap : IEnumerable<KeyValuePair<PeerStreamKey, PeerStreamStateValue>>
     {
         private readonly Func<IEnumerable<KeyValuePair<PeerStreamKey, PeerStreamStateValue>>> _enumerate;
@@ -8075,15 +8156,18 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public Dictionary<OutboundKey, LeaseState> OutboundLeases { get; } = new();
         public PendingApplyMap PendingApplies { get; }
 
-        public PartitionState(PendingApplyMap pendingApplies, PeerStreamMap peerStreams)
+        public PartitionState(PendingApplyMap pendingApplies, PeerStreamMap peerStreams,
+            DiskKeySet<PeerStreamKey> requiredPeerStreams, DiskKeySet<InterestedPeerKey> interestedPeers)
         {
             PendingApplies = pendingApplies ?? throw new ArgumentNullException(nameof(pendingApplies));
             PeerStreams = peerStreams ?? throw new ArgumentNullException(nameof(peerStreams));
+            RequiredPeerStreams = requiredPeerStreams ?? throw new ArgumentNullException(nameof(requiredPeerStreams));
+            InterestedPeers = interestedPeers ?? throw new ArgumentNullException(nameof(interestedPeers));
         }
         public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
         public PeerStreamMap PeerStreams { get; }
-        public HashSet<PeerStreamKey> RequiredPeerStreams { get; } = new();
-        public HashSet<InterestedPeerKey> InterestedPeers { get; } = new();
+        public DiskKeySet<PeerStreamKey> RequiredPeerStreams { get; }
+        public DiskKeySet<InterestedPeerKey> InterestedPeers { get; }
         public HashSet<InterestedPeerKey> CompletedPeerBaselines { get; } = new();
         public Dictionary<(int NamespaceId, NodeId Peer), uint> RetiredPeerEpochs { get; } = new();
 
@@ -8095,7 +8179,8 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         {
             // VolatileSnapshot only reads these seven collections. Do not copy
             // ChangeLedger, Receipts, PendingApplies, peer indexes or rebuildable caches.
-            var clone = new PartitionState(PendingApplyMap.Empty, PeerStreamMap.Empty);
+            var clone = new PartitionState(PendingApplyMap.Empty, PeerStreamMap.Empty,
+                DiskKeySet<PeerStreamKey>.Empty, DiskKeySet<InterestedPeerKey>.Empty);
             foreach (var pair in Receives) clone.Receives.Add(pair.Key, pair.Value);
             foreach (var pair in RelayAck) clone.RelayAck.Add(pair.Key, pair.Value);
             foreach (var pair in RelayHighWatermarks) clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
