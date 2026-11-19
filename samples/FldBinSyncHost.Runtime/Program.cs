@@ -196,6 +196,7 @@ try
         peerListenerStarted = peerRuntime.IsRunning,
         peerPort = peerRuntime.Port,
         activePeers = peerRuntime.ActivePeers,
+        idleMaintenanceWindowActive = peerRuntime.IsIdleMaintenanceWindowActive,
         baselineReadyPeers = peerRuntime.BaselineReadyPeers,
         maintenanceSchedulerStarted = scheduler.IsRunning,
         maintenanceTicks = scheduler.TickCount,
