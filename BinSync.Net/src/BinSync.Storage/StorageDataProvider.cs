@@ -681,7 +681,7 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             ThrowIfDisposed();
             Guid activeGeneration = ReadActiveGeneration(_storage);
             using var batch = _storage.BeginWriteBatch();
-            int updated = 0;
+            bool changed = false;
             foreach (ProviderPublishedOrigin entry in published)
             {
                 ArgumentNullException.ThrowIfNull(entry);
@@ -692,16 +692,36 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     ?? throw new InvalidDataException("Published-origin feed mutation is missing.");
                 if (change.ChangeId.IsZero || draft.ChangeId != change.ChangeId ||
                     draft.AuthorNodeId.IsZero || draft.OriginAuthorEpoch == 0 ||
-                    draft.OriginSequence != 0 || !origin.IsValid ||
-                    origin.AuthorNodeId != draft.AuthorNodeId ||
+                    (draft.OriginSequence != 0 && draft.OriginSequence != origin.Sequence) ||
+                    !origin.IsValid || origin.AuthorNodeId != draft.AuthorNodeId ||
                     origin.AuthorEpoch != draft.OriginAuthorEpoch)
                     throw new InvalidDataException("Published Metadata Store origin does not match the provisional provider feed entry.");
 
                 if (!batch.TryGet(ChangeKey(change.Sequence), out byte[]? feedBytes))
                     throw new InvalidDataException("Provider local feed entry disappeared before its publication identity was committed.");
                 var (feedMutation, feedChangeId) = DecodeLocalFeedChange(feedBytes!);
-                if (feedChangeId != change.ChangeId || !SameMutation(feedMutation, draft))
+                if (feedChangeId != change.ChangeId ||
+                    !SameMutationContent(feedMutation, draft) ||
+                    feedMutation.ChangeId != draft.ChangeId ||
+                    feedMutation.OriginAuthorEpoch != draft.OriginAuthorEpoch)
                     throw new InvalidDataException("Provider local feed row changed before its publication identity was committed.");
+
+                // The durable feed row doubles as the publication receipt. A replay
+                // after Metadata freeze but before provider ACK can recover the exact
+                // immutable Origin without one Metadata B+ tree point read per row.
+                if (feedMutation.OriginSequence == 0)
+                {
+                    ProviderMutation stampedFeed = CloneMutation(
+                        feedMutation, feedMutation.ChangeId, feedMutation.OriginAuthorEpoch, origin.Sequence);
+                    ValidateMutation(stampedFeed);
+                    batch.Put(ChangeKey(change.Sequence),
+                        EncodeLocalFeedChange(EncodeMutation(stampedFeed), feedChangeId));
+                    changed = true;
+                }
+                else if (feedMutation.OriginSequence != origin.Sequence)
+                {
+                    throw new InvalidDataException("Provider local feed row already carries a different immutable OriginSequence.");
+                }
 
                 byte[] currentKey = draft.IsRecordTombstone
                     ? CurrentRecordTombstoneKey(activeGeneration, draft.RecordId)
@@ -723,10 +743,10 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
                     current, current.ChangeId, current.OriginAuthorEpoch, origin.Sequence);
                 ValidateMutation(stamped);
                 batch.Put(currentKey, EncodeMutation(stamped));
-                updated++;
+                changed = true;
             }
 
-            if (updated != 0)
+            if (changed)
                 batch.Commit();
         }
     }
