@@ -34,6 +34,7 @@ public sealed class FldFullReplaceBootstrapTests
 
         NodeId sourceId = NodeId.From(Id(1));
         NodeId targetId = NodeId.From(Id(2));
+        NodeId rowAuthor = NodeId.From(Id(3));
         (byte[] sourceSeed, byte[] sourcePublicKey) = BatchSignature.GenerateKeyPair();
         (byte[] targetSeed, byte[] targetPublicKey) = BatchSignature.GenerateKeyPair();
         var trust = new TrustStore();
@@ -95,7 +96,7 @@ public sealed class FldFullReplaceBootstrapTests
                 recordId: Id(0x700001),
                 changeId: Id(0x710001),
                 fieldId: 0x2222,
-                author: sourceId,
+                author: rowAuthor,
                 originSequence: 700001,
                 value: "obsolete-target-row"u8.ToArray());
             _ = targetProvider.ApplyRemoteBatch(Guid.NewGuid(), new[] { oldTargetRow });
@@ -107,7 +108,7 @@ public sealed class FldFullReplaceBootstrapTests
 
             IApplicationGcReferenceScanner externalState = CreateEmptyExternalState();
             StorageFullReplaceReceiver CreateReceiver() => new(
-                targetProvider,
+                targetProvider!,
                 targetGcStore,
                 trust,
                 NamespaceId,
@@ -120,15 +121,15 @@ public sealed class FldFullReplaceBootstrapTests
                 externalState,
                 () => targetCoordinator.AcquireFullReplaceCommitGuard(
                     static () => new CallbackLease(static () => { })),
-                (wall, logical) => targetNode.AdvanceClockToFloor(wall, logical));
+                (wall, logical) => targetNode!.AdvanceClockToFloor(wall, logical));
 
             // First connection stages exactly one canonical 256-entry page. We then
             // close the receiver database as if its process died before COMMIT/ACK.
-            var firstPair = PipeTransport.CreatePair();
+            var (firstToSource, firstToTarget) = PipeTransport.CreatePair();
             SyncSession firstSource = await SyncSession.ConnectAsync(
-                sourceNode, firstPair.ToA, FullReplaceCapabilities());
+                sourceNode, firstToSource, FullReplaceCapabilities());
             SyncSession firstTarget = await SyncSession.AcceptAsync(
-                targetNode, firstPair.ToB, FullReplaceCapabilities());
+                targetNode, firstToTarget, FullReplaceCapabilities());
             Task<FullReplaceInstalledAck> firstSend = StorageFullReplaceSender.SendPreparedSnapshotAsync(
                 prepared, firstSource, sourceGcStore, trust, roster, sourceId, sourceSeed);
 
@@ -178,11 +179,11 @@ public sealed class FldFullReplaceBootstrapTests
             targetCoordinator.AttachNamespaceGcGuard(targetGcStore, trust);
             StorageFullReplaceReceiver resumedReceiver = CreateReceiver();
 
-            var secondPair = PipeTransport.CreatePair();
+            var (secondToSource, secondToTarget) = PipeTransport.CreatePair();
             await using SyncSession secondSource = await SyncSession.ConnectAsync(
-                sourceNode, secondPair.ToA, FullReplaceCapabilities());
+                sourceNode, secondToSource, FullReplaceCapabilities());
             await using SyncSession secondTarget = await SyncSession.AcceptAsync(
-                targetNode, secondPair.ToB, FullReplaceCapabilities());
+                targetNode!, secondToTarget, FullReplaceCapabilities());
 
             Task<FullReplaceInstalledAck?> receive = resumedReceiver.ReceiveTransferAsync(secondTarget);
             FullReplaceInstalledAck acknowledgement = await StorageFullReplaceSender.SendPreparedSnapshotAsync(
@@ -196,15 +197,15 @@ public sealed class FldFullReplaceBootstrapTests
             Assert.Equal(targetId, acknowledgement.MemberNodeId);
             Assert.Equal(8U, acknowledgement.MemberTransportEpoch);
 
-            Assert.False(targetDatabase.TryGetBytes(oldTargetRow.RecordId.ToArray(), oldTargetRow.FieldId, out _),
+            Assert.False(targetDatabase!.TryGetBytes(oldTargetRow.RecordId.ToArray(), oldTargetRow.FieldId, out _),
                 "The previous target generation must be replaced, not merged.");
             for (int i = 0; i < 257; i++)
             {
-                Assert.True(targetDatabase.TryGetBytes(Id(0x100000 + i), 0x1111, out byte[]? value));
+                Assert.True(targetDatabase!.TryGetBytes(Id(0x100000 + i), 0x1111, out byte[]? value));
                 Assert.Equal(Encoding.UTF8.GetBytes($"source-row-{i:D3}"), value);
             }
 
-            Assert.True(targetDatabase.TryResolve(Id(0x100100), 0x1111, out FieldResolver.Resolved metadata));
+            Assert.True(targetDatabase!.TryResolve(Id(0x100100), 0x1111, out FieldResolver.Resolved metadata));
             Assert.Equal(Id(0x200100), metadata.ChangeId);
             Assert.Equal(1U, metadata.OriginAuthorEpoch);
             Assert.Equal(257UL, metadata.OriginSequence);
