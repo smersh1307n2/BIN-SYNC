@@ -561,9 +561,12 @@ public sealed class AsyncStorageSyncCoordinator
                     pageChangeCount++;
                     if (change.ChangeId.IsZero || change.Mutation.ChangeId != change.ChangeId ||
                         change.Mutation.AuthorNodeId != _node.NodeId ||
-                        change.Mutation.OriginAuthorEpoch == 0 || change.Mutation.OriginSequence != 0)
+                        change.Mutation.OriginAuthorEpoch == 0)
                         throw new InvalidDataException(
-                            "Async local feed requires stable ChangeId, local author epoch and deferred OriginSequence.");
+                            "Async local feed requires a stable ChangeId and local author epoch.");
+                    // OriginSequence zero denotes an unpublished draft. A non-zero
+                    // value is the durable receipt stamped only after Metadata Freeze;
+                    // it is valid on replay and must not be rejected as a new draft.
                     if (!seenChangeIds.Add(change.ChangeId))
                         throw new InvalidDataException("Async provider local feed repeated a ChangeId within one captured prefix.");
                     _node.ValidateProviderMutation(change.Mutation);
