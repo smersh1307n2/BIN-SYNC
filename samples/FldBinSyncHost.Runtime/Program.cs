@@ -80,10 +80,14 @@ var scheduler = new TestMaintenanceScheduler(
         {
             if (peerRuntime is null)
             {
-                await composition.Operator.RunOneMaintenanceSliceAsync(
+                FldBinSyncAsyncGcPassResult pass = await composition.Operator.RunOneMaintenanceSliceAsync(
                     pageLimit: 256,
                     changeIdPageLimit: 4096,
                     cancellationToken: cancellationToken);
+                Interlocked.Increment(ref gcMaintenanceSlices);
+                Interlocked.Add(ref gcReceiptsReclaimed, pass.ReceiptsReclaimed);
+                Interlocked.Add(ref gcChangeIdsReclaimed, pass.ChangeIdsReclaimed);
+                Interlocked.Add(ref gcTombstonesReclaimed, pass.TombstonesReclaimed);
             }
             else
             {
@@ -91,11 +95,15 @@ var scheduler = new TestMaintenanceScheduler(
                     peerRuntime.TryAcquireIdleMaintenanceWindow();
                 if (maintenanceWindow is not null)
                 {
-                    await composition.Operator.RunOneMaintenanceSliceAsync(
+                    FldBinSyncAsyncGcPassResult pass = await composition.Operator.RunOneMaintenanceSliceAsync(
                         pageLimit: 256,
                         changeIdPageLimit: 4096,
                         acquireTombstoneMaintenanceWindow: null,
                         cancellationToken: cancellationToken);
+                    Interlocked.Increment(ref gcMaintenanceSlices);
+                    Interlocked.Add(ref gcReceiptsReclaimed, pass.ReceiptsReclaimed);
+                    Interlocked.Add(ref gcChangeIdsReclaimed, pass.ChangeIdsReclaimed);
+                    Interlocked.Add(ref gcTombstonesReclaimed, pass.TombstonesReclaimed);
                 }
             }
         }
@@ -111,6 +119,10 @@ var scheduler = new TestMaintenanceScheduler(
     TimeSpan.FromMilliseconds(maintenanceIntervalMs));
 WebApplication? app = null;
 bool durableStopCommitted = false;
+long gcMaintenanceSlices = 0;
+long gcReceiptsReclaimed = 0;
+long gcChangeIdsReclaimed = 0;
+long gcTombstonesReclaimed = 0;
 
 try
 {
@@ -141,7 +153,13 @@ try
         provider,
         remoteApply,
         current => StorageNodePersistence.Save(metadataStorage, current),
-        new TestOnlyOperatorAuthorizer());
+        new TestOnlyOperatorAuthorizer(),
+        // This executable is the disposable integration Host used to exercise
+        // the enabled runtime. The library/composition defaults remain fail-closed.
+        new StorageNamespaceGcFeatureOptions(
+            EnableTombstoneGc: true,
+            EnableChangeIdGc: true,
+            EnableReceiptGc: true));
 
     // Offline backup restore has no independent anti-rollback authority. The
     // test-only flag models the required operator first-response brake before
@@ -211,7 +229,21 @@ try
         maintenanceSchedulerStarted = scheduler.IsRunning,
         maintenanceTicks = scheduler.TickCount,
         maintenanceError = scheduler.LastError,
-        gcExecutionEnabled = false
+        gcStartupProofEnabled =
+            composition.NamespaceGcStore.IsReceiptGcProofEnabled &&
+            composition.NamespaceGcStore.IsChangeIdGcProofEnabled &&
+            composition.NamespaceGcStore.IsTombstoneGcProofEnabled,
+        gcExecutionEnabled = composition.RuntimeControl.IsRunning &&
+            (composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Receipt) ||
+             composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.ChangeId) ||
+             composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Tombstone)),
+        gcReceiptEnabled = composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Receipt),
+        gcChangeIdEnabled = composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.ChangeId),
+        gcTombstoneEnabled = composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Tombstone),
+        gcMaintenanceSlices = Interlocked.Read(ref gcMaintenanceSlices),
+        gcReceiptsReclaimed = Interlocked.Read(ref gcReceiptsReclaimed),
+        gcChangeIdsReclaimed = Interlocked.Read(ref gcChangeIdsReclaimed),
+        gcTombstonesReclaimed = Interlocked.Read(ref gcTombstonesReclaimed)
     }));
 
     app.MapGet("/operator/peers", () => Results.Ok(new
