@@ -41,6 +41,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     internal Action<string, long>? TombstoneGcAllocationObserver { get; set; }
     // Optional test-only phase observer; null in production keeps this path inert.
     internal Action<string, long>? ChangeIdGcAllocationObserver { get; set; }
+    // Test-only signal proving whether a cold partition load fell back to the legacy full scan.
+    internal Action? PartitionColdLoadValidationObserver { get; set; }
     private bool _disposed;
 
     public StorageMetadataStore(string directory, ulong partitionId = 301, bool deleteOnDispose = false)
@@ -5269,6 +5271,24 @@ private bool ValidateIncomingBatchForStaging(
     internal int CachedOriginHighWatermarkCount => 0;
     internal int CachedCompletedPeerBaselineCount => 0;
 
+    private static byte[] PartitionFormatKey(PartitionKey partitionKey)
+    {
+        byte[] key = PartitionRoot(partitionKey);
+        // Separate from the Metadata row prefix and the revision key.
+        key[0] = 0x74;
+        return key;
+    }
+
+    private static byte[] EncodePartitionFormatMarker()
+        => new byte[] { 0x42, 0x53, 0x50, 0x31, 1, 0, 0, 0 }; // BSP1, version 1
+
+    private static void ValidatePartitionFormatMarker(byte[] value)
+    {
+        ReadOnlySpan<byte> expected = stackalloc byte[] { 0x42, 0x53, 0x50, 0x31, 1, 0, 0, 0 };
+        if (!value.AsSpan().SequenceEqual(expected))
+            throw new InvalidDataException("Metadata partition disk-primary format marker is invalid.");
+    }
+
     private static byte[] PartitionRevisionKey(PartitionKey partitionKey)
     {
         byte[] key = PartitionRoot(partitionKey);
@@ -5303,8 +5323,11 @@ private bool ValidateIncomingBatchForStaging(
         byte[] key = PartitionRevisionKey(partitionKey);
         byte[] value = EncodePartitionRevision(nextRevision);
         batch.Put(key, value);
+        if (!current.HasDiskPrimaryFormatMarker)
+            batch.Put(PartitionFormatKey(partitionKey), EncodePartitionFormatMarker());
         ulong commitSeq = batch.Commit();
 
+        current.HasDiskPrimaryFormatMarker = true;
         current.MetadataRevision = nextRevision;
         current.StorageCommitSeq = commitSeq;
         current.IsPersisted = true;
@@ -5327,28 +5350,42 @@ private bool ValidateIncomingBatchForStaging(
 
         byte[] root = PartitionRoot(key);
         using var snapshot = _storage.OpenSnapshot();
-        if (_partitions.TryGetValue(key, out state!))
+        byte[] formatKey = PartitionFormatKey(key);
+        if (snapshot.TryGet(formatKey, out byte[]? formatMarker))
         {
-            byte[] revisionKey = PartitionRevisionKey(key);
-            if (snapshot.TryGet(revisionKey, out byte[]? revisionValue))
+            // New-format partitions have already passed the one-time legacy validator.
+            // Reopen by validating only the identity and revision rows; never walk the
+            // receipt/ledger/stream history merely to construct disk-backed facades.
+            ValidatePartitionFormatMarker(formatMarker!);
+            if (!snapshot.TryGet(PartitionRevisionKey(key), out byte[]? revisionValue))
+                throw new InvalidDataException("Disk-primary Metadata partition is missing its revision marker.");
+            ulong revision = DecodePartitionRevision(revisionValue!);
+            byte[] identityKey = StorageKey(root, 0, ReadOnlySpan<byte>.Empty);
+            if (!snapshot.TryGet(identityKey, out byte[]? identity))
+                throw new InvalidDataException("Disk-primary Metadata partition is missing its scope identity record.");
+            ValidatePartitionIdentity(key, identity!);
+
+            state = new PartitionState(CreatePendingApplyMap(key), CreatePeerStreamMap(key),
+                CreateRequiredPeerStreamSet(key), CreateInterestedPeerSet(key), CreateRetiredPeerEpochMap(key),
+                CreateReceiveMap(key), CreateReceiveChainMap(key), CreateLegacyReceiveChainMap(key),
+                CreateReceiptMap(key), CreateChangeLedgerMap(key), CreateCompletedPendingApplyMap(key),
+                CreateRelayAckMap(key), CreateRelayHighWatermarkMap(key), CreateOutboundHighWatermarkMap(key),
+                CreateOriginHighWatermarkMap(key), CreateOutboundAckMap(key), CreateOutboundLeaseMap(key),
+                CreateCompletedPeerBaselineSet(key))
             {
-                ulong revision = DecodePartitionRevision(revisionValue!);
-                if (revision == state.MetadataRevision)
-                {
-                    // Non-Metadata keyspaces (notably Namespace GC proofs/checkpoints)
-                    // share the same StorageDatabase commit sequence. They must not
-                    // invalidate the decoded Metadata partition cache.
-                    state.StorageCommitSeq = snapshot.CommitSeq;
-                    TouchCachedPartition(key);
-                    return true;
-                }
-            }
-            else if (state.MetadataRevision != 0)
-            {
-                throw new InvalidDataException("Metadata partition revision marker is missing.");
-            }
+                StorageCommitSeq = snapshot.CommitSeq,
+                MetadataRevision = revision,
+                IsPersisted = true,
+                HasDiskPrimaryFormatMarker = true
+            };
+            CachePartition(key, state);
+            return true;
         }
 
+        // Legacy v3 partitions have no format marker. Validate their existing rows
+        // once, then durably mark the partition so subsequent cold loads are O(1)
+        // in metadata cardinality (apart from point reads of identity/revision).
+        PartitionColdLoadValidationObserver?.Invoke();
         PartitionState? decoded = DecodePartition(
             key, root, EnumeratePartitionRows(snapshot, root), snapshot.CommitSeq);
         if (decoded is null)
@@ -5360,13 +5397,19 @@ private bool ValidateIncomingBatchForStaging(
 
         if (snapshot.TryGet(PartitionRevisionKey(key), out byte[]? decodedRevision))
             decoded.MetadataRevision = DecodePartitionRevision(decodedRevision!);
-        // Payload rows intentionally omit OriginEpoch/OriginSequence. Hydrate from
-        // the durable ChangeId ledger after the full partition scan.
+
+        using (var migrationBatch = _storage.BeginWriteBatch())
+        {
+            ulong actualBaseCommitSeq = _storage.LastCommitSeq;
+            if (actualBaseCommitSeq != snapshot.CommitSeq)
+                throw new StorageConflictException(snapshot.CommitSeq, actualBaseCommitSeq);
+            CommitPartitionBatch(migrationBatch, key, decoded);
+        }
+
         state = decoded;
         CachePartition(key, state);
         return true;
     }
-
 
     private void RefreshReceiptTransportEpoch(
         PartitionKey partitionKey, PartitionState current, ReceiptKey key,
@@ -8580,6 +8623,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public ulong StorageCommitSeq { get; set; }
         public ulong MetadataRevision { get; set; }
         public bool IsPersisted { get; set; }
+        public bool HasDiskPrimaryFormatMarker { get; set; }
 
         public PartitionState CloneForSnapshot()
         {
