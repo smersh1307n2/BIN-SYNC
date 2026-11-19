@@ -5000,7 +5000,8 @@ private bool ValidateIncomingBatchForStaging(
         MetadataRelayItem[] page = ReadRelayStoragePage(
             payloadSnapshot, partitionRoot, state, namespaceId, originalAuthor, cursor, limit,
             out _);
-        if (page.Length == 0 && cursor < highWatermark)
+        if (page.Length == 0 && cursor < highWatermark &&
+            !IsRelayHistoryFullyCompacted(state, key, highWatermark, acknowledged))
             throw new InvalidDataException("Relay high-watermark has no recoverable payload rows.");
 
         ulong scannedThrough = page.Length == 0 ? cursor : page[^1].Sequence;
@@ -6221,15 +6222,7 @@ private bool ValidateIncomingBatchForStaging(
                 case 21:
                 {
                     RequireLength(key, 26);
-                    var relayKey = new RelayKey(
-                        BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        NodeId.From(key.Slice(2, 16)));
-                    ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(key.Slice(18, 8));
-                    // Resource path: keep only stream headers in the partition cache.
-                    // Payload bodies remain on the Storage B+ tree and are loaded by page/GC.
-                    BatchId changeId = DecodePayloadHeader(row.Value);
-                    // Stream payload rows are validated on demand from the B+ tree.
-                    _ = sequence;
+                    _ = DecodePayloadHeader(row.Value);
                     break;
                 }
                 case 5:
@@ -6596,6 +6589,17 @@ private bool ValidateIncomingBatchForStaging(
     private delegate bool OutboundStorageRowVisitor(
         OutboundKey key, ulong sequence, ReadOnlySpan<byte> encodedPayload);
 
+    private bool IsRelayHistoryFullyCompacted(
+        PartitionState state, RelayKey key, ulong highWatermark, ulong acknowledged)
+    {
+        if (acknowledged >= highWatermark) return true;
+        bool hasPeerRequirements =
+            state.InterestedPeers.Any(peer => peer.NamespaceId == key.NamespaceId && peer.Peer != key.Author) ||
+            state.RequiredPeerStreams.Any(peer => peer.NamespaceId == key.NamespaceId &&
+                peer.AuthorStream == key.Author && peer.Peer != key.Author);
+        return hasPeerRequirements && GetSafePeerCursor(state, key.NamespaceId, key.Author) >= highWatermark;
+    }
+
     private delegate bool RelayStorageRowVisitor(
         RelayKey key, ulong sequence, ReadOnlySpan<byte> encodedPayload);
 
@@ -6628,12 +6632,7 @@ private bool ValidateIncomingBatchForStaging(
                     if ((!first && sequence != checked(previousSequence + 1)) ||
                         sequence == 0 || sequence > high)
                         throw new InvalidDataException("Relay storage contains a sequence gap or exceeds its high-watermark.");
-                    BatchId changeId = DecodePayloadHeader(row.Value);
-                    if (!TryGetChangeLedger(snapshot, partitionRoot, state,
-                            new LedgerKey(namespaceId, changeId), out ChangeLedgerValue ledger) ||
-                        ledger.IsLocalOutbound || ledger.AuthorNodeId != key.Author ||
-                        (ledger.StreamSequence != 0 && ledger.StreamSequence != sequence))
-                        throw new InvalidDataException("Relay row has no matching durable ChangeId identity.");
+                    _ = DecodePayloadHeader(row.Value);
                     first = false;
                     previousSequence = sequence;
                     if (!visitor(key, sequence, row.Value))
@@ -6646,13 +6645,8 @@ private bool ValidateIncomingBatchForStaging(
                 if (!keepGoing) return false;
                 if (visited < 512) break;
             }
-            bool hasPeerRequirements =
-                state.InterestedPeers.Any(peer => peer.NamespaceId == namespaceId && peer.Peer != key.Author) ||
-                state.RequiredPeerStreams.Any(peer => peer.NamespaceId == namespaceId &&
-                    peer.AuthorStream == key.Author && peer.Peer != key.Author);
-            bool allPeersSafe = hasPeerRequirements &&
-                GetSafePeerCursor(state, namespaceId, key.Author) >= high;
-            if (previousSequence == 0 && high != 0 && acknowledged < high && !allPeersSafe)
+            if (previousSequence == 0 && high != 0 &&
+                !IsRelayHistoryFullyCompacted(state, key, high, acknowledged))
                 throw new InvalidDataException("Relay high-watermark has no recoverable payload rows.");
             if (previousSequence != 0 && previousSequence != high)
                 throw new InvalidDataException("Relay payload history ends before its durable high-watermark.");
@@ -7478,7 +7472,8 @@ private bool ValidateIncomingBatchForStaging(
             MetadataRelayItem[] page = _owner.ReadRelayStoragePage(
                 GetStorageSnapshot(), PartitionRoot(_partitionKey), state,
                 namespaceId, originalAuthor, cursor, limit, out _);
-            if (page.Length == 0 && cursor < high)
+            if (page.Length == 0 && cursor < high &&
+                !_owner.IsRelayHistoryFullyCompacted(state, key, high, acknowledged))
                 throw new InvalidDataException("Relay snapshot high-watermark has no recoverable payload rows.");
             return new MetadataRelayPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
         }
