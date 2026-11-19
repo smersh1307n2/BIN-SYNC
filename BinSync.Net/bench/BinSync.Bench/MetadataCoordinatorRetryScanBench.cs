@@ -9,7 +9,7 @@ namespace BinSync.Bench;
 /// <summary>
 /// Measures the real coordinator retry after Metadata Store freeze succeeded but
 /// provider-feed acknowledgement failed. The measured call includes feed scanning,
-/// provider ACK and full provider-snapshot rehydration into the Node cache.
+/// durable published-origin recovery, incremental Node-cache update and provider ACK.
 /// </summary>
 [MemoryDiagnoser]
 [InvocationCount(1)]
