@@ -101,7 +101,7 @@ public sealed class FldFullReplaceBootstrapTests
                 originSequence: 0,
                 value: "obsolete-target-row"u8.ToArray());
             targetProvider.AppendLocalChange(oldTargetRow);
-            ProviderChangePage targetFeed = targetProvider.ReadLocalChanges(0, 1);
+            ProviderChangePage targetFeed = targetProvider.ReadLocalChanges(0, 4096);
             Assert.Single(targetFeed.Changes);
             targetProvider.CommitPublishedOrigins(new[]
             {
