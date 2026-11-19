@@ -1437,6 +1437,67 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Relay_history_pages_from_disk_without_retaining_per_change_headers()
+    {
+        string directory = Path.Combine(_root, "relay-disk-primary-pages");
+        Directory.CreateDirectory(directory);
+        const string scope = "relay-disk-primary-pages";
+        const int namespaceId = 7;
+        NodeId local = Node(1), sender = Node(2), author = Node(3);
+        const int operationCount = 600;
+        static BatchId Change(int value)
+        {
+            byte[] bytes = new byte[16];
+            BinaryPrimitives.WriteInt32LittleEndian(bytes, value);
+            bytes[15] = 0x7E;
+            return BatchId.From(bytes);
+        }
+        var operations = Enumerable.Range(1, operationCount)
+            .Select(sequence => new MetadataOperation
+            {
+                AuthorNodeId = author,
+                ChangeId = Change(1000 + sequence),
+                OriginAuthorEpoch = 1,
+                OriginSequence = (ulong)sequence,
+                Fingerprint = Enumerable.Repeat((byte)(sequence % 251 + 1), 16).ToArray(),
+                Payload = new byte[1024],
+                RelayEligible = true
+            }).ToArray();
+        try
+        {
+            using (var store = new StorageMetadataStore(directory, 459, deleteOnDispose: false))
+            {
+                store.AcceptIncomingBatch(new MetadataIncomingBatch
+                {
+                    ScopeId = scope, LocalReplica = local, SenderPeer = sender, SenderEpoch = 1,
+                    AuthorStreamNodeId = author, NamespaceId = namespaceId, BatchId = Change(999),
+                    CursorStart = 1, CursorEnd = 1, PreviousBatchDigest = new byte[16],
+                    BatchDigest = Enumerable.Repeat((byte)222, 16).ToArray(),
+                    Operations = operations
+                });
+                Assert.Equal(0, store.CachedRelayHeaderCount);
+            }
+
+            using var reopened = new StorageMetadataStore(directory, 459, deleteOnDispose: false);
+            Assert.Equal(0, reopened.CachedRelayHeaderCount);
+            var first = reopened.ReadRelay(scope, local, namespaceId, author, 0, operationCount);
+            Assert.Equal(256, first.Items.Count);
+            Assert.Equal(Change(1001), first.Items[0].ChangeId);
+            Assert.Equal(Change(1256), first.Items[^1].ChangeId);
+            var second = reopened.ReadRelay(scope, local, namespaceId, author, first.ScannedThrough, operationCount);
+            Assert.Equal(256, second.Items.Count);
+            var third = reopened.ReadRelay(scope, local, namespaceId, author, second.ScannedThrough, operationCount);
+            Assert.Equal(88, third.Items.Count);
+            Assert.Equal((ulong)operationCount, third.ScannedThrough);
+            Assert.Equal(0, reopened.CachedRelayHeaderCount);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Relay_page_is_read_from_metadata_at_each_downstream_peers_own_cursor()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-relay-page"), 422);
