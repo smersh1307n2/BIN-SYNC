@@ -1693,14 +1693,40 @@ public sealed class StorageSyncCoordinator
                     else
                         AddCoalescedPendingLocalChange(nodeWinners, change);
 
-                    if (outboundIdentityStore!.TryGetOutboundChangeIdentity(
+                    bool previouslyFrozen = false;
+                    if (change.Mutation.OriginSequence != 0)
+                    {
+                        // CommitPublishedOrigins stamps this value into the durable
+                        // provider feed only after Metadata Freeze succeeds. It is the
+                        // retry receipt, so avoid reopening Metadata for every ChangeId.
+                        if (change.Mutation.ChangeId != change.ChangeId ||
+                            change.Mutation.AuthorNodeId != _node.NodeId ||
+                            change.Mutation.OriginAuthorEpoch == 0)
+                            throw new InvalidDataException("Stamped provider feed row has invalid immutable publication provenance.");
+                        var stampedOrigin = new OperationOrigin(
+                            change.Mutation.AuthorNodeId,
+                            change.Mutation.OriginAuthorEpoch,
+                            change.Mutation.OriginSequence);
+                        if (!stampedOrigin.IsValid)
+                            throw new InvalidDataException("Stamped provider feed row has an invalid immutable Origin.");
+                        recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, stampedOrigin));
+                        previouslyFrozen = true;
+                    }
+                    else if (outboundIdentityStore!.TryGetOutboundChangeIdentity(
                         _scopeId!, _node.NodeId, _namespaceId, change.ChangeId,
                         out ReadOnlyMemory<byte> frozenFingerprint, out OperationOrigin frozenOrigin))
                     {
+                        // Compatibility/recovery path for a crash after Metadata Freeze
+                        // but before the provider feed receipt was durably stamped.
                         Digest16 actualFingerprint = ComputeMetadataFingerprint(change);
                         if (frozenFingerprint.Length != 16 || Digest16.From(frozenFingerprint.Span) != actualFingerprint)
                             throw new InvalidDataException("Provider ChangeId conflicts with its previously frozen outbound operation.");
                         recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, frozenOrigin));
+                        previouslyFrozen = true;
+                    }
+
+                    if (previouslyFrozen)
+                    {
                         lastFrozenFeedSequence = change.Sequence;
                         // Preserve all scanned winners for Node recovery, but discard
                         // the outbound suffix because it was frozen by an earlier pass.
