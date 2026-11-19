@@ -17,6 +17,110 @@ namespace BinSync.FldHost.Tests;
 public sealed class FldBinSyncRuntimeHostTests
 {
     [Fact]
+    public async Task Idle_tombstone_window_rejects_new_peer_until_atomic_generation_slice_finishes()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "binsync-gc-idle-window-" + Guid.NewGuid().ToString("N"));
+        string metadataRoot = Path.Combine(root, "metadata");
+        string fldRoot = Path.Combine(root, "fld");
+        byte[] localNode = Id(0x53);
+        byte[] peerNodeId = Id(0x54);
+        Process? databaseHost = null;
+        Process? runtimeHost = null;
+        SyncSession? acceptedSession = null;
+
+        try
+        {
+            databaseHost = StartDatabaseHost(fldRoot, localNode);
+            await WaitForDatabaseHost(fldRoot, databaseHost, TimeSpan.FromSeconds(45));
+            runtimeHost = StartRuntimeHost(
+                metadataRoot, fldRoot, MetadataPartition, localNode, ScopeId,
+                MetadataScopeId, ProviderClientId, maintenanceIntervalMs: 60000);
+            (Uri address, int peerPort) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            using var client = CreateClient(address, OperatorToken);
+            using var peerNode = new Node(NodeId.From(peerNodeId));
+
+            Task<HttpResponseMessage> windowTask = client.PostAsync(
+                "/admin/test/hold-idle-maintenance-window?durationMs=1000", content: null);
+            await Task.Delay(TimeSpan.FromMilliseconds(150));
+
+            SyncSession? rejectedSession = null;
+            try
+            {
+                rejectedSession = await TcpSync.ConnectAsync(
+                    peerNode, "127.0.0.1", peerPort,
+                    SessionCapabilities.FullAuthorId |
+                    SessionCapabilities.FlowControl |
+                    SessionCapabilities.NamespaceRosterV31 |
+                    SessionCapabilities.OriginFrontierV31 |
+                    SessionCapabilities.FullReplaceV31).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (Exception exception) when (
+                exception is IOException or SocketException or ObjectDisposedException or TimeoutException)
+            {
+                // The acceptor may close the just-negotiated session as soon as it
+                // observes the active idle-maintenance fence.
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(150));
+            await WaitForActivePeer(client, expected: 0, TimeSpan.FromSeconds(2));
+            if (rejectedSession is not null)
+                await rejectedSession.DisposeAsync();
+
+            using HttpResponseMessage windowResponse = await windowTask.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(HttpStatusCode.OK, windowResponse.StatusCode);
+
+            // Once the atomic idle window is released, the same peer can connect.
+            for (int attempt = 0; attempt < 10 && acceptedSession is null; attempt++)
+            {
+                try
+                {
+                    SyncSession candidate = await TcpSync.ConnectAsync(
+                        peerNode, "127.0.0.1", peerPort,
+                        SessionCapabilities.FullAuthorId |
+                        SessionCapabilities.FlowControl |
+                        SessionCapabilities.NamespaceRosterV31 |
+                        SessionCapabilities.OriginFrontierV31 |
+                        SessionCapabilities.FullReplaceV31).WaitAsync(TimeSpan.FromSeconds(3));
+                    await Task.Delay(TimeSpan.FromMilliseconds(100));
+                    using HttpResponseMessage peers = await client.GetAsync("/operator/peers");
+                    using JsonDocument state = JsonDocument.Parse(await peers.Content.ReadAsStringAsync());
+                    if (state.RootElement.GetProperty("activePeers").GetInt32() == 1)
+                        acceptedSession = candidate;
+                    else
+                        await candidate.DisposeAsync();
+                }
+                catch (Exception exception) when (
+                    exception is IOException or SocketException or ObjectDisposedException or TimeoutException)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100));
+                }
+            }
+
+            Assert.NotNull(acceptedSession);
+            await using SyncSession liveSession = acceptedSession!;
+            await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(3));
+
+            using HttpResponseMessage shutdown = await client.PostAsJsonAsync(
+                "/admin/shutdown", new { reason = "finish idle Tombstone admission-window integration" });
+            Assert.Equal(HttpStatusCode.OK, shutdown.StatusCode);
+            await runtimeHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(0, runtimeHost.ExitCode);
+            runtimeHost.Dispose();
+            runtimeHost = null;
+        }
+        finally
+        {
+            if (acceptedSession is not null)
+                await acceptedSession.DisposeAsync();
+            if (runtimeHost is not null)
+                await KillProcess(runtimeHost);
+            if (databaseHost is not null)
+                await KillProcess(databaseHost);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Active_tcp_peer_survives_host_gc_reference_lease_and_provider_write_resumes_after_release()
     {
         string root = Path.Combine(Path.GetTempPath(), "binsync-gc-peer-pause-" + Guid.NewGuid().ToString("N"));
