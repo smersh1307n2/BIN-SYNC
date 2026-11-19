@@ -277,6 +277,50 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     }
 
     [Fact]
+    public void Published_feed_receipt_survives_superseded_current_state_without_overwrite()
+    {
+        string directory = Path.Combine(_root, "published-origin-superseded-feed");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            using var provider = new StorageDataProvider(directory, partitionId: 98, deleteOnDispose: true);
+            provider.AppendLocalChange(Mutation(13, 9, 130, 1));
+            provider.AppendLocalChange(Mutation(13, 9, 131, 1));
+
+            IReadOnlyList<ProviderChange> changes = provider.ReadLocalChanges(0, 10).Changes;
+            Assert.Equal(2, changes.Count);
+            ProviderChange first = changes[0];
+            ProviderChange second = changes[1];
+            Assert.NotEqual(first.ChangeId, second.ChangeId);
+            Assert.Equal(0UL, first.Mutation.OriginSequence);
+            Assert.Equal(0UL, second.Mutation.OriginSequence);
+
+            var firstOrigin = new OperationOrigin(first.Mutation.AuthorNodeId, 1, 17);
+            provider.CommitPublishedOrigins(new[] { new ProviderPublishedOrigin(first, firstOrigin) });
+
+            ProviderChange stampedFirst = provider.ReadLocalChanges(0, 10).Changes[0];
+            Assert.Equal(first.ChangeId, stampedFirst.ChangeId);
+            Assert.Equal(firstOrigin.Sequence, stampedFirst.Mutation.OriginSequence);
+            Assert.True(provider.TryReadCurrent(second.Mutation.RecordId, second.Mutation.FieldId, out ProviderMutation? current));
+            Assert.Equal(second.ChangeId, current!.ChangeId);
+            Assert.Equal(0UL, current.OriginSequence);
+
+            var conflictingOrigin = new OperationOrigin(first.Mutation.AuthorNodeId, 1, 18);
+            Assert.Throws<InvalidDataException>(() =>
+                provider.CommitPublishedOrigins(new[] { new ProviderPublishedOrigin(stampedFirst, conflictingOrigin) }));
+            Assert.Equal(firstOrigin.Sequence,
+                provider.ReadLocalChanges(0, 10).Changes[0].Mutation.OriginSequence);
+            Assert.True(provider.TryReadCurrent(second.Mutation.RecordId, second.Mutation.FieldId, out current));
+            Assert.Equal(second.ChangeId, current!.ChangeId);
+            Assert.Equal(0UL, current.OriginSequence);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Legacy_local_feed_row_without_change_id_fails_closed()
     {
         string directory = Path.Combine(_root, "legacy-feed-identity");
