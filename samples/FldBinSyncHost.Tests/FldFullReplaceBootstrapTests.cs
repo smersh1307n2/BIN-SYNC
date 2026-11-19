@@ -103,7 +103,7 @@ public sealed class FldFullReplaceBootstrapTests
 
             targetNode = new NodeBuilder().WithNodeId(targetId).WithEpoch(8).Build();
             var targetCoordinator = new StorageSyncCoordinator(
-                targetNode, targetProvider, NamespaceId, targetMetadata, Scope);
+                targetNode!, targetProvider!, NamespaceId, targetMetadata, Scope);
             targetCoordinator.AttachNamespaceGcGuard(targetGcStore, trust);
 
             IApplicationGcReferenceScanner externalState = CreateEmptyExternalState();
@@ -113,9 +113,9 @@ public sealed class FldFullReplaceBootstrapTests
                 trust,
                 NamespaceId,
                 sourceId,
-                authorityPeerEpoch: 7,
+                7,
                 targetId,
-                localMemberEpoch: 8,
+                8,
                 targetSeed,
                 Scope,
                 externalState,
@@ -238,7 +238,7 @@ public sealed class FldFullReplaceBootstrapTests
                     Id(0x100000 + i),
                     Id(0x200000 + i),
                     0x1111,
-                    sourceId,
+                    rowAuthor,
                     checked((ulong)i + 1),
                     Encoding.UTF8.GetBytes($"source-row-{i:D3}"));
             }
