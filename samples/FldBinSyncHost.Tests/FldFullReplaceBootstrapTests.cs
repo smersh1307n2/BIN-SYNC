@@ -310,7 +310,7 @@ public sealed class FldFullReplaceBootstrapTests
             ChangeId = BatchId.From(changeId),
             OriginAuthorEpoch = 1,
             OriginSequence = originSequence,
-            HlcWall = checked(10_000UL + (ulong)System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(recordId.AsSpan(12)),
+            HlcWall = checked(10_000UL + (ulong)System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(recordId.AsSpan(12))),
             HlcLogical = 0,
             KeyEpoch = 0,
             Value = value
