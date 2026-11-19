@@ -7977,11 +7977,15 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         => new(() => EnumerateKeyspace(partitionKey, 5, 18, 16,
                 (key, offset) => new RelayKey(BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
                     NodeId.From(key.AsSpan(offset + 2, 16))),
-                value => BinaryPrimitives.ReadUInt64LittleEndian(value)),
+                value => BinaryPrimitives.ReadUInt64LittleEndian(value))
+                .Where(pair => pair.Value != 0),
             key =>
             {
                 bool found = TryReadStreamWatermark(partitionKey, 5, key.NamespaceId, key.Author, 0, out ulong value);
-                return (found, value);
+                // Kind 5 combines ACK and high-watermark. A relay stream's first
+                // payload creates the row with ACK=0; that is not evidence of a
+                // registered local consumer and must not veto peer-safe compaction.
+                return (found && value != 0, value);
             });
 
     private DiskMap<RelayKey, ulong> CreateRelayHighWatermarkMap(PartitionKey partitionKey)
