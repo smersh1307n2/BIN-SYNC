@@ -6628,7 +6628,7 @@ private bool ValidateIncomingBatchForStaging(
                         throw new InvalidDataException("Relay storage scan escaped its stream prefix.");
                     ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(
                         rowKey.Slice(partitionRoot.Length + 1 + 18, 8));
-                    if ((!first && sequence != checked(previousSequence + 1)) ||
+                    if ((previousSequence != 0 && sequence != checked(previousSequence + 1)) ||
                         sequence == 0 || sequence > high)
                         throw new InvalidDataException("Relay storage contains a sequence gap or exceeds its high-watermark.");
                     _ = DecodePayloadHeader(row.Value);
