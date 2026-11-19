@@ -35,15 +35,11 @@ public sealed class FldFullReplaceBootstrapTests
 
         NodeId sourceId = NodeId.From(Id(1));
         NodeId targetId = NodeId.From(Id(2));
-        NodeId rowAuthor = NodeId.From(Id(3));
         (byte[] sourceSeed, byte[] sourcePublicKey) = BatchSignature.GenerateKeyPair();
         (byte[] targetSeed, byte[] targetPublicKey) = BatchSignature.GenerateKeyPair();
-        (byte[] rowAuthorSeed, byte[] rowAuthorPublicKey) = BatchSignature.GenerateKeyPair();
-        _ = rowAuthorSeed;
         var trust = new TrustStore();
         trust.Allow(sourceId, sourcePublicKey, TrustMode.PreShared);
         trust.Allow(targetId, targetPublicKey, TrustMode.PreShared);
-        trust.Allow(rowAuthor, rowAuthorPublicKey, TrustMode.PreShared);
 
         var unsignedRoster = new NamespaceRosterCertificate
         {
@@ -65,13 +61,6 @@ public sealed class FldFullReplaceBootstrapTests
                     NodeId = targetId,
                     PublicKey = targetPublicKey,
                     TransportPeerEpoch = 8,
-                    Status = NamespaceMemberStatus.Active
-                },
-                new NamespaceRosterMember
-                {
-                    NodeId = rowAuthor,
-                    PublicKey = rowAuthorPublicKey,
-                    TransportPeerEpoch = 1,
                     Status = NamespaceMemberStatus.Active
                 }
             }
@@ -108,10 +97,18 @@ public sealed class FldFullReplaceBootstrapTests
                 recordId: Id(0x700001),
                 changeId: Id(0x710001),
                 fieldId: 0x2222,
-                author: rowAuthor,
-                originSequence: 1,
+                author: targetId,
+                originSequence: 0,
                 value: "obsolete-target-row"u8.ToArray());
-            _ = targetProvider.ApplyRemoteBatch(Guid.NewGuid(), new[] { oldTargetRow });
+            targetProvider.AppendLocalChange(oldTargetRow);
+            ProviderChangePage targetFeed = targetProvider.ReadLocalChanges(0, 1);
+            Assert.Single(targetFeed.Changes);
+            targetProvider.CommitPublishedOrigins(new[]
+            {
+                new ProviderPublishedOrigin(
+                    targetFeed.Changes[0], new OperationOrigin(targetId, 1, 1))
+            });
+            targetProvider.AcknowledgeLocalChanges(targetFeed.ScannedThroughSequence);
 
             targetNode = new NodeBuilder().WithNodeId(targetId).WithEpoch(8).Build();
             var targetCoordinator = new StorageSyncCoordinator(
@@ -252,8 +249,8 @@ public sealed class FldFullReplaceBootstrapTests
 
         PreparedFullReplaceSnapshot CreateSourceSnapshot()
         {
-            // Populate source state as already-published remote-origin rows so the
-            // immutable snapshot carries stable ChangeIds and non-zero origin cursors.
+            // Publish the source's own local feed, stamp immutable Origin values,
+            // then ACK that feed so the FULL_REPLACE snapshot contains no drafts.
             FldDatabaseDataProvider provider = sourceProvider;
             var mutations = new ProviderMutation[257];
             for (int i = 0; i < mutations.Length; i++)
@@ -262,11 +259,21 @@ public sealed class FldFullReplaceBootstrapTests
                     Id(0x100000 + i),
                     Id(0x200000 + i),
                     0x1111,
-                    rowAuthor,
-                    checked((ulong)i + 1),
+                    sourceId,
+                    originSequence: 0,
                     Encoding.UTF8.GetBytes($"source-row-{i:D3}"));
+                provider.AppendLocalChange(mutations[i]);
             }
-            _ = provider.ApplyRemoteBatch(Guid.NewGuid(), mutations);
+
+            ProviderChangePage feed = provider.ReadLocalChanges(0, 4096);
+            Assert.Equal(257, feed.Changes.Count);
+            var published = new ProviderPublishedOrigin[feed.Changes.Count];
+            for (int i = 0; i < published.Length; i++)
+                published[i] = new ProviderPublishedOrigin(
+                    feed.Changes[i], new OperationOrigin(sourceId, 1, checked((ulong)i + 1)));
+            provider.CommitPublishedOrigins(published);
+            provider.AcknowledgeLocalChanges(feed.ScannedThroughSequence);
+
             return StorageFullReplaceSender.PrepareSnapshot(
                 provider, trust, roster, sourceId, Guid.NewGuid(), sourceSeed);
         }
@@ -303,7 +310,7 @@ public sealed class FldFullReplaceBootstrapTests
             ChangeId = BatchId.From(changeId),
             OriginAuthorEpoch = 1,
             OriginSequence = originSequence,
-            HlcWall = 10_000 + originSequence,
+            HlcWall = checked(10_000UL + (ulong)System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(recordId.AsSpan(12)),
             HlcLogical = 0,
             KeyEpoch = 0,
             Value = value
