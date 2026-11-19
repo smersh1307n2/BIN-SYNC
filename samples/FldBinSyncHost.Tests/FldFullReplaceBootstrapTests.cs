@@ -261,7 +261,21 @@ public sealed class FldFullReplaceBootstrapTests
 
             Assert.NotNull(receiverAck);
             Assert.True(acknowledgement.Installed);
-            Assert.True(targetMetadata.IsPeerInitialSyncComplete(
+            FullReplaceInstalledAck targetAck = Assert.Single(
+                targetGcStore.ReadFullReplaceInstalledAcks(roster, prepared.Generation));
+            Assert.Equal(targetId, targetAck.MemberNodeId);
+            Assert.Equal(prepared.Digest, targetAck.Digest);
+            Assert.True(targetAck.Installed);
+            MetadataBaselineReport targetReport = Assert.Single(
+                targetGcStore.ReadMetadataBaselineReports(roster, prepared.Generation, prepared.Digest));
+            Assert.Equal(targetId, targetReport.MemberNodeId);
+            Assert.Equal(8U, targetReport.MemberTransportEpoch);
+            Assert.Equal(EntryCount, targetReport.SnapshotEntryCount);
+            Assert.Equal(prepared.SourceChangeFeedWatermark, targetReport.ProviderChangeFeedWatermark);
+            // A single member's MBR1 report is durable, but the peer baseline is not
+            // complete until every Active member has installed the same generation,
+            // supplied its own report, and the signed RCP2 checkpoint is applied.
+            Assert.False(targetMetadata.IsPeerInitialSyncComplete(
                 Scope, targetId, sourceId, 7, NamespaceId));
             Assert.Equal(prepared.Generation, acknowledgement.Generation);
             Assert.Equal(EntryCount, prepared.ExpectedEntryCount);
