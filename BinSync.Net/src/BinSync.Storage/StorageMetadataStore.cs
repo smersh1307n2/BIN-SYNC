@@ -2067,13 +2067,20 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
 
         var partitionKey = new PartitionKey(scopeId, localReplica);
-        // A snapshot reads only receive cursors and relay/outbound streams.
-        // Do not duplicate the unrelated durable ledger, receipts or pending applies.
-        var state = GetOrCreatePartition(partitionKey).CloneForSnapshot();
-        // Capture stream bodies now so later live compaction cannot remove the
-        // point-in-time payload rows this snapshot must continue to expose.
-        HydrateCachedStreamPayloadBodies(partitionKey, state);
-        return new VolatileSnapshot(this, partitionKey, state);
+        // Pin the immutable Storage generation; outbound rows are read from it
+        // page-by-page rather than copied into the volatile snapshot.
+        StorageSnapshot outboundSnapshot = _storage.OpenSnapshot();
+        try
+        {
+            var state = GetOrCreatePartition(partitionKey).CloneForSnapshot();
+            HydrateCachedStreamPayloadBodies(partitionKey, state);
+            return new VolatileSnapshot(this, partitionKey, state, outboundSnapshot);
+        }
+        catch
+        {
+            outboundSnapshot.Dispose();
+            throw;
+        }
     
         }
     }
@@ -2819,8 +2826,6 @@ private bool ValidateIncomingBatchForStaging(
                 "Outbound publication is fenced while an incoming relay apply for the same author stream is unresolved.");
         var existingByChangeId = new Dictionary<BatchId, MetadataOutboundItem>();
         var newOperations = new List<MetadataFrozenOperation>(operations.Count);
-        List<MetadataOutboundItem>? priorEntries = null;
-        int priorEntrySearchIndex = 0;
         using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
         bool sawNewOperation = false;
         ulong previousExistingSequence = 0;
@@ -2869,27 +2874,19 @@ private bool ValidateIncomingBatchForStaging(
             else
             {
                 // Compatibility for legacy ledger rows written before the sequence
-                // index existed. New rows never scan the full outbound header list.
-                if (priorEntries is null && !current.Outbound.TryGetValue(key, out priorEntries))
-                    throw new InvalidDataException("Outbound ChangeId is already frozen in another author stream.");
-                while (priorEntrySearchIndex < priorEntries.Count)
-                {
-                    MetadataOutboundItem candidate = priorEntries[priorEntrySearchIndex++];
-                    if (candidate.ChangeId == operation.ChangeId)
-                    {
-                        prior = candidate;
-                        break;
-                    }
-                }
-                if (prior is null)
+                // was stored. Scan the B+ tree with a bounded cursor; no header cache.
+                ulong legacySequence = FindOutboundSequenceByChangeId(
+                    payloadSnapshot, partitionRoot, namespaceId, localAuthor, operation.ChangeId);
+                if (legacySequence == 0)
                     throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
-                byte[] priorPayload = ResolveStreamPayload(
-                    payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, prior.Sequence, prior.Payload);
+                byte[] priorPayload = LoadStreamPayloadBody(
+                    payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, legacySequence);
                 if (!priorPayload.AsSpan().SequenceEqual(operation.Payload))
                     throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
-                prior = new MetadataOutboundItem(prior.Sequence, prior.AuthorNodeId, prior.ChangeId, priorPayload)
+                prior = new MetadataOutboundItem(
+                    legacySequence, localAuthor, operation.ChangeId, priorPayload)
                 {
-                    Provenance = prior.Provenance
+                    Provenance = frozenLedger.Provenance
                 };
             }
             if (prior.Sequence <= previousExistingSequence)
@@ -5526,10 +5523,28 @@ private bool ValidateIncomingBatchForStaging(
         }
         else
         {
-            if (!current.Outbound.TryGetValue(new OutboundKey(namespaceId, author), out var entries))
-                return 0;
-            removedSequences = entries.Where(item => item.Sequence <= safeThroughSequence)
-                .Take(maxEntries).Select(item => item.Sequence).ToList();
+            byte[] prefix = StorageKey(root, storageKind, KeyNamespaceAuthor(namespaceId, author));
+            using StorageSnapshot snapshot = _storage.OpenSnapshot();
+            using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+            removedSequences = new List<ulong>(Math.Min(maxEntries, 512));
+            while (removedSequences.Count < maxEntries)
+            {
+                int request = Math.Min(512, maxEntries - removedSequences.Count);
+                bool reachedSafeBoundary = false;
+                int visited = cursor.VisitPage(request, (in StorageEntryView row) =>
+                {
+                    ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(
+                        row.Key.Slice(root.Length + 1 + 18, 8));
+                    if (sequence > safeThroughSequence)
+                    {
+                        reachedSafeBoundary = true;
+                        return false;
+                    }
+                    removedSequences.Add(sequence);
+                    return true;
+                });
+                if (reachedSafeBoundary || visited < request) break;
+            }
         }
         if (removedSequences.Count == 0) return 0;
 
@@ -5556,12 +5571,8 @@ private bool ValidateIncomingBatchForStaging(
         if (relay)
         {
             current.Relay[new RelayKey(namespaceId, author)].RemoveAll(item => removedSet.Contains(item.Sequence));
-            // A compaction changes the identity→sequence lookup set. Rebuild lazily
-            // on the next page rather than retaining stale ChangeId resolutions.
             current.RelaySequenceIndexes?.Remove(new RelayKey(namespaceId, author));
         }
-        else
-            current.Outbound[new OutboundKey(namespaceId, author)].RemoveAll(item => removedSet.Contains(item.Sequence));
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
         return removedSequences.Count;
@@ -5669,12 +5680,6 @@ private bool ValidateIncomingBatchForStaging(
             batch.Put(write.Key, write.Value);
         CommitPartitionBatch(batch, partitionKey, current);
 
-        if (!current.Outbound.TryGetValue(outboundKey, out var entries))
-        {
-            entries = new List<MetadataOutboundItem>();
-            current.Outbound.Add(outboundKey, entries);
-        }
-        entries.AddRange(frozen);
         foreach (var originWatermark in originHighWatermarks)
             current.OriginHighWatermarks[originWatermark.Key] = originWatermark.Value;
         for (int i = 0; i < operations.Count; i++)
@@ -6096,20 +6101,6 @@ private bool ValidateIncomingBatchForStaging(
             Add(StorageKey(root, 5, KeyNamespaceAuthor(key.NamespaceId, key.Author)), value);
         }
 
-        foreach (var pair in state.Outbound)
-        {
-            foreach (var item in pair.Value)
-            {
-                byte[] suffix = new byte[26];
-                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
-                pair.Key.Author.WriteTo(suffix.AsSpan(2));
-                BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
-                if (item.Payload.Length == 0)
-                    throw new InvalidOperationException("StateEntries requires in-memory stream payload bodies.");
-                Add(StorageKey(root, 21, suffix), EncodePayloadItem(item.ChangeId, item.Payload));
-            }
-        }
-
         var outboundWatermarkKeys = new HashSet<OutboundKey>(state.OutboundHighWatermarks.Keys);
         outboundWatermarkKeys.UnionWith(state.OutboundAck.Keys);
         foreach (var key in outboundWatermarkKeys)
@@ -6304,13 +6295,7 @@ private bool ValidateIncomingBatchForStaging(
                             state.Relay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
                         relayItems.Add(new MetadataRelayItem(sequence, relayKey.Author, changeId, Array.Empty<byte>()));
                     }
-                    else
-                    {
-                        var outboundKey = new OutboundKey(relayKey.NamespaceId, relayKey.Author);
-                        if (!state.Outbound.TryGetValue(outboundKey, out var outboundItems))
-                            state.Outbound.Add(outboundKey, outboundItems = new List<MetadataOutboundItem>());
-                        outboundItems.Add(new MetadataOutboundItem(sequence, relayKey.Author, changeId, Array.Empty<byte>()));
-                    }
+                    // Outbound history is disk-primary; do not retain decoded headers.
                     break;
                 }
                 case 5:
@@ -6737,6 +6722,27 @@ private bool ValidateIncomingBatchForStaging(
         return count;
     }
 
+    private static ulong FindOutboundSequenceByChangeId(
+        StorageSnapshot snapshot, byte[] partitionRoot,
+        int namespaceId, NodeId author, BatchId changeId)
+    {
+        byte[] prefix = StorageKey(partitionRoot, 21, KeyNamespaceAuthor(namespaceId, author));
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        while (true)
+        {
+            ulong found = 0;
+            int visited = cursor.VisitPage(512, (in StorageEntryView row) =>
+            {
+                if (DecodePayloadHeader(row.Value) != changeId) return true;
+                found = BinaryPrimitives.ReadUInt64BigEndian(
+                    row.Key.Slice(partitionRoot.Length + 1 + 18, 8));
+                return false;
+            });
+            if (found != 0) return found;
+            if (visited < 512) return 0;
+        }
+    }
+
     private MetadataOutboundItem[] ReadOutboundStoragePage(
         StorageSnapshot snapshot, byte[] partitionRoot, PartitionState state,
         int namespaceId, NodeId author, ulong afterSequence, int limit)
@@ -6873,21 +6879,6 @@ private bool ValidateIncomingBatchForStaging(
                 };
             }
         }
-        foreach (var pair in state.Outbound)
-        {
-            List<MetadataOutboundItem> items = pair.Value;
-            for (int i = 0; i < items.Count; i++)
-            {
-                MetadataOutboundItem item = items[i];
-                if (item.Payload.Length > 0) continue;
-                byte[] payload = LoadStreamPayloadBody(
-                    snapshot, partitionRoot, 21, pair.Key.NamespaceId, pair.Key.Author, item.Sequence);
-                items[i] = new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, payload)
-                {
-                    Provenance = item.Provenance
-                };
-            }
-        }
     }
 
     private static void ReleaseCachedStreamPayloadBodies(PartitionState state)
@@ -6900,19 +6891,6 @@ private bool ValidateIncomingBatchForStaging(
                 MetadataRelayItem item = items[i];
                 if (item.Payload.Length == 0) continue;
                 items[i] = new MetadataRelayItem(item.Sequence, item.OriginalAuthor, item.ChangeId, Array.Empty<byte>())
-                {
-                    Provenance = item.Provenance
-                };
-            }
-        }
-        foreach (var pair in state.Outbound)
-        {
-            List<MetadataOutboundItem> items = pair.Value;
-            for (int i = 0; i < items.Count; i++)
-            {
-                MetadataOutboundItem item = items[i];
-                if (item.Payload.Length == 0) continue;
-                items[i] = new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, Array.Empty<byte>())
                 {
                     Provenance = item.Provenance
                 };
@@ -6936,17 +6914,6 @@ private bool ValidateIncomingBatchForStaging(
             }
         }
 
-        foreach (var (key, items) in state.Outbound)
-        {
-            for (int i = 0; i < items.Count; i++)
-            {
-                var item = items[i];
-                var provenance = ResolvePayloadProvenance(snapshot, partitionRoot, state, key.NamespaceId, key.Author,
-                    item.ChangeId, isLocalOutbound: true);
-                items[i] = new MetadataOutboundItem(item.Sequence, item.AuthorNodeId,
-                    item.ChangeId, item.Payload) { Provenance = provenance };
-            }
-        }
     }
 
     private OperationOrigin ResolvePayloadProvenance(PartitionKey partitionKey, PartitionState state, int namespaceId,
@@ -7320,12 +7287,16 @@ private bool ValidateIncomingBatchForStaging(
         private readonly StorageMetadataStore _owner;
         private readonly PartitionKey _partitionKey;
         private PartitionState? _state;
+        private StorageSnapshot? _storageSnapshot;
 
-        public VolatileSnapshot(StorageMetadataStore owner, PartitionKey partitionKey, PartitionState state)
+        public VolatileSnapshot(
+            StorageMetadataStore owner, PartitionKey partitionKey,
+            PartitionState state, StorageSnapshot storageSnapshot)
         {
             _owner = owner;
             _partitionKey = partitionKey;
             _state = state;
+            _storageSnapshot = storageSnapshot;
         }
 
         public ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId)
@@ -7399,25 +7370,22 @@ private bool ValidateIncomingBatchForStaging(
             if (afterSequence > high)
                 throw new ArgumentOutOfRangeException(nameof(afterSequence));
             ulong cursor = Math.Max(afterSequence, acknowledged);
-            if (limit <= 0 || !state.Outbound.TryGetValue(key, out var entries))
+            if (limit <= 0 || cursor >= high)
                 return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), cursor);
-            int first = FindFirstSequenceAfter(entries, cursor, static item => item.Sequence);
-            int count = Math.Min(limit, entries.Count - first);
-            var page = new MetadataOutboundItem[count];
-            for (int i = 0; i < count; i++)
-            {
-                MetadataOutboundItem entry = entries[first + i];
-                byte[] payload = _owner.ResolveStreamPayload(
-                    _partitionKey, 21, namespaceId, localAuthor, entry.Sequence, entry.Payload);
-                page[i] = new MetadataOutboundItem(entry.Sequence, entry.AuthorNodeId, entry.ChangeId, payload.ToArray())
-                {
-                    Provenance = entry.Provenance
-                };
-            }
+            MetadataOutboundItem[] page = _owner.ReadOutboundStoragePage(
+                GetStorageSnapshot(), PartitionRoot(_partitionKey), state,
+                namespaceId, localAuthor, cursor, limit);
             return new MetadataOutboundPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
         }
 
-        public void Dispose() => _state = null;
+        public void Dispose()
+        {
+            _state = null;
+            Interlocked.Exchange(ref _storageSnapshot, null)?.Dispose();
+        }
+
+        private StorageSnapshot GetStorageSnapshot()
+            => _storageSnapshot ?? throw new ObjectDisposedException(nameof(VolatileSnapshot));
 
         private PartitionState GetState()
             => _state ?? throw new ObjectDisposedException(nameof(VolatileSnapshot));
@@ -7715,7 +7683,6 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public Dictionary<RelayKey, Dictionary<BatchId, ulong>>? RelaySequenceIndexes { get; set; }
         public Dictionary<RelayKey, ulong> RelayAck { get; } = new();
         public Dictionary<RelayKey, ulong> RelayHighWatermarks { get; } = new();
-        public Dictionary<OutboundKey, List<MetadataOutboundItem>> Outbound { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundHighWatermarks { get; } = new();
         public Dictionary<OriginStreamKey, OriginIssuedState> OriginHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundAck { get; } = new();
@@ -7741,7 +7708,6 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             foreach (var pair in Relay) clone.Relay.Add(pair.Key, new List<MetadataRelayItem>(pair.Value));
             foreach (var pair in RelayAck) clone.RelayAck.Add(pair.Key, pair.Value);
             foreach (var pair in RelayHighWatermarks) clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
-            foreach (var pair in Outbound) clone.Outbound.Add(pair.Key, new List<MetadataOutboundItem>(pair.Value));
             foreach (var pair in OutboundAck) clone.OutboundAck.Add(pair.Key, pair.Value);
             foreach (var pair in OutboundHighWatermarks) clone.OutboundHighWatermarks.Add(pair.Key, pair.Value);
             return clone;
