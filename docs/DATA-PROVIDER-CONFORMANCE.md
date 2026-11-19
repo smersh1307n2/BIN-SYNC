@@ -54,6 +54,19 @@ A feed consumer must be able to:
 
 The provider's feed token is not a BIN-SYNC author OutboxSeq, peer StreamOffset, HLC, WAL CommitSeq or Storage CommitSeq. Translation is explicit at the adapter/runtime boundary.
 
+### 3.1.1. Durable publication receipt on the local feed
+
+For Metadata-Store-owned publication, a provider feed row starts as an unpublished draft with `OriginSequence = 0`. After the Metadata Store durably freezes the operation and assigns its immutable `OperationOrigin`, the provider atomically stamps that OriginSequence into both the durable feed row and the current-state projection. The feed's own `ProviderChange.Sequence` remains unchanged and is never reused as the protocol OriginSequence.
+
+This stamp is a durable receipt that the corresponding ChangeId has already crossed the Metadata Freeze boundary:
+
+- If provider-feed ACK fails after the stamp commits, a repeated feed read returns the same ChangeId with its non-zero OriginSequence. The sync coordinator can recover the frozen operation from this receipt without one Metadata ChangeId point lookup per row and without restamping the provider rows.
+- If the process stops after Metadata Freeze but before the provider receipt transaction commits, the feed row still has OriginSequence zero. The coordinator uses the Metadata ChangeId identity/fingerprint lookup to recover the already-frozen operation, then commits the provider receipt. This compatibility/recovery path is intentionally retained.
+- A mismatched or invalid stamped Origin fails closed. A provider may not accept a caller-supplied non-zero OriginSequence as a new local draft; only the post-freeze publication path may stamp it.
+- The provider receipt and current-state Origin stamp share one Storage transaction. If a newer current-state value has superseded the feed entry, the feed receipt is still stamped but the newer value is never overwritten.
+
+The stamp is not an ACK and does not remove the feed row. The feed remains durable and replayable until the coordinator has persisted the corresponding Node cache update and explicitly acknowledges the captured feed prefix. This keeps the retry receipt separate from the feed cursor and preserves crash recovery across Freeze, provider stamping, Node checkpoint and source-feed ACK.
+
 Each `ProviderChange` also carries a stable, non-zero 128-bit `ChangeId`. The provider-local `Sequence` is only the feed cursor; it is not the protocol Outbox sequence. The same feed entry must return the same `ChangeId` after repeated reads and process reopen. `StorageDataProvider` stores the identity as a 16-byte suffix in the existing local-feed row, so it adds no second metadata row and is removed automatically when that feed row is acknowledged. Its `BSP3` format marker is mandatory; an unmarked partition containing provider-owned rows is rejected. Every v3 feed row must contain exactly one nonzero identity suffix. Missing, zero, truncated or extra identity bytes fail closed; the provider MUST NOT synthesize an identity during read/recovery. A provider that cannot durably assign identity before exposing a feed entry is not eligible for Metadata-Store-owned publication.
 
 For state-only providers with no durable feed, snapshot comparison can preserve final-state LWW differences only. It cannot preserve intermediate events or local operations overwritten before observation. That limitation must be an explicit provider capability, not silently presented as event-history synchronization.
