@@ -1064,6 +1064,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
             ReportAllocation("metadata-revalidation-live-set");
             byte[] partitionRoot = PartitionRoot(partitionKey);
+            using StorageSnapshot revalidationSnapshot = _storage.OpenSnapshot();
             // Compact approved entries in the candidate list itself. A second
             // List<(LedgerKey, byte[])> duplicates a large backing array for every
             // GC page; the candidate list is no longer needed after Host revalidation.
@@ -1075,8 +1076,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ChangeLedgerValue snapshotValue = candidate.Value;
                 if (hostReferenced.Contains(key.ChangeId) ||
                     liveChangeIds.Contains(key.ChangeId) ||
-                    !TryGetChangeLedger(partitionKey, current, key, out ChangeLedgerValue? currentValue) ||
-                    !EncodeChangeLedgerValue(currentValue!).AsSpan().SequenceEqual(EncodeChangeLedgerValue(snapshotValue)) ||
+                    !TryGetChangeLedger(revalidationSnapshot, partitionRoot, current, key, out ChangeLedgerValue? currentValue) ||
+                    !ChangeLedgerValuesEqual(currentValue!, snapshotValue) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, snapshotValue.Provenance))
                     continue;
 
@@ -1230,14 +1231,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             ThrowIfDisposed();
             if (!TryGetPartition(partitionKey, out PartitionState? current))
                 return 0;
+            using StorageSnapshot revalidationSnapshot = _storage.OpenSnapshot();
             List<(ReceiptKey Key, byte[] StorageKey)> approved = new(Math.Min(limit, hostUnreferenced.Count));
             var pendingReceiptKeys = BuildPendingReceiptKeySet(current);
             var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
             foreach ((ReceiptKey key, ReceiptValue observed) in candidates)
             {
                 if (!hostUnreferenced.Contains(key) ||
-                    !TryGetReceipt(partitionKey, current, key, out ReceiptValue? receipt) ||
-                    !EncodeReceiptValue(receipt!).AsSpan().SequenceEqual(EncodeReceiptValue(observed)) ||
+                    !TryGetReceipt(revalidationSnapshot, partitionKey, current, key, out ReceiptValue? receipt) ||
+                    !ReceiptValuesEqual(receipt!, observed) ||
                     key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
                     key.Epoch == 0 || receipt.OriginSequence == 0 ||
                     pendingReceiptKeys.Contains(key) ||
@@ -1512,13 +1514,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     if (!AddPayload(operation.Payload)) return false;
             }
             var partitionKey = new PartitionKey(scopeId, localReplica);
+            byte[] partitionRoot = PartitionRoot(partitionKey);
+            using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
             foreach (var stream in state.Relay)
             {
                 if (stream.Key.NamespaceId != namespaceId) continue;
                 foreach (var item in stream.Value)
                 {
-                    byte[] payload = ResolveStreamPayload(
-                        partitionKey, 20, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
+                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 20, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
                     if (!AddPayload(payload)) return false;
                 }
             }
@@ -1527,8 +1530,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (stream.Key.NamespaceId != namespaceId) continue;
                 foreach (var item in stream.Value)
                 {
-                    byte[] payload = ResolveStreamPayload(
-                        partitionKey, 21, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
+                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
                     if (!AddPayload(payload)) return false;
                 }
             }
@@ -1608,13 +1610,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     if (!ScanPayload(operation.Payload)) return false;
             }
             var partitionKey = new PartitionKey(scopeId, localReplica);
+            byte[] partitionRoot = PartitionRoot(partitionKey);
+            using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
             foreach (var stream in state.Relay)
             {
                 if (stream.Key.NamespaceId != namespaceId) continue;
                 foreach (var item in stream.Value)
                 {
-                    byte[] payload = ResolveStreamPayload(
-                        partitionKey, 20, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
+                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 20, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
                     if (!ScanPayload(payload)) return false;
                 }
             }
@@ -1623,8 +1626,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (stream.Key.NamespaceId != namespaceId) continue;
                 foreach (var item in stream.Value)
                 {
-                    byte[] payload = ResolveStreamPayload(
-                        partitionKey, 21, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
+                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
                     if (!ScanPayload(payload)) return false;
                 }
             }
@@ -1694,13 +1696,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 pending.Batch.Operations.Any(operation => PayloadReferencesRecord(operation.Payload, recordId))))
                 return true;
             var partitionKey = new PartitionKey(scopeId, localReplica);
+            byte[] partitionRoot = PartitionRoot(partitionKey);
+            using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
             foreach (var pair in state.Relay)
             {
                 if (pair.Key.NamespaceId != namespaceId) continue;
                 foreach (var item in pair.Value)
                 {
-                    byte[] payload = ResolveStreamPayload(
-                        partitionKey, 20, pair.Key.NamespaceId, pair.Key.Author, item.Sequence, item.Payload);
+                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 20, pair.Key.NamespaceId, pair.Key.Author, item.Sequence, item.Payload);
                     if (PayloadReferencesRecord(payload, recordId)) return true;
                 }
             }
@@ -1709,8 +1712,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (pair.Key.NamespaceId != namespaceId) continue;
                 foreach (var item in pair.Value)
                 {
-                    byte[] payload = ResolveStreamPayload(
-                        partitionKey, 21, pair.Key.NamespaceId, pair.Key.Author, item.Sequence, item.Payload);
+                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, pair.Key.NamespaceId, pair.Key.Author, item.Sequence, item.Payload);
                     if (PayloadReferencesRecord(payload, recordId)) return true;
                 }
             }
@@ -1758,14 +1760,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             }
 
             var partitionKey = new PartitionKey(scopeId, localReplica);
+            byte[] partitionRoot = PartitionRoot(partitionKey);
+            using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
             foreach (var relay in state.Relay)
             {
                 if (relay.Key.NamespaceId != namespaceId)
                     continue;
                 foreach (var item in relay.Value)
                 {
-                    byte[] payload = ResolveStreamPayload(
-                        partitionKey, 20, relay.Key.NamespaceId, relay.Key.Author, item.Sequence, item.Payload);
+                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 20, relay.Key.NamespaceId, relay.Key.Author, item.Sequence, item.Payload);
                     if (!TryAddLiveRecordReference(liveRecordReferences, payload))
                     {
                         liveRecordReferences.Clear();
@@ -1780,8 +1783,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     continue;
                 foreach (var item in outbound.Value)
                 {
-                    byte[] payload = ResolveStreamPayload(
-                        partitionKey, 21, outbound.Key.NamespaceId, outbound.Key.Author, item.Sequence, item.Payload);
+                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, outbound.Key.NamespaceId, outbound.Key.Author, item.Sequence, item.Payload);
                     if (!TryAddLiveRecordReference(liveRecordReferences, payload))
                     {
                         liveRecordReferences.Clear();
@@ -2816,6 +2818,7 @@ private bool ValidateIncomingBatchForStaging(
 
         var partitionKey = new PartitionKey(scopeId, localReplica);
         var current = GetOrCreatePartition(partitionKey);
+        byte[] partitionRoot = PartitionRoot(partitionKey);
         if (operations.Count == 0)
             return Array.Empty<MetadataOutboundItem>();
 
@@ -2839,7 +2842,7 @@ private bool ValidateIncomingBatchForStaging(
         foreach (var operation in operations)
         {
             var ledgerKey = new LedgerKey(namespaceId, operation.ChangeId);
-            bool alreadyFrozen = TryGetChangeLedger(payloadSnapshot, partitionKey, current, ledgerKey, out var priorLedger)
+            bool alreadyFrozen = TryGetChangeLedger(payloadSnapshot, partitionRoot, current, ledgerKey, out var priorLedger)
                 && priorLedger.IsLocalOutbound;
             if (priorLedger is not null)
             {
@@ -2876,8 +2879,7 @@ private bool ValidateIncomingBatchForStaging(
             }
             if (prior is null)
                 throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
-            byte[] priorPayload = ResolveStreamPayload(
-                payloadSnapshot, partitionKey, 21, namespaceId, localAuthor, prior.Sequence, prior.Payload);
+            byte[] priorPayload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, prior.Sequence, prior.Payload);
             if (!priorPayload.AsSpan().SequenceEqual(operation.Payload))
                 throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
             if (prior.Sequence <= previousExistingSequence)
@@ -3194,6 +3196,7 @@ private bool ValidateIncomingBatchForStaging(
             return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), cursor);
 
         var partitionKey = new PartitionKey(scopeId, localReplica);
+        byte[] partitionRoot = PartitionRoot(partitionKey);
         using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
         int first = FindFirstSequenceAfter(entries, cursor, static item => item.Sequence);
         int count = Math.Min(limit, entries.Count - first);
@@ -3201,8 +3204,7 @@ private bool ValidateIncomingBatchForStaging(
         for (int i = 0; i < count; i++)
         {
             MetadataOutboundItem entry = entries[first + i];
-            byte[] payload = ResolveStreamPayload(
-                payloadSnapshot, partitionKey, 21, namespaceId, localAuthor, entry.Sequence, entry.Payload);
+            byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, entry.Sequence, entry.Payload);
             page[i] = new MetadataOutboundItem(entry.Sequence, entry.AuthorNodeId, entry.ChangeId, payload.ToArray())
             {
                 Provenance = entry.Provenance
@@ -3859,6 +3861,7 @@ private bool ValidateIncomingBatchForStaging(
             if (!state.Outbound.TryGetValue(key, out var entries))
                 throw new InvalidDataException("Outbound high-watermark has no recoverable payload rows.");
             var partitionKey = new PartitionKey(scopeId, localReplica);
+        byte[] partitionRoot = PartitionRoot(partitionKey);
             using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
             int first = FindFirstSequenceAfter(entries, cursor, static item => item.Sequence);
             int count = Math.Min(limit, entries.Count - first);
@@ -3866,8 +3869,7 @@ private bool ValidateIncomingBatchForStaging(
             for (int i = 0; i < count; i++)
             {
                 MetadataOutboundItem entry = entries[first + i];
-                byte[] payload = ResolveStreamPayload(
-                    payloadSnapshot, partitionKey, 21, namespaceId, authorStream, entry.Sequence, entry.Payload);
+                byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, namespaceId, authorStream, entry.Sequence, entry.Payload);
                 page[i] = new MetadataOutboundItem(entry.Sequence, entry.AuthorNodeId, entry.ChangeId, payload.ToArray())
                 {
                     Provenance = entry.Provenance
@@ -3905,6 +3907,7 @@ private bool ValidateIncomingBatchForStaging(
             if (!state.Relay.TryGetValue(key, out var entries))
                 throw new InvalidDataException("Relay high-watermark has no recoverable payload rows.");
             var partitionKey = new PartitionKey(scopeId, localReplica);
+        byte[] partitionRoot = PartitionRoot(partitionKey);
             using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
             int first = FindFirstSequenceAfter(entries, cursor, static item => item.Sequence);
             int count = Math.Min(limit, entries.Count - first);
@@ -3912,8 +3915,7 @@ private bool ValidateIncomingBatchForStaging(
             for (int i = 0; i < count; i++)
             {
                 MetadataRelayItem entry = entries[first + i];
-                byte[] payload = ResolveStreamPayload(
-                    payloadSnapshot, partitionKey, 20, namespaceId, authorStream, entry.Sequence, entry.Payload);
+                byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 20, namespaceId, authorStream, entry.Sequence, entry.Payload);
                 page[i] = new MetadataRelayItem(entry.Sequence, entry.OriginalAuthor, entry.ChangeId, payload.ToArray())
                 {
                     Provenance = entry.Provenance
@@ -5054,6 +5056,7 @@ private bool ValidateIncomingBatchForStaging(
             return new MetadataRelayPage(Array.Empty<MetadataRelayItem>(), cursor);
 
         var partitionKey = new PartitionKey(scopeId, localReplica);
+        byte[] partitionRoot = PartitionRoot(partitionKey);
         using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
         int first = FindFirstSequenceAfter(entries, cursor, static item => item.Sequence);
         int count = Math.Min(limit, entries.Count - first);
@@ -5061,8 +5064,7 @@ private bool ValidateIncomingBatchForStaging(
         for (int i = 0; i < count; i++)
         {
             MetadataRelayItem entry = entries[first + i];
-            byte[] payload = ResolveStreamPayload(
-                payloadSnapshot, partitionKey, 20, namespaceId, originalAuthor, entry.Sequence, entry.Payload);
+            byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 20, namespaceId, originalAuthor, entry.Sequence, entry.Payload);
             page[i] = new MetadataRelayItem(entry.Sequence, entry.OriginalAuthor, entry.ChangeId, payload.ToArray())
             {
                 Provenance = entry.Provenance
@@ -6521,6 +6523,28 @@ private bool ValidateIncomingBatchForStaging(
             legacyNodeFingerprint);
     }
 
+    private static bool ChangeLedgerValuesEqual(ChangeLedgerValue left, ChangeLedgerValue right)
+        => left.IsLocalOutbound == right.IsLocalOutbound &&
+            left.AuthorNodeId == right.AuthorNodeId &&
+            left.OriginAuthorEpoch == right.OriginAuthorEpoch &&
+            left.OriginSequence == right.OriginSequence &&
+            left.Fingerprint.AsSpan().SequenceEqual(right.Fingerprint) &&
+            (left.LegacyNodeLedgerFingerprint is null
+                ? right.LegacyNodeLedgerFingerprint is null
+                : right.LegacyNodeLedgerFingerprint is not null &&
+                  left.LegacyNodeLedgerFingerprint.AsSpan().SequenceEqual(right.LegacyNodeLedgerFingerprint));
+
+    private static bool ReceiptValuesEqual(ReceiptValue left, ReceiptValue right)
+        => left.CursorStart == right.CursorStart &&
+            left.CursorEnd == right.CursorEnd &&
+            left.NewRelayOperationCount == right.NewRelayOperationCount &&
+            left.DurableAuthor == right.DurableAuthor &&
+            left.TransportPeerEpoch == right.TransportPeerEpoch &&
+            left.OriginSequence == right.OriginSequence &&
+            left.PreviousBatchDigest.AsSpan().SequenceEqual(right.PreviousBatchDigest) &&
+            left.BatchDigest.AsSpan().SequenceEqual(right.BatchDigest) &&
+            left.HeaderFingerprint.AsSpan().SequenceEqual(right.HeaderFingerprint);
+
     private bool TryGetChangeLedger(
         PartitionKey partitionKey, PartitionState state, LedgerKey key, out ChangeLedgerValue value)
     {
@@ -6531,10 +6555,15 @@ private bool ValidateIncomingBatchForStaging(
     private bool TryGetChangeLedger(
         StorageSnapshot snapshot, PartitionKey partitionKey, PartitionState state,
         LedgerKey key, out ChangeLedgerValue value)
+        => TryGetChangeLedger(snapshot, PartitionRoot(partitionKey), state, key, out value);
+
+    private bool TryGetChangeLedger(
+        StorageSnapshot snapshot, byte[] partitionRoot, PartitionState state,
+        LedgerKey key, out ChangeLedgerValue value)
     {
         if (state.ChangeLedger.TryGetValue(key, out value!))
             return true;
-        byte[] storageKey = ChangeLedgerStorageKey(PartitionRoot(partitionKey), key.NamespaceId, key.ChangeId);
+        byte[] storageKey = ChangeLedgerStorageKey(partitionRoot, key.NamespaceId, key.ChangeId);
         if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
         {
             value = null!;
@@ -6547,10 +6576,17 @@ private bool ValidateIncomingBatchForStaging(
     private bool TryGetReceipt(
         PartitionKey partitionKey, PartitionState state, ReceiptKey key, out ReceiptValue value)
     {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        return TryGetReceipt(snapshot, partitionKey, state, key, out value);
+    }
+
+    private bool TryGetReceipt(
+        StorageSnapshot snapshot, PartitionKey partitionKey, PartitionState state,
+        ReceiptKey key, out ReceiptValue value)
+    {
         if (state.Receipts.TryGetValue(key, out value!))
             return true;
         byte[] storageKey = EncodeReceiptKey(partitionKey, key);
-        using StorageSnapshot snapshot = _storage.OpenSnapshot();
         if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
         {
             value = null!;
@@ -6684,10 +6720,15 @@ private bool ValidateIncomingBatchForStaging(
     private byte[] LoadStreamPayloadBody(
         StorageSnapshot snapshot, PartitionKey partitionKey, byte kind,
         int namespaceId, NodeId author, ulong sequence)
+        => LoadStreamPayloadBody(snapshot, PartitionRoot(partitionKey), kind, namespaceId, author, sequence);
+
+    private byte[] LoadStreamPayloadBody(
+        StorageSnapshot snapshot, byte[] partitionRoot, byte kind,
+        int namespaceId, NodeId author, ulong sequence)
     {
         if (kind is not (20 or 21))
             throw new ArgumentOutOfRangeException(nameof(kind));
-        byte[] key = StreamPayloadStorageKey(PartitionRoot(partitionKey), kind, namespaceId, author, sequence);
+        byte[] key = StreamPayloadStorageKey(partitionRoot, kind, namespaceId, author, sequence);
         if (!snapshot.TryGet(key, out byte[]? value) || value is null)
             throw new InvalidDataException("Persisted stream payload row is missing.");
         return DecodePayloadItem(sequence, author, value).Payload;
@@ -6704,12 +6745,20 @@ private bool ValidateIncomingBatchForStaging(
     private byte[] ResolveStreamPayload(
         StorageSnapshot snapshot, PartitionKey partitionKey, byte kind,
         int namespaceId, NodeId author, ulong sequence, byte[] cached)
+        => ResolveStreamPayload(snapshot, PartitionRoot(partitionKey), kind,
+            namespaceId, author, sequence, cached);
+
+    private byte[] ResolveStreamPayload(
+        StorageSnapshot snapshot, byte[] partitionRoot, byte kind,
+        int namespaceId, NodeId author, ulong sequence, byte[] cached)
         => cached.Length > 0
             ? cached
-            : LoadStreamPayloadBody(snapshot, partitionKey, kind, namespaceId, author, sequence);
+            : LoadStreamPayloadBody(snapshot, partitionRoot, kind, namespaceId, author, sequence);
 
     private void HydrateCachedStreamPayloadBodies(PartitionKey partitionKey, PartitionState state)
     {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        byte[] partitionRoot = PartitionRoot(partitionKey);
         foreach (var pair in state.Relay)
         {
             List<MetadataRelayItem> items = pair.Value;
@@ -6718,7 +6767,7 @@ private bool ValidateIncomingBatchForStaging(
                 MetadataRelayItem item = items[i];
                 if (item.Payload.Length > 0) continue;
                 byte[] payload = LoadStreamPayloadBody(
-                    partitionKey, 20, pair.Key.NamespaceId, pair.Key.Author, item.Sequence);
+                    snapshot, partitionRoot, 20, pair.Key.NamespaceId, pair.Key.Author, item.Sequence);
                 items[i] = new MetadataRelayItem(item.Sequence, item.OriginalAuthor, item.ChangeId, payload)
                 {
                     Provenance = item.Provenance
@@ -6733,7 +6782,7 @@ private bool ValidateIncomingBatchForStaging(
                 MetadataOutboundItem item = items[i];
                 if (item.Payload.Length > 0) continue;
                 byte[] payload = LoadStreamPayloadBody(
-                    partitionKey, 21, pair.Key.NamespaceId, pair.Key.Author, item.Sequence);
+                    snapshot, partitionRoot, 21, pair.Key.NamespaceId, pair.Key.Author, item.Sequence);
                 items[i] = new MetadataOutboundItem(item.Sequence, item.AuthorNodeId, item.ChangeId, payload)
                 {
                     Provenance = item.Provenance
@@ -6774,12 +6823,14 @@ private bool ValidateIncomingBatchForStaging(
 
     private void HydrateStreamProvenance(PartitionKey partitionKey, PartitionState state)
     {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        byte[] partitionRoot = PartitionRoot(partitionKey);
         foreach (var (key, items) in state.Relay)
         {
             for (int i = 0; i < items.Count; i++)
             {
                 var item = items[i];
-                var provenance = ResolvePayloadProvenance(partitionKey, state, key.NamespaceId, key.Author,
+                var provenance = ResolvePayloadProvenance(snapshot, partitionRoot, state, key.NamespaceId, key.Author,
                     item.ChangeId, isLocalOutbound: false);
                 items[i] = new MetadataRelayItem(item.Sequence, item.OriginalAuthor,
                     item.ChangeId, item.Payload) { Provenance = provenance };
@@ -6791,7 +6842,7 @@ private bool ValidateIncomingBatchForStaging(
             for (int i = 0; i < items.Count; i++)
             {
                 var item = items[i];
-                var provenance = ResolvePayloadProvenance(partitionKey, state, key.NamespaceId, key.Author,
+                var provenance = ResolvePayloadProvenance(snapshot, partitionRoot, state, key.NamespaceId, key.Author,
                     item.ChangeId, isLocalOutbound: true);
                 items[i] = new MetadataOutboundItem(item.Sequence, item.AuthorNodeId,
                     item.ChangeId, item.Payload) { Provenance = provenance };
@@ -6802,7 +6853,17 @@ private bool ValidateIncomingBatchForStaging(
     private OperationOrigin ResolvePayloadProvenance(PartitionKey partitionKey, PartitionState state, int namespaceId,
         NodeId author, BatchId changeId, bool isLocalOutbound)
     {
-        if (!TryGetChangeLedger(partitionKey, state, new LedgerKey(namespaceId, changeId), out var ledger))
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        return ResolvePayloadProvenance(snapshot, PartitionRoot(partitionKey), state,
+            namespaceId, author, changeId, isLocalOutbound);
+    }
+
+    private OperationOrigin ResolvePayloadProvenance(
+        StorageSnapshot snapshot, byte[] partitionRoot, PartitionState state, int namespaceId,
+        NodeId author, BatchId changeId, bool isLocalOutbound)
+    {
+        if (!TryGetChangeLedger(snapshot, partitionRoot, state,
+                new LedgerKey(namespaceId, changeId), out var ledger))
             throw new InvalidDataException("Stream payload row has no global ChangeId identity row.");
         var provenance = ledger.Provenance.EnsureValid();
         if (provenance.AuthorNodeId != author || ledger.IsLocalOutbound != isLocalOutbound)
