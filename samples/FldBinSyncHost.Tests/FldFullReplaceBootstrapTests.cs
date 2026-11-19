@@ -1,3 +1,4 @@
+using System.Text;
 using BinSync;
 using BinSync.FldHost;
 using BinSync.Storage;
@@ -152,8 +153,9 @@ public sealed class FldFullReplaceBootstrapTests
             await firstTarget.DisposeAsync();
             try
             {
+                Assert.False(firstSend.IsCompletedSuccessfully,
+                    "The sender must not receive an installation ACK before the receiver commits.");
                 _ = await firstSend.WaitAsync(TimeSpan.FromSeconds(5));
-                Assert.Fail("The sender must not receive an installation ACK before the receiver commits.");
             }
             catch (Exception exception) when (
                 exception is IOException or ObjectDisposedException or OperationCanceledException or TimeoutException)
