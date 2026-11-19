@@ -9,6 +9,8 @@ on:
       - "BinSync.Net/bench/BinSync.Bench/MetadataCoordinatorRetryScanBench.cs"
       - "BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs"
       - "BinSync.Net/src/BinSync.Storage/StorageSyncCoordinator.cs"
+      - "BinSync.Net/src/BinSync.Storage/AsyncStorageSyncCoordinator.cs"
+      - "BinSync.Net/src/BinSync.Storage/StorageDataProvider.cs"
       - "BinSync.Net/src/BinSync.Core/Production/Node.ProviderSnapshot.cs"
       - "scripts/vendor-ed25519-from-ztsharp.sh"
 
@@ -17,7 +19,7 @@ permissions:
 
 jobs:
   compare-retry-paths:
-    name: Disk-primary baseline vs provider feed receipt retry
+    name: Disk-primary baseline vs no-restamp provider feed retry
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -87,7 +89,7 @@ jobs:
               factor = {"B": 1/1024, "KB": 1.0, "MB": 1024.0}[match.group(2)]
               return float(match.group(1)) * factor
           print("## Same-runner coordinator retry comparison")
-          print("Baseline: disk-primary StorageMetadataStore before provider feed origin receipts at " + __import__("os").environ["BASELINE_SHA"])
+          print("Baseline: disk-primary StorageMetadataStore before provider feed origin receipts and no-restamp fast path at " + __import__("os").environ["BASELINE_SHA"])
           print("Both versions ran sequentially on this workflow job with the same Ubuntu runner and .NET 10 SDK.")
           print("| Feed rows | Baseline ms | Incremental ms | Latency reduction | Baseline KB | Incremental KB | Allocation reduction |")
           print("|---:|---:|---:|---:|---:|---:|---:|")
