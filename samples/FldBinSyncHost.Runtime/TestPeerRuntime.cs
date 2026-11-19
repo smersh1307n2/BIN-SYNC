@@ -23,6 +23,8 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
     private readonly ConcurrentDictionary<NodeId, SyncSession> _sessions = new();
     private readonly ConcurrentDictionary<NodeId, Task> _receiveLoops = new();
     private readonly CancellationTokenSource _stop = new();
+    private readonly object _maintenanceGate = new();
+    private bool _idleMaintenanceWindow;
     private TcpSyncListener? _listener;
     private Task? _acceptLoop;
     private int _running;
@@ -64,6 +66,35 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
     public long OutboundRounds => Interlocked.Read(ref _outboundRounds);
     public long OutboundBatches => Interlocked.Read(ref _outboundBatches);
     public long InboundBatches => Interlocked.Read(ref _inboundBatches);
+
+    private sealed class MaintenanceWindowLease(TestPeerRuntime owner) : IDisposable
+    {
+        private TestPeerRuntime? _owner = owner;
+        public void Dispose()
+        {
+            TestPeerRuntime? current = Interlocked.Exchange(ref _owner, null);
+            if (current is null) return;
+            lock (current._maintenanceGate)
+                current._idleMaintenanceWindow = false;
+        }
+    }
+
+    /// <summary>
+    /// Excludes new peer admission for one idle-only Tombstone generation rewrite.
+    /// Existing sessions prevent acquisition; admission and acquisition share one gate,
+    /// so a peer cannot slip in between the idle check and the maintenance window.
+    /// </summary>
+    public IDisposable? TryAcquireIdleMaintenanceWindow()
+    {
+        lock (_maintenanceGate)
+        {
+            if (_idleMaintenanceWindow || _sessions.Count != 0)
+                return null;
+            _idleMaintenanceWindow = true;
+            return new MaintenanceWindowLease(this);
+        }
+    }
+
     public string? LastError => Volatile.Read(ref _lastError);
     public IReadOnlyList<string> ActivePeerIds => _sessions.Keys
         .Select(static id => Convert.ToHexString(id.ToArray()))
@@ -159,10 +190,14 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
 
     private bool TryRegister(SyncSession session)
     {
-        if (_allowedPeers is not null && !_allowedPeers.Contains(session.PeerNodeId))
-            return false;
-        if (!_sessions.TryAdd(session.PeerNodeId, session))
-            return false;
+        lock (_maintenanceGate)
+        {
+            if (_idleMaintenanceWindow ||
+                (_allowedPeers is not null && !_allowedPeers.Contains(session.PeerNodeId)))
+                return false;
+            if (!_sessions.TryAdd(session.PeerNodeId, session))
+                return false;
+        }
 
         // Initial reconciliation owns the session reader until the durable
         // peer baseline is complete. Do not start DELTA_BATCH receive yet.
@@ -295,8 +330,11 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
         }
         finally
         {
-            _sessions.TryRemove(session.PeerNodeId, out _);
-            _baselineReady.TryRemove(session.PeerNodeId, out _);
+            lock (_maintenanceGate)
+            {
+                _sessions.TryRemove(session.PeerNodeId, out _);
+                _baselineReady.TryRemove(session.PeerNodeId, out _);
+            }
             try { await session.DisposeAsync().ConfigureAwait(false); } catch { }
         }
     }
@@ -328,8 +366,12 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
         lock (_receiveLoops)
             loops = _receiveLoops.Values.ToArray();
         try { await Task.WhenAll(loops).ConfigureAwait(false); } catch { }
-        _sessions.Clear();
-        _baselineReady.Clear();
+        lock (_maintenanceGate)
+        {
+            _sessions.Clear();
+            _baselineReady.Clear();
+            _idleMaintenanceWindow = false;
+        }
         _receiveLoops.Clear();
     }
 
