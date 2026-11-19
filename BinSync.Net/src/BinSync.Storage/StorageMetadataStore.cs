@@ -881,25 +881,25 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
 
-            // Build the live identity set once. The previous per-candidate LINQ scans
-            // multiplied retained relay/outbound/pending rows by the GC batch size.
+            // Provider and pending identities stay exact; durable stream history is
+            // represented by a bounded Bloom prefilter instead of a history-sized HashSet.
             if (current.PeerStreams.Any(pair =>
                 pair.Key.NamespaceId == namespaceId &&
                 IsPeerStreamGcReservationOutstanding(
                     pair.Value.PendingBatch is not null,
                     pair.Value.PushedCursor,
                     pair.Value.AckedCursor)))
-                return 0; // A pushed-but-unacknowledged cursor is still an immutable reservation.
+                return 0;
             ulong providerHighWatermark = provider.LocalChangeHighWatermark;
             if (!TryCollectProviderChangeIdsForGc(provider, providerHighWatermark, out HashSet<BatchId> liveChangeIds))
-                return 0; // Legacy/unknown feed identity blocks ChangeId reclamation.
-            AddRelayChangeIds(partitionKey, current, namespaceId, liveChangeIds);
-            AddOutboundChangeIds(partitionKey, current, namespaceId, liveChangeIds);
+                return 0;
             foreach (PendingApplyValue pending in current.PendingApplies.Values)
                 if (pending.Batch.NamespaceId == namespaceId)
                     foreach (MetadataOperation operation in pending.Batch.Operations)
                         liveChangeIds.Add(operation.ChangeId);
 
+            MetadataStreamChangeIdBloomFilter streamLiveIds =
+                BuildMetadataStreamChangeIdBloomFilter(partitionKey, current, namespaceId);
             var candidates = new List<(LedgerKey Key, byte[] StorageKey)>(limit);
             byte[] partitionRoot = PartitionRoot(partitionKey);
             foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
@@ -911,6 +911,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (!IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
                 if (liveChangeIds.Contains(pair.Key.ChangeId) ||
+                    streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
                     continue;
 
@@ -983,6 +984,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var partitionKey = new PartitionKey(scopeId, localReplica);
         List<ChangeIdGcCandidate> candidates;
+        MetadataStreamChangeIdBloomFilter streamLiveIds;
         Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier;
         lock (_gate)
         {
@@ -1005,7 +1007,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pair.Value.AckedCursor)))
                 return 0;
 
-            HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(partitionKey, current, namespaceId);
+            HashSet<BatchId> liveChangeIds = BuildPendingApplyChangeIdSet(current, namespaceId);
+            streamLiveIds = BuildMetadataStreamChangeIdBloomFilter(partitionKey, current, namespaceId);
             candidates = new List<ChangeIdGcCandidate>(limit);
             foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
             {
@@ -1013,6 +1016,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 OperationOrigin origin = ledgerValue.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
                     liveChangeIds.Contains(pair.Key.ChangeId) ||
+                    streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
                 candidates.Add(new ChangeIdGcCandidate(pair.Key, ledgerValue, null));
@@ -1055,8 +1059,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return 0;
             // The Host lease and Metadata writer admission have remained held
             // since the initial scan, so this signed horizon is still current.
-            HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(partitionKey, current, namespaceId);
-            ReportAllocation("metadata-revalidation-live-set");
+            HashSet<BatchId> liveChangeIds = BuildPendingApplyChangeIdSet(current, namespaceId);
+            ReportAllocation("metadata-revalidation-pending-set");
             byte[] partitionRoot = PartitionRoot(partitionKey);
             using StorageSnapshot revalidationSnapshot = _storage.OpenSnapshot();
             // Compact approved entries in the candidate list itself. A second
@@ -1070,6 +1074,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ChangeLedgerValue snapshotValue = candidate.Value;
                 if (hostReferenced.Contains(key.ChangeId) ||
                     liveChangeIds.Contains(key.ChangeId) ||
+                    streamLiveIds.MightContain(key.ChangeId) ||
                     !TryGetChangeLedger(revalidationSnapshot, partitionRoot, current, key, out ChangeLedgerValue? currentValue) ||
                     !ChangeLedgerValuesEqual(currentValue!, snapshotValue) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, snapshotValue.Provenance))
@@ -1132,17 +1137,101 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         => frontier.TryGetValue((author, epoch), out ulong safeSequence) &&
            sequence <= safeSequence;
 
-    private HashSet<BatchId> BuildMetadataLiveChangeIdSet(
-        PartitionKey partitionKey, PartitionState current, int namespaceId)
+    private HashSet<BatchId> BuildPendingApplyChangeIdSet(
+        PartitionState current, int namespaceId)
     {
         var live = new HashSet<BatchId>();
-        AddRelayChangeIds(partitionKey, current, namespaceId, live);
-        AddOutboundChangeIds(partitionKey, current, namespaceId, live);
         foreach (PendingApplyValue pending in current.PendingApplies.Values)
             if (pending.Batch.NamespaceId == namespaceId)
                 foreach (MetadataOperation operation in pending.Batch.Operations)
                     live.Add(operation.ChangeId);
         return live;
+    }
+
+    private MetadataStreamChangeIdBloomFilter BuildMetadataStreamChangeIdBloomFilter(
+        PartitionKey partitionKey, PartitionState state, int namespaceId)
+    {
+        const int minBytes = 64 * 1024;
+        const int maxBytes = 8 * 1024 * 1024;
+        ulong expectedItems = 0;
+        static ulong SaturatingAdd(ulong current, ulong value) =>
+            ulong.MaxValue - current < value ? ulong.MaxValue : current + value;
+
+        foreach (var pair in state.RelayHighWatermarks)
+            if (pair.Key.NamespaceId == namespaceId)
+                expectedItems = SaturatingAdd(expectedItems, pair.Value);
+        foreach (var pair in state.OutboundHighWatermarks)
+            if (pair.Key.NamespaceId == namespaceId)
+                expectedItems = SaturatingAdd(expectedItems, pair.Value);
+
+        const ulong maxItemsAtCap = (ulong)maxBytes * 8 / 10;
+        int byteCount = expectedItems >= maxItemsAtCap
+            ? maxBytes
+            : (int)Math.Max((ulong)minBytes, (expectedItems * 10 + 7) / 8);
+        var filter = new MetadataStreamChangeIdBloomFilter(byteCount);
+
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        byte[] root = PartitionRoot(partitionKey);
+        if (!VisitRelayStorageRows(snapshot, root, state, namespaceId,
+            (key, sequence, payload) =>
+            {
+                filter.Add(DecodePayloadHeader(payload));
+                return true;
+            }))
+            throw new InvalidDataException("Relay ChangeId Bloom scan was interrupted.");
+        if (!VisitOutboundStorageRows(snapshot, root, state, namespaceId,
+            (key, sequence, payload) =>
+            {
+                filter.Add(DecodePayloadHeader(payload));
+                return true;
+            }))
+            throw new InvalidDataException("Outbound ChangeId Bloom scan was interrupted.");
+        return filter;
+    }
+
+    private sealed class MetadataStreamChangeIdBloomFilter
+    {
+        private const int HashCount = 7;
+        private readonly byte[] _bits;
+        private readonly ulong _bitCount;
+
+        public MetadataStreamChangeIdBloomFilter(int byteCount)
+        {
+            _bits = new byte[byteCount];
+            _bitCount = checked((ulong)byteCount * 8);
+        }
+
+        public void Add(BatchId changeId) => VisitBits(changeId, add: true);
+
+        public bool MightContain(BatchId changeId) => VisitBits(changeId, add: false);
+
+        private bool VisitBits(BatchId changeId, bool add)
+        {
+            Span<byte> bytes = stackalloc byte[16];
+            changeId.WriteTo(bytes);
+            ulong first = Mix(BinaryPrimitives.ReadUInt64LittleEndian(bytes));
+            ulong step = Mix(BinaryPrimitives.ReadUInt64LittleEndian(bytes.Slice(8))) | 1UL;
+            for (ulong i = 0; i < HashCount; i++)
+            {
+                ulong bit = unchecked(first + i * step) % _bitCount;
+                int byteIndex = (int)(bit >> 3);
+                byte mask = (byte)(1 << (int)(bit & 7));
+                if (add)
+                    _bits[byteIndex] |= mask;
+                else if ((_bits[byteIndex] & mask) == 0)
+                    return false;
+            }
+            return true;
+        }
+
+        private static ulong Mix(ulong value)
+        {
+            value ^= value >> 30;
+            value *= 0xBF58476D1CE4E5B9UL;
+            value ^= value >> 27;
+            value *= 0x94D049BB133111EBUL;
+            return value ^ (value >> 31);
+        }
     }
 
     /// <summary>Async Host-scanner counterpart for bounded retired-epoch receipt compaction.</summary>
@@ -6652,20 +6741,6 @@ private bool ValidateIncomingBatchForStaging(
         return true;
     }
 
-    private void AddRelayChangeIds(
-        PartitionKey partitionKey, PartitionState state, int namespaceId, HashSet<BatchId> destination)
-    {
-        using StorageSnapshot snapshot = _storage.OpenSnapshot();
-        byte[] root = PartitionRoot(partitionKey);
-        if (!VisitRelayStorageRows(snapshot, root, state, namespaceId,
-            (key, sequence, payload) =>
-            {
-                destination.Add(DecodePayloadHeader(payload));
-                return true;
-            }))
-            throw new InvalidDataException("Relay ChangeId scan was interrupted.");
-    }
-
     private int CountRelayRows(PartitionKey partitionKey, PartitionState state, int namespaceId)
     {
         int count = 0;
@@ -6737,18 +6812,6 @@ private bool ValidateIncomingBatchForStaging(
             }
         }
         return true;
-    }
-
-    private void AddOutboundChangeIds(
-        PartitionKey partitionKey, PartitionState state, int namespaceId, HashSet<BatchId> destination)
-    {
-        using StorageSnapshot snapshot = _storage.OpenSnapshot();
-        byte[] root = PartitionRoot(partitionKey);
-        VisitOutboundStorageRows(snapshot, root, state, namespaceId, (key, sequence, payload) =>
-        {
-            destination.Add(DecodePayloadHeader(payload));
-            return true;
-        });
     }
 
     private int CountOutboundRows(
