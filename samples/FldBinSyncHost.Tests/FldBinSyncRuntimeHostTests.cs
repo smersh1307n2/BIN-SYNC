@@ -693,6 +693,11 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.True(enabledHealth.RootElement.GetProperty("gcChangeIdEnabled").GetBoolean());
             Assert.True(enabledHealth.RootElement.GetProperty("gcTombstoneEnabled").GetBoolean());
             Assert.True(enabledHealth.RootElement.GetProperty("gcMaintenanceSlices").GetInt64() > 0);
+            // No signed retention/baseline evidence or eligible candidates were seeded in this Stage 0 lifecycle fixture.
+            // Scheduler execution must not be mistaken for successful physical reclamation.
+            Assert.Equal(0L, enabledHealth.RootElement.GetProperty("gcReceiptsReclaimed").GetInt64());
+            Assert.Equal(0L, enabledHealth.RootElement.GetProperty("gcChangeIdsReclaimed").GetInt64());
+            Assert.Equal(0L, enabledHealth.RootElement.GetProperty("gcTombstonesReclaimed").GetInt64());
 
             using HttpResponseMessage stopped = await client.PostAsJsonAsync(
                 "/operator/gc/emergency-stop",
