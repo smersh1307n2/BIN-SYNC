@@ -591,10 +591,33 @@ public sealed class AsyncStorageSyncCoordinator
                     else
                         AddAsyncCoalescedPendingLocalChange(nodeWinners, change);
 
-                    if (identityStore.TryGetOutboundChangeIdentity(
+                    bool previouslyFrozen = false;
+                    if (change.Mutation.OriginSequence != 0)
+                    {
+                        // The provider feed receipt is committed only after durable
+                        // Metadata Freeze. Reuse it on ACK retry instead of doing one
+                        // Metadata ChangeId point lookup for every feed row.
+                        if (change.Mutation.ChangeId != change.ChangeId ||
+                            change.Mutation.AuthorNodeId != _node.NodeId ||
+                            change.Mutation.OriginAuthorEpoch == 0)
+                            throw new InvalidDataException(
+                                "Stamped async provider feed row has invalid immutable publication provenance.");
+                        var stampedOrigin = new OperationOrigin(
+                            change.Mutation.AuthorNodeId,
+                            change.Mutation.OriginAuthorEpoch,
+                            change.Mutation.OriginSequence);
+                        if (!stampedOrigin.IsValid)
+                            throw new InvalidDataException(
+                                "Stamped async provider feed row has an invalid immutable Origin.");
+                        recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, stampedOrigin));
+                        previouslyFrozen = true;
+                    }
+                    else if (identityStore.TryGetOutboundChangeIdentity(
                             _scopeId, _node.NodeId, _namespaceId, change.ChangeId,
                             out ReadOnlyMemory<byte> frozenFingerprint, out OperationOrigin frozenOrigin))
                     {
+                        // Compatibility path for interruption after Metadata Freeze
+                        // but before the durable provider feed receipt was written.
                         Digest16 actualFingerprint = ChangeIdentity.Fingerprint(
                             _namespaceId, change.Mutation, _node.NodeId);
                         if (frozenFingerprint.Length != 16 ||
@@ -602,6 +625,11 @@ public sealed class AsyncStorageSyncCoordinator
                             throw new InvalidDataException(
                                 "Async provider ChangeId conflicts with its previously frozen outbound operation.");
                         recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, frozenOrigin));
+                        previouslyFrozen = true;
+                    }
+
+                    if (previouslyFrozen)
+                    {
                         lastFrozenFeedSequence = change.Sequence;
                         if (sharedNodeAndOutboundWinners)
                             nodeWinners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>(winners);
