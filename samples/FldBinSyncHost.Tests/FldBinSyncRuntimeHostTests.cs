@@ -630,64 +630,76 @@ public sealed class FldBinSyncRuntimeHostTests
 
             using JsonDocument initial = JsonDocument.Parse(await client.GetStringAsync("/operator/gc"));
             Assert.Equal(JsonValueKind.Null, initial.RootElement.GetProperty("policy").ValueKind);
-            Assert.False(initial.RootElement.GetProperty("receiptStartupProofEnabled").GetBoolean());
-            Assert.False(initial.RootElement.GetProperty("changeIdStartupProofEnabled").GetBoolean());
-            Assert.False(initial.RootElement.GetProperty("tombstoneStartupProofEnabled").GetBoolean());
+            Assert.True(initial.RootElement.GetProperty("receiptStartupProofEnabled").GetBoolean());
+            Assert.True(initial.RootElement.GetProperty("changeIdStartupProofEnabled").GetBoolean());
+            Assert.True(initial.RootElement.GetProperty("tombstoneStartupProofEnabled").GetBoolean());
             Assert.False(initial.RootElement.GetProperty("runtimeRunning").GetBoolean());
 
-            using HttpResponseMessage maintenance = await client.PostAsJsonAsync(
-                "/operator/gc/maintenance/once",
-                new { });
-            Assert.Equal(HttpStatusCode.OK, maintenance.StatusCode);
-            using JsonDocument maintenanceResult =
-                JsonDocument.Parse(await maintenance.Content.ReadAsStringAsync());
-            Assert.Equal(0, maintenanceResult.RootElement.GetProperty("receiptsReclaimed").GetInt32());
-            Assert.Equal(0, maintenanceResult.RootElement.GetProperty("changeIdsReclaimed").GetInt32());
-            Assert.Equal(0, maintenanceResult.RootElement.GetProperty("tombstonesReclaimed").GetInt32());
-            JsonElement readiness = maintenanceResult.RootElement.GetProperty("readiness");
-            Assert.False(readiness.GetProperty("receipts").GetProperty("enabled").GetBoolean());
-            Assert.False(readiness.GetProperty("changeIds").GetProperty("enabled").GetBoolean());
-            Assert.False(readiness.GetProperty("tombstones").GetProperty("enabled").GetBoolean());
-
-            await Task.Delay(TimeSpan.FromMilliseconds(1100));
-            using JsonDocument schedulerTick = JsonDocument.Parse(
-                await client.GetStringAsync("/health/ready"));
-            Assert.True(schedulerTick.RootElement.GetProperty("maintenanceTicks").GetInt64() > 0);
-
-            using HttpResponseMessage updated = await client.PostAsJsonAsync(
+            // Enable the real Host runtime through the authenticated operator API,
+            // preserving the approved ChangeId -> Receipt -> Tombstone rollout order.
+            using HttpResponseMessage changeIdStage = await client.PostAsJsonAsync(
                 "/operator/gc/policy",
                 new
                 {
                     expectedGeneration = 0,
-                    reason = "initialize disposable integration Host",
-                    maintenanceStarted = false,
-                    receiptEnabled = false,
-                    changeIdEnabled = false,
-                    tombstoneEnabled = false
-                });
-            Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
-            using JsonDocument policy1 = JsonDocument.Parse(await updated.Content.ReadAsStringAsync());
-            Assert.Equal(1UL, policy1.RootElement.GetProperty("generation").GetUInt64());
-
-            using HttpResponseMessage blockedEnable = await client.PostAsJsonAsync(
-                "/operator/gc/policy",
-                new
-                {
-                    expectedGeneration = 1,
-                    reason = "must not override immutable startup proof flags",
+                    reason = "enable ChangeId GC on disposable integration data",
                     maintenanceStarted = true,
                     receiptEnabled = false,
                     changeIdEnabled = true,
                     tombstoneEnabled = false
                 });
-            Assert.Equal(HttpStatusCode.Conflict, blockedEnable.StatusCode);
+            Assert.Equal(HttpStatusCode.OK, changeIdStage.StatusCode);
+            using JsonDocument policy1 = JsonDocument.Parse(await changeIdStage.Content.ReadAsStringAsync());
+            Assert.Equal(1UL, policy1.RootElement.GetProperty("generation").GetUInt64());
+            Assert.True(policy1.RootElement.GetProperty("changeIdEnabled").GetBoolean());
+
+            using HttpResponseMessage receiptStage = await client.PostAsJsonAsync(
+                "/operator/gc/policy",
+                new
+                {
+                    expectedGeneration = 1,
+                    reason = "enable Receipt GC after ChangeId stage",
+                    maintenanceStarted = true,
+                    receiptEnabled = true,
+                    changeIdEnabled = true,
+                    tombstoneEnabled = false
+                });
+            Assert.Equal(HttpStatusCode.OK, receiptStage.StatusCode);
+            using JsonDocument policy2 = JsonDocument.Parse(await receiptStage.Content.ReadAsStringAsync());
+            Assert.Equal(2UL, policy2.RootElement.GetProperty("generation").GetUInt64());
+            Assert.True(policy2.RootElement.GetProperty("receiptEnabled").GetBoolean());
+
+            using HttpResponseMessage tombstoneStage = await client.PostAsJsonAsync(
+                "/operator/gc/policy",
+                new
+                {
+                    expectedGeneration = 2,
+                    reason = "enable proof-gated physical Tombstone GC last",
+                    maintenanceStarted = true,
+                    receiptEnabled = true,
+                    changeIdEnabled = true,
+                    tombstoneEnabled = true
+                });
+            Assert.Equal(HttpStatusCode.OK, tombstoneStage.StatusCode);
+            using JsonDocument policy3 = JsonDocument.Parse(await tombstoneStage.Content.ReadAsStringAsync());
+            Assert.Equal(3UL, policy3.RootElement.GetProperty("generation").GetUInt64());
+            Assert.True(policy3.RootElement.GetProperty("tombstoneEnabled").GetBoolean());
+
+            await WaitForMaintenanceTick(client, TimeSpan.FromSeconds(25));
+            using JsonDocument enabledHealth = JsonDocument.Parse(await client.GetStringAsync("/health/ready"));
+            Assert.True(enabledHealth.RootElement.GetProperty("gcStartupProofEnabled").GetBoolean());
+            Assert.True(enabledHealth.RootElement.GetProperty("gcExecutionEnabled").GetBoolean());
+            Assert.True(enabledHealth.RootElement.GetProperty("gcReceiptEnabled").GetBoolean());
+            Assert.True(enabledHealth.RootElement.GetProperty("gcChangeIdEnabled").GetBoolean());
+            Assert.True(enabledHealth.RootElement.GetProperty("gcTombstoneEnabled").GetBoolean());
+            Assert.True(enabledHealth.RootElement.GetProperty("gcMaintenanceSlices").GetInt64() > 0);
 
             using HttpResponseMessage stopped = await client.PostAsJsonAsync(
                 "/operator/gc/emergency-stop",
                 new { reason = "Stage 0 process-restart test: durable all-domain stop" });
             Assert.Equal(HttpStatusCode.OK, stopped.StatusCode);
-            using JsonDocument policy2 = JsonDocument.Parse(await stopped.Content.ReadAsStringAsync());
-            Assert.Equal(2UL, policy2.RootElement.GetProperty("generation").GetUInt64());
+            using JsonDocument policy4 = JsonDocument.Parse(await stopped.Content.ReadAsStringAsync());
+            Assert.Equal(4UL, policy4.RootElement.GetProperty("generation").GetUInt64());
             Assert.False(policy2.RootElement.GetProperty("maintenanceStarted").GetBoolean());
             Assert.False(policy2.RootElement.GetProperty("receiptEnabled").GetBoolean());
             Assert.False(policy2.RootElement.GetProperty("changeIdEnabled").GetBoolean());
@@ -702,11 +714,14 @@ public sealed class FldBinSyncRuntimeHostTests
             using var restarted = CreateClient(address, OperatorToken);
             using JsonDocument restored = JsonDocument.Parse(await restarted.GetStringAsync("/operator/gc"));
             JsonElement restoredPolicy = restored.RootElement.GetProperty("policy");
-            Assert.Equal(2UL, restoredPolicy.GetProperty("generation").GetUInt64());
+            Assert.Equal(4UL, restoredPolicy.GetProperty("generation").GetUInt64());
             Assert.False(restoredPolicy.GetProperty("maintenanceStarted").GetBoolean());
             Assert.False(restoredPolicy.GetProperty("receiptEnabled").GetBoolean());
             Assert.False(restoredPolicy.GetProperty("changeIdEnabled").GetBoolean());
             Assert.False(restoredPolicy.GetProperty("tombstoneEnabled").GetBoolean());
+            Assert.True(restored.RootElement.GetProperty("receiptStartupProofEnabled").GetBoolean());
+            Assert.True(restored.RootElement.GetProperty("changeIdStartupProofEnabled").GetBoolean());
+            Assert.True(restored.RootElement.GetProperty("tombstoneStartupProofEnabled").GetBoolean());
             Assert.False(restored.RootElement.GetProperty("runtimeRunning").GetBoolean());
             Assert.False(restored.RootElement.GetProperty("receiptRuntimeEnabled").GetBoolean());
             Assert.False(restored.RootElement.GetProperty("changeIdRuntimeEnabled").GetBoolean());
