@@ -1186,10 +1186,17 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         };
 
         using (var store = new StorageMetadataStore(directory, 426, deleteOnDispose: false))
+        {
             store.BeginPendingApply(incoming, token);
+            Assert.Equal(0, store.CachedPendingApplyCount);
+            Assert.Single(store.ReadPendingApplyIntents(scope, local));
+            Assert.Equal(0, store.CachedPendingApplyCount);
+        }
 
         using var reopened = new StorageMetadataStore(directory, 426, deleteOnDispose: false);
+        Assert.Equal(0, reopened.CachedPendingApplyCount);
         var pending = Assert.Single(reopened.ReadPendingApplyIntents(scope, local));
+        Assert.Equal(0, reopened.CachedPendingApplyCount);
         Assert.Equal(token, pending.ApplyToken);
         Assert.Equal(wire, pending.Batch.WirePayload);
         Assert.Equal(Batch(110), pending.Batch.BatchId);
