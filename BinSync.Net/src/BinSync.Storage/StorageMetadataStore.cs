@@ -2864,22 +2864,21 @@ private bool ValidateIncomingBatchForStaging(
             if (sawNewOperation)
                 throw new InvalidDataException("Previously frozen outbound operations must form a prefix of an incremental retry.");
 
-            if (priorEntries is null && !current.Outbound.TryGetValue(key, out priorEntries))
-                throw new InvalidDataException("Outbound ChangeId is already frozen in another author stream.");
-
+            ChangeLedgerValue frozenLedger = priorLedger
+                ?? throw new InvalidDataException("Frozen outbound ChangeId has no durable ledger identity.");
             MetadataOutboundItem? prior = null;
-            if (priorLedger.OutboundSequence != 0)
+            if (frozenLedger.OutboundSequence != 0)
             {
                 // The durable ChangeId ledger is also the outbound identity index.
                 // Replays use a point lookup, independent of the historical stream length.
-                ulong sequence = priorLedger.OutboundSequence;
+                ulong sequence = frozenLedger.OutboundSequence;
                 byte[] priorPayload = LoadStreamPayloadBody(
                     payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, sequence);
                 if (!priorPayload.AsSpan().SequenceEqual(operation.Payload))
                     throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
                 prior = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, priorPayload)
                 {
-                    Provenance = priorLedger.Provenance
+                    Provenance = frozenLedger.Provenance
                 };
             }
             else
