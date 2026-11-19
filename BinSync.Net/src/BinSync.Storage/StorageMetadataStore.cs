@@ -5370,6 +5370,13 @@ private bool ValidateIncomingBatchForStaging(
     internal int CachedReceiveCursorCount => 0;
     internal int CachedReceiveChainCount => 0;
     internal int CachedLegacyReceiveChainCount => 0;
+    internal int CachedReceiptCount => 0;
+    internal int CachedChangeLedgerCount => 0;
+    internal int CachedCompletedPendingApplyCount => 0;
+    internal int CachedStreamWatermarkCount => 0;
+    internal int CachedOutboundLeaseCount => 0;
+    internal int CachedOriginHighWatermarkCount => 0;
+    internal int CachedCompletedPeerBaselineCount => 0;
 
     private static byte[] PartitionRevisionKey(PartitionKey partitionKey)
     {
@@ -6709,12 +6716,20 @@ private bool ValidateIncomingBatchForStaging(
         }
         byte[] requiredPrefix = StorageKey(root, 16, EncodeRequiredPeerStreamPrefix(namespaceId, author));
         using StorageSnapshot.PrefixCursor required = snapshot.OpenPrefixCursor(requiredPrefix);
-        IReadOnlyList<StorageEntry> requiredPage = required.ReadPage(1);
-        if (requiredPage.Count == 0) return false;
-        int requiredOffset = requiredPrefix.Length;
-        if (requiredPage[0].Key.Length != requiredOffset + 20)
-            throw new InvalidDataException("Required peer-stream storage row is malformed.");
-        return NodeId.From(requiredPage[0].Key.AsSpan(requiredOffset, 16)) != author;
+        const int requiredPageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = required.ReadPage(requiredPageSize);
+            foreach (StorageEntry row in page)
+            {
+                int offset = requiredPrefix.Length;
+                if (row.Key.Length != offset + 20)
+                    throw new InvalidDataException("Required peer-stream storage row is malformed.");
+                if (NodeId.From(row.Key.AsSpan(offset, 16)) != author) return true;
+            }
+            if (page.Count < requiredPageSize) break;
+        }
+        return false;
     }
 
     private static byte[] EncodeRequiredPeerStreamPrefix(int namespaceId, NodeId author)
@@ -8320,28 +8335,44 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
                 (key, offset) => new RelayKey(BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
                     NodeId.From(key.AsSpan(offset + 2, 16))),
                 value => BinaryPrimitives.ReadUInt64LittleEndian(value)),
-            key => TryReadStreamWatermark(partitionKey, 5, key.NamespaceId, key.Author, 0));
+            key =>
+            {
+                bool found = TryReadStreamWatermark(partitionKey, 5, key.NamespaceId, key.Author, 0, out ulong value);
+                return (found, value);
+            });
 
     private DiskMap<RelayKey, ulong> CreateRelayHighWatermarkMap(PartitionKey partitionKey)
         => new(() => EnumerateKeyspace(partitionKey, 5, 18, 16,
                 (key, offset) => new RelayKey(BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
                     NodeId.From(key.AsSpan(offset + 2, 16))),
                 value => BinaryPrimitives.ReadUInt64LittleEndian(value.AsSpan(8))),
-            key => TryReadStreamWatermark(partitionKey, 5, key.NamespaceId, key.Author, 8));
+            key =>
+            {
+                bool found = TryReadStreamWatermark(partitionKey, 5, key.NamespaceId, key.Author, 8, out ulong value);
+                return (found, value);
+            });
 
     private DiskMap<OutboundKey, ulong> CreateOutboundAckMap(PartitionKey partitionKey)
         => new(() => EnumerateKeyspace(partitionKey, 8, 18, 16,
                 (key, offset) => new OutboundKey(BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
                     NodeId.From(key.AsSpan(offset + 2, 16))),
                 value => BinaryPrimitives.ReadUInt64LittleEndian(value)),
-            key => TryReadStreamWatermark(partitionKey, 8, key.NamespaceId, key.Author, 0));
+            key =>
+            {
+                bool found = TryReadStreamWatermark(partitionKey, 8, key.NamespaceId, key.Author, 0, out ulong value);
+                return (found, value);
+            });
 
     private DiskMap<OutboundKey, ulong> CreateOutboundHighWatermarkMap(PartitionKey partitionKey)
         => new(() => EnumerateKeyspace(partitionKey, 8, 18, 16,
                 (key, offset) => new OutboundKey(BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
                     NodeId.From(key.AsSpan(offset + 2, 16))),
                 value => BinaryPrimitives.ReadUInt64LittleEndian(value.AsSpan(8))),
-            key => TryReadStreamWatermark(partitionKey, 8, key.NamespaceId, key.Author, 8));
+            key =>
+            {
+                bool found = TryReadStreamWatermark(partitionKey, 8, key.NamespaceId, key.Author, 8, out ulong value);
+                return (found, value);
+            });
 
     private DiskMap<OutboundKey, LeaseState> CreateOutboundLeaseMap(PartitionKey partitionKey)
         => new(() => EnumerateKeyspace(partitionKey, 10, 18, 24,
@@ -8387,10 +8418,10 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
     }
 
     private bool TryReadStreamWatermark(PartitionKey partitionKey, byte kind,
-        int namespaceId, NodeId author, int valueOffset)
+        int namespaceId, NodeId author, int valueOffset, out ulong value)
     {
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
-        return TryReadStreamWatermark(snapshot, partitionKey, kind, namespaceId, author, valueOffset, out _);
+        return TryReadStreamWatermark(snapshot, partitionKey, kind, namespaceId, author, valueOffset, out value);
     }
 
     private bool TryReadStreamWatermark(StorageSnapshot snapshot, PartitionKey partitionKey, byte kind,
