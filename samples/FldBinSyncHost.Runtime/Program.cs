@@ -606,7 +606,12 @@ internal sealed class TestMaintenanceScheduler
                 // immediately replay a queued tick after a long scan and starve
                 // ordinary Host operations under a continuous GC lease.
                 await Task.Delay(_interval, cancellationToken).ConfigureAwait(false);
-                await _runMaintenance(cancellationToken).ConfigureAwait(false);
+                // StopAsync cancels only the wait for the next round. Once a round has
+                // started, let its bounded work drain before disposing provider IPC.
+                // Cancelling an in-flight Storage IPC request faults that session because
+                // the response frame may be incomplete; the Host must disconnect cleanly
+                // only after the current round has released its provider resources.
+                await _runMaintenance(CancellationToken.None).ConfigureAwait(false);
                 Interlocked.Increment(ref _ticks);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
