@@ -6563,7 +6563,11 @@ private bool ValidateIncomingBatchForStaging(
     {
         if (state.ChangeLedger.TryGetValue(key, out value!))
             return true;
-        byte[] storageKey = ChangeLedgerStorageKey(partitionRoot, key.NamespaceId, key.ChangeId);
+        Span<byte> storageKey = stackalloc byte[68];
+        partitionRoot.AsSpan().CopyTo(storageKey);
+        storageKey[49] = 3;
+        BinaryPrimitives.WriteUInt16LittleEndian(storageKey.Slice(50, 2), checked((ushort)key.NamespaceId));
+        key.ChangeId.WriteTo(storageKey.Slice(52, 16));
         if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
         {
             value = null!;
@@ -6728,10 +6732,16 @@ private bool ValidateIncomingBatchForStaging(
     {
         if (kind is not (20 or 21))
             throw new ArgumentOutOfRangeException(nameof(kind));
-        byte[] key = StreamPayloadStorageKey(partitionRoot, kind, namespaceId, author, sequence);
+        Span<byte> key = stackalloc byte[76];
+        partitionRoot.AsSpan().CopyTo(key);
+        key[49] = kind;
+        BinaryPrimitives.WriteUInt16LittleEndian(key.Slice(50, 2), checked((ushort)namespaceId));
+        author.WriteTo(key.Slice(52, 16));
+        BinaryPrimitives.WriteUInt64BigEndian(key.Slice(68, 8), sequence);
         if (!snapshot.TryGet(key, out byte[]? value) || value is null)
             throw new InvalidDataException("Persisted stream payload row is missing.");
-        return DecodePayloadItem(sequence, author, value).Payload;
+        _ = DecodePayloadHeader(value);
+        return value.AsSpan(20).ToArray();
     }
 
     private byte[] ResolveStreamPayload(
