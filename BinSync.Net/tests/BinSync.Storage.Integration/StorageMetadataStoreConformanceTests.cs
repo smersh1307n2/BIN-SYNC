@@ -1133,6 +1133,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         using (var store = new StorageMetadataStore(directory, 439, deleteOnDispose: false))
         {
             store.AcceptIncomingBatch(first);
+            Assert.Equal(0, store.CachedReceiveCursorCount);
+            Assert.Equal(0, store.CachedReceiveChainCount);
+            Assert.Equal(0, store.CachedLegacyReceiveChainCount);
             store.BeginPendingApply(second, token);
             var finalized = store.FinalizePendingApply(scope, local,
                 new MetadataProviderApplyReceipt(token, secondDigest));
@@ -1142,7 +1145,12 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
         using var reopened = new StorageMetadataStore(directory, 439, deleteOnDispose: false);
         Assert.Empty(reopened.ReadPendingApplyIntents(scope, local));
+        Assert.Equal(0, reopened.CachedReceiveCursorCount);
+        Assert.Equal(0, reopened.CachedReceiveChainCount);
+        Assert.Equal(0, reopened.CachedLegacyReceiveChainCount);
         Assert.Equal(2UL, reopened.GetReceiveCursor(scope, local, sender, 1, 7, author));
+        Assert.Equal(0, reopened.CachedReceiveCursorCount);
+        Assert.Equal(0, reopened.CachedReceiveChainCount);
         Assert.Equal(2UL, reopened.GetRelayHighWatermark(scope, local, 7, author));
         var relay = reopened.ReadRelay(scope, local, 7, author, 0, 10);
         Assert.Equal(2, relay.Items.Count);
