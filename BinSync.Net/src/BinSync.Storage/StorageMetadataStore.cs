@@ -6181,15 +6181,25 @@ private bool ValidateIncomingBatchForStaging(
     private static IEnumerable<StorageEntry> EnumeratePartitionRows(
         StorageSnapshot snapshot, byte[] root)
     {
-        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(root);
+        // Enumerate each metadata keyspace independently. Outbound payloads (kind 21)
+        // are intentionally absent from the partition cache and must not be scanned
+        // during a cold load; ReadOutbound/GC seek their own bounded B+ tree cursors.
         const int pageSize = 512;
-        while (true)
+        for (byte kind = 0; kind <= 26; kind++)
         {
-            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
-            foreach (StorageEntry row in page)
-                yield return row;
-            if (page.Count < pageSize)
-                yield break;
+            if (kind == 21) continue;
+            byte[] prefix = new byte[root.Length + 1];
+            root.CopyTo(prefix, 0);
+            prefix[^1] = kind;
+            using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+            while (true)
+            {
+                IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+                foreach (StorageEntry row in page)
+                    yield return row;
+                if (page.Count < pageSize)
+                    break;
+            }
         }
     }
 
