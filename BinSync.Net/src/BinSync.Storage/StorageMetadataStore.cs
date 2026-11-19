@@ -8187,15 +8187,6 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
                 _ => default).Select(pair => pair.Key),
             key => ContainsStorageKey(EncodeCompletedPeerBaselineKey(partitionKey, key)));
 
-    private static byte[] EncodeCompletedPeerBaselineKey(PartitionKey partitionKey, InterestedPeerKey peer)
-    {
-        byte[] suffix = new byte[22];
-        BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)peer.NamespaceId));
-        peer.Peer.WriteTo(suffix.AsSpan(2));
-        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(18), peer.PeerEpoch);
-        return StorageKey(PartitionRoot(partitionKey), 19, suffix);
-    }
-
     private bool TryReadStreamWatermark(PartitionKey partitionKey, byte kind,
         int namespaceId, NodeId author, int valueOffset, out ulong value)
     {
