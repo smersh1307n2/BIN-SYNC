@@ -5321,7 +5321,8 @@ private bool ValidateIncomingBatchForStaging(
     {
         if (TryGetPartition(key, out var state)) return state;
         state = new PartitionState(CreatePendingApplyMap(key), CreatePeerStreamMap(key),
-            CreateRequiredPeerStreamSet(key), CreateInterestedPeerSet(key)) { StorageCommitSeq = _storage.LastCommitSeq };
+            CreateRequiredPeerStreamSet(key), CreateInterestedPeerSet(key), CreateRetiredPeerEpochMap(key))
+            { StorageCommitSeq = _storage.LastCommitSeq };
         CachePartition(key, state);
         return state;
     }
@@ -5370,6 +5371,7 @@ private bool ValidateIncomingBatchForStaging(
     internal int CachedPendingApplyCount => 0;
     internal int CachedPeerStreamCount => 0;
     internal int CachedPeerRosterIndexCount => 0;
+    internal int CachedRetiredPeerEpochCount => 0;
 
     private static byte[] PartitionRevisionKey(PartitionKey partitionKey)
     {
@@ -6216,7 +6218,7 @@ private bool ValidateIncomingBatchForStaging(
         const int pageSize = 512;
         for (byte kind = 0; kind <= 26; kind++)
         {
-            if (kind is 1 or 3 or 12 or 13 or 15 or 16 or 17 or 20 or 21) continue;
+            if (kind is 1 or 3 or 12 or 13 or 15 or 16 or 17 or 18 or 20 or 21) continue;
             byte[] prefix = new byte[root.Length + 1];
             root.CopyTo(prefix, 0);
             prefix[^1] = kind;
@@ -6239,7 +6241,7 @@ private bool ValidateIncomingBatchForStaging(
         ulong commitSeq)
     {
         var state = new PartitionState(CreatePendingApplyMap(partition), CreatePeerStreamMap(partition),
-            CreateRequiredPeerStreamSet(partition), CreateInterestedPeerSet(partition))
+            CreateRequiredPeerStreamSet(partition), CreateInterestedPeerSet(partition), CreateRetiredPeerEpochMap(partition))
         { StorageCommitSeq = commitSeq, IsPersisted = true };
         bool identitySeen = false;
         bool rowSeen = false;
@@ -6362,14 +6364,12 @@ private bool ValidateIncomingBatchForStaging(
                     break;
                 }
                 case 18:
-                {
+                    // Retired-peer fences are point-read durable state, not partition cache.
                     RequireLength(key, 18);
                     RequireLength(row.Value, 4);
-                    state.RetiredPeerEpochs.Add(
-                        (BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16))),
-                        BinaryPrimitives.ReadUInt32LittleEndian(row.Value));
+                    if (BinaryPrimitives.ReadUInt32LittleEndian(row.Value) == 0)
+                        throw new InvalidDataException("Stored retired-peer epoch fence is invalid.");
                     break;
-                }
                 case 19:
                 {
                     RequireLength(key, 22);
@@ -7885,6 +7885,11 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             () => EnumerateInterestedPeers(partitionKey),
             key => ContainsStorageKey(EncodeInterestedPeerKey(partitionKey, key)));
 
+    private RetiredPeerEpochMap CreateRetiredPeerEpochMap(PartitionKey partitionKey)
+        => new(
+            () => EnumerateRetiredPeerEpochs(partitionKey),
+            key => TryReadRetiredPeerEpoch(partitionKey, key));
+
     private bool ContainsStorageKey(byte[] key)
     {
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
@@ -7921,6 +7926,47 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         return snapshot.TryGet(key, out byte[]? value)
             ? new PendingApplyValue(DecodeIncomingBatch(value!))
             : null;
+    }
+
+    private IEnumerable<KeyValuePair<(int NamespaceId, NodeId Peer), uint>> EnumerateRetiredPeerEpochs(
+        PartitionKey partitionKey)
+    {
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 18, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                byte[] key = row.Key;
+                int offset = prefix.Length;
+                if (key.Length - offset != 18 || row.Value.Length != 4)
+                    throw new InvalidDataException("Retired-peer epoch storage row is invalid.");
+                uint epoch = BinaryPrimitives.ReadUInt32LittleEndian(row.Value);
+                if (epoch == 0)
+                    throw new InvalidDataException("Stored retired-peer epoch fence is invalid.");
+                yield return new KeyValuePair<(int NamespaceId, NodeId Peer), uint>(
+                    (BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
+                     NodeId.From(key.AsSpan(offset + 2, 16))), epoch);
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
+    private uint? TryReadRetiredPeerEpoch(
+        PartitionKey partitionKey, (int NamespaceId, NodeId Peer) key)
+    {
+        byte[] storageKey = EncodeRetiredPeerEpochKey(partitionKey, key.NamespaceId, key.Peer);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        if (!snapshot.TryGet(storageKey, out byte[]? value)) return null;
+        if (value!.Length != 4)
+            throw new InvalidDataException("Retired-peer epoch storage value has an invalid length.");
+        uint epoch = BinaryPrimitives.ReadUInt32LittleEndian(value);
+        if (epoch == 0)
+            throw new InvalidDataException("Stored retired-peer epoch fence is invalid.");
+        return epoch;
     }
 
     private IEnumerable<PeerStreamKey> EnumerateRequiredPeerStreams(PartitionKey partitionKey)
@@ -8055,6 +8101,44 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             => GetEnumerator();
     }
 
+    private sealed class RetiredPeerEpochMap :
+        IEnumerable<KeyValuePair<(int NamespaceId, NodeId Peer), uint>>
+    {
+        private readonly Func<IEnumerable<KeyValuePair<(int NamespaceId, NodeId Peer), uint>>> _enumerate;
+        private readonly Func<(int NamespaceId, NodeId Peer), uint?> _read;
+
+        public static RetiredPeerEpochMap Empty { get; } = new(
+            () => Array.Empty<KeyValuePair<(int NamespaceId, NodeId Peer), uint>>(), _ => null);
+
+        public RetiredPeerEpochMap(
+            Func<IEnumerable<KeyValuePair<(int NamespaceId, NodeId Peer), uint>>> enumerate,
+            Func<(int NamespaceId, NodeId Peer), uint?> read)
+        {
+            _enumerate = enumerate ?? throw new ArgumentNullException(nameof(enumerate));
+            _read = read ?? throw new ArgumentNullException(nameof(read));
+        }
+
+        public bool TryGetValue((int NamespaceId, NodeId Peer) key, out uint value)
+        {
+            uint? found = _read(key);
+            value = found.GetValueOrDefault();
+            return found.HasValue;
+        }
+
+        public uint this[(int NamespaceId, NodeId Peer) key]
+        {
+            get => TryGetValue(key, out uint value) ? value : throw new KeyNotFoundException();
+            set { }
+        }
+
+        public void Add((int NamespaceId, NodeId Peer) key, uint value) { }
+
+        public IEnumerator<KeyValuePair<(int NamespaceId, NodeId Peer), uint>> GetEnumerator()
+            => _enumerate().GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private sealed class DiskKeySet<T> : IEnumerable<T>
     {
         private readonly Func<IEnumerable<T>> _enumerate;
@@ -8157,19 +8241,21 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public PendingApplyMap PendingApplies { get; }
 
         public PartitionState(PendingApplyMap pendingApplies, PeerStreamMap peerStreams,
-            DiskKeySet<PeerStreamKey> requiredPeerStreams, DiskKeySet<InterestedPeerKey> interestedPeers)
+            DiskKeySet<PeerStreamKey> requiredPeerStreams, DiskKeySet<InterestedPeerKey> interestedPeers,
+            RetiredPeerEpochMap retiredPeerEpochs)
         {
             PendingApplies = pendingApplies ?? throw new ArgumentNullException(nameof(pendingApplies));
             PeerStreams = peerStreams ?? throw new ArgumentNullException(nameof(peerStreams));
             RequiredPeerStreams = requiredPeerStreams ?? throw new ArgumentNullException(nameof(requiredPeerStreams));
             InterestedPeers = interestedPeers ?? throw new ArgumentNullException(nameof(interestedPeers));
+            RetiredPeerEpochs = retiredPeerEpochs ?? throw new ArgumentNullException(nameof(retiredPeerEpochs));
         }
         public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
         public PeerStreamMap PeerStreams { get; }
         public DiskKeySet<PeerStreamKey> RequiredPeerStreams { get; }
         public DiskKeySet<InterestedPeerKey> InterestedPeers { get; }
         public HashSet<InterestedPeerKey> CompletedPeerBaselines { get; } = new();
-        public Dictionary<(int NamespaceId, NodeId Peer), uint> RetiredPeerEpochs { get; } = new();
+        public RetiredPeerEpochMap RetiredPeerEpochs { get; }
 
         public ulong StorageCommitSeq { get; set; }
         public ulong MetadataRevision { get; set; }
@@ -8180,7 +8266,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             // VolatileSnapshot only reads these seven collections. Do not copy
             // ChangeLedger, Receipts, PendingApplies, peer indexes or rebuildable caches.
             var clone = new PartitionState(PendingApplyMap.Empty, PeerStreamMap.Empty,
-                DiskKeySet<PeerStreamKey>.Empty, DiskKeySet<InterestedPeerKey>.Empty);
+                DiskKeySet<PeerStreamKey>.Empty, DiskKeySet<InterestedPeerKey>.Empty, RetiredPeerEpochMap.Empty);
             foreach (var pair in Receives) clone.Receives.Add(pair.Key, pair.Value);
             foreach (var pair in RelayAck) clone.RelayAck.Add(pair.Key, pair.Value);
             foreach (var pair in RelayHighWatermarks) clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
