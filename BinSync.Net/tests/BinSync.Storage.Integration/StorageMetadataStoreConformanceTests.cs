@@ -572,8 +572,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             }
 
             using var metadata = new StorageMetadataStore(storage);
+            // Cold partition hydration must not scan the disk-primary ledger. Force
+            // the exact malformed row through its normal point-read path instead.
             Assert.Throws<InvalidDataException>(() =>
-                metadata.GetOutboundHighWatermark(scope, local, 7, local));
+                metadata.FreezeOutbound(scope, local, 7, local, new[] { FrozenOperation(71, 72) }));
 
             using var snapshot = storage.OpenSnapshot();
             var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 100);
