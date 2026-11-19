@@ -180,9 +180,19 @@ public sealed class FldBinSyncRuntimeHostTests
             Task<(int Prefixes, int FieldsApplied)> peerBaselineTask =
                 peerSession.AutoReconcileAsync(
                     peerNode, NamespaceId, initiate: false, maxPrefixes: 16);
-            await Task.WhenAll(hostBaselineTask, peerBaselineTask);
-            using HttpResponseMessage hostBaseline = await hostBaselineTask;
-            Assert.Equal(HttpStatusCode.OK, hostBaseline.StatusCode);
+            // Bound the two independent sides separately. Task.WhenAll can hide
+            // which side stopped making progress and turns a protocol failure into
+            // the outer five-minute testhost hang.
+            using HttpResponseMessage hostBaseline = await hostBaselineTask
+                .WaitAsync(TimeSpan.FromSeconds(15));
+            string hostBaselineBody = await hostBaseline.Content.ReadAsStringAsync();
+            Assert.True(hostBaseline.StatusCode == HttpStatusCode.OK,
+                $"Host baseline endpoint returned {(int)hostBaseline.StatusCode}: {hostBaselineBody}");
+
+            (int baselinePrefixes, int baselineFieldsApplied) = await peerBaselineTask
+                .WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.True(baselinePrefixes >= 0);
+            Assert.True(baselineFieldsApplied >= 0);
 
             // Hold the exact Host-wide FLD reference-scan lease used by physical GC.
             // A live SyncSession remains connected, but provider IPC must not cross
@@ -253,6 +263,12 @@ public sealed class FldBinSyncRuntimeHostTests
                 TimeSpan.FromSeconds(8));
             Assert.Equal(HttpStatusCode.OK, followUp.StatusCode);
             await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(2));
+
+            // Prove the peer can be closed cleanly before shutting down its Host.
+            // DisposeAsync is bounded so a session teardown regression is reported
+            // as a focused failure instead of hanging the entire test process.
+            await peerSession.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+            await WaitForActivePeer(client, expected: 0, TimeSpan.FromSeconds(5));
 
             using HttpResponseMessage shutdown = await client.PostAsJsonAsync(
                 "/admin/shutdown", new { reason = "finish GC/live-peer pause-resume integration" });
