@@ -5319,7 +5319,7 @@ private bool ValidateIncomingBatchForStaging(
     private PartitionState GetOrCreatePartition(PartitionKey key)
     {
         if (TryGetPartition(key, out var state)) return state;
-        state = new PartitionState { StorageCommitSeq = _storage.LastCommitSeq };
+        state = new PartitionState(CreatePendingApplyMap(key)) { StorageCommitSeq = _storage.LastCommitSeq };
         CachePartition(key, state);
         return state;
     }
@@ -6204,16 +6204,14 @@ private bool ValidateIncomingBatchForStaging(
         StorageSnapshot snapshot, byte[] root)
     {
         // Cold partition hydration is limited to bounded control state. Receipts (1),
-        // ChangeId ledger rows (3), completed-apply markers (13), relay headers (20)
-        // and outbound headers/payloads (21) are disk-primary keyspaces: their readers
-        // use exact-key or bounded prefix cursors and must never be swept just because an
-        // unrelated partition operation needs a control-state snapshot. DecodePartition
-        // only validated these rows; it did not materialize them, so omitting the scans
-        // changes no cache state.
+        // PendingApply payloads (12), completed-apply markers (13), ChangeId ledger rows
+        // (3), relay headers (20) and outbound headers/payloads (21) are disk-primary.
+        // Their readers use exact-key or bounded prefix cursors; unrelated operations
+        // must not hydrate their payloads into a resident PartitionState.
         const int pageSize = 512;
         for (byte kind = 0; kind <= 26; kind++)
         {
-            if (kind is 1 or 3 or 13 or 20 or 21) continue;
+            if (kind is 1 or 3 or 12 or 13 or 20 or 21) continue;
             byte[] prefix = new byte[root.Length + 1];
             root.CopyTo(prefix, 0);
             prefix[^1] = kind;
@@ -6229,13 +6227,14 @@ private bool ValidateIncomingBatchForStaging(
         }
     }
 
-    private static PartitionState? DecodePartition(
+    private PartitionState? DecodePartition(
         PartitionKey partition,
         byte[] root,
         IEnumerable<StorageEntry> rows,
         ulong commitSeq)
     {
-        var state = new PartitionState { StorageCommitSeq = commitSeq, IsPersisted = true };
+        var state = new PartitionState(CreatePendingApplyMap(partition))
+        { StorageCommitSeq = commitSeq, IsPersisted = true };
         bool identitySeen = false;
         bool rowSeen = false;
         foreach (var row in rows)
@@ -6424,8 +6423,10 @@ private bool ValidateIncomingBatchForStaging(
                     break;
                 }
                 case 12:
+                    // PendingApply payloads are decoded only by exact-token lookup or
+                    // bounded recovery scans, never retained by the partition cache.
                     RequireLength(key, 16);
-                    state.PendingApplies.Add(new Guid(key), new PendingApplyValue(DecodeIncomingBatch(row.Value)));
+                    _ = DecodeIncomingBatch(row.Value);
                     break;
                 case 13:
                     // Completed-apply markers stay on Storage; validate only on cold load.
@@ -7875,6 +7876,93 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         }
     }
 
+    private PendingApplyMap CreatePendingApplyMap(PartitionKey partitionKey)
+        => new(
+            () => EnumeratePendingApplies(partitionKey),
+            token => TryReadPendingApply(partitionKey, token));
+
+    private IEnumerable<KeyValuePair<Guid, PendingApplyValue>> EnumeratePendingApplies(
+        PartitionKey partitionKey)
+    {
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 12, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 32;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                if (row.Key.Length != prefix.Length + 16)
+                    throw new InvalidDataException("PendingApply storage key has an invalid length.");
+                yield return new KeyValuePair<Guid, PendingApplyValue>(
+                    new Guid(row.Key.AsSpan(prefix.Length)),
+                    new PendingApplyValue(DecodeIncomingBatch(row.Value)));
+            }
+            if (page.Count < pageSize)
+                yield break;
+        }
+    }
+
+    private PendingApplyValue? TryReadPendingApply(PartitionKey partitionKey, Guid applyToken)
+    {
+        byte[] key = StorageKey(PartitionRoot(partitionKey), 12, applyToken.ToByteArray());
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        return snapshot.TryGet(key, out byte[]? value)
+            ? new PendingApplyValue(DecodeIncomingBatch(value!))
+            : null;
+    }
+
+    private sealed class PendingApplyMap : IEnumerable<KeyValuePair<Guid, PendingApplyValue>>
+    {
+        private readonly Func<IEnumerable<KeyValuePair<Guid, PendingApplyValue>>> _enumerate;
+        private readonly Func<Guid, PendingApplyValue?> _read;
+
+        public static PendingApplyMap Empty { get; } = new(
+            () => Array.Empty<KeyValuePair<Guid, PendingApplyValue>>(),
+            _ => null);
+
+        public PendingApplyMap(
+            Func<IEnumerable<KeyValuePair<Guid, PendingApplyValue>>> enumerate,
+            Func<Guid, PendingApplyValue?> read)
+        {
+            _enumerate = enumerate ?? throw new ArgumentNullException(nameof(enumerate));
+            _read = read ?? throw new ArgumentNullException(nameof(read));
+        }
+
+        public IEnumerable<PendingApplyValue> Values
+        {
+            get
+            {
+                foreach (KeyValuePair<Guid, PendingApplyValue> pair in _enumerate())
+                    yield return pair.Value;
+            }
+        }
+
+        public bool TryGetValue(Guid key, out PendingApplyValue value)
+        {
+            PendingApplyValue? found = _read(key);
+            if (found is null)
+            {
+                value = null!;
+                return false;
+            }
+            value = found;
+            return true;
+        }
+
+        // Mutations are deliberately storage-first: callers invoke Add/Remove only
+        // after the corresponding WAL-backed Storage batch has committed.
+        public void Add(Guid key, PendingApplyValue value) { }
+        public bool Remove(Guid key) => false;
+
+        public IEnumerator<KeyValuePair<Guid, PendingApplyValue>> GetEnumerator()
+            => _enumerate().GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator()
+            => GetEnumerator();
+    }
+
     private sealed class PartitionState
     {
         public Dictionary<ReceiptKey, ReceiptValue> Receipts { get; } = new();
@@ -7890,7 +7978,10 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public Dictionary<OriginStreamKey, OriginIssuedState> OriginHighWatermarks { get; } = new();
         public Dictionary<OutboundKey, ulong> OutboundAck { get; } = new();
         public Dictionary<OutboundKey, LeaseState> OutboundLeases { get; } = new();
-        public Dictionary<Guid, PendingApplyValue> PendingApplies { get; } = new();
+        public PendingApplyMap PendingApplies { get; }
+
+        public PartitionState(PendingApplyMap pendingApplies)
+            => PendingApplies = pendingApplies ?? throw new ArgumentNullException(nameof(pendingApplies));
         public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
         public Dictionary<PeerStreamKey, PeerStreamStateValue> PeerStreams { get; } = new();
         public HashSet<PeerStreamKey> RequiredPeerStreams { get; } = new();
@@ -7906,7 +7997,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         {
             // VolatileSnapshot only reads these seven collections. Do not copy
             // ChangeLedger, Receipts, PendingApplies, peer indexes or rebuildable caches.
-            var clone = new PartitionState();
+            var clone = new PartitionState(PendingApplyMap.Empty);
             foreach (var pair in Receives) clone.Receives.Add(pair.Key, pair.Value);
             foreach (var pair in RelayAck) clone.RelayAck.Add(pair.Key, pair.Value);
             foreach (var pair in RelayHighWatermarks) clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
