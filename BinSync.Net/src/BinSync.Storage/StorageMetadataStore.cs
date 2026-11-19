@@ -7928,14 +7928,15 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
             foreach (StorageEntry row in page)
             {
-                ReadOnlySpan<byte> key = row.Key.AsSpan(prefix.Length);
-                if (key.Length != 38)
+                byte[] storageKey = row.Key;
+                int offset = prefix.Length;
+                if (storageKey.Length - offset != 38)
                     throw new InvalidDataException("Peer-stream storage key has an invalid length.");
                 var peerKey = new PeerStreamKey(
-                    NodeId.From(key.Slice(0, 16)),
-                    BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                    BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                    NodeId.From(key.Slice(22, 16)));
+                    NodeId.From(storageKey.AsSpan(offset, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(storageKey.AsSpan(offset + 16)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(storageKey.AsSpan(offset + 20)),
+                    NodeId.From(storageKey.AsSpan(offset + 22, 16)));
                 yield return new KeyValuePair<PeerStreamKey, PeerStreamStateValue>(
                     peerKey, DecodePeerStreamState(row.Value));
             }
