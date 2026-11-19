@@ -38,9 +38,12 @@ public sealed class FldFullReplaceBootstrapTests
         NodeId rowAuthor = NodeId.From(Id(3));
         (byte[] sourceSeed, byte[] sourcePublicKey) = BatchSignature.GenerateKeyPair();
         (byte[] targetSeed, byte[] targetPublicKey) = BatchSignature.GenerateKeyPair();
+        (byte[] rowAuthorSeed, byte[] rowAuthorPublicKey) = BatchSignature.GenerateKeyPair();
+        _ = rowAuthorSeed;
         var trust = new TrustStore();
         trust.Allow(sourceId, sourcePublicKey, TrustMode.PreShared);
         trust.Allow(targetId, targetPublicKey, TrustMode.PreShared);
+        trust.Allow(rowAuthor, rowAuthorPublicKey, TrustMode.PreShared);
 
         var unsignedRoster = new NamespaceRosterCertificate
         {
@@ -62,6 +65,13 @@ public sealed class FldFullReplaceBootstrapTests
                     NodeId = targetId,
                     PublicKey = targetPublicKey,
                     TransportPeerEpoch = 8,
+                    Status = NamespaceMemberStatus.Active
+                },
+                new NamespaceRosterMember
+                {
+                    NodeId = rowAuthor,
+                    PublicKey = rowAuthorPublicKey,
+                    TransportPeerEpoch = 1,
                     Status = NamespaceMemberStatus.Active
                 }
             }
