@@ -217,7 +217,7 @@ public sealed class FldFullReplaceBootstrapTests
             Task<FullReplaceInstalledAck?> receive = resumedReceiver.ReceiveTransferAsync(secondTarget);
             Task<FullReplaceInstalledAck> send = StorageFullReplaceSender.SendPreparedSnapshotAsync(
                 prepared, secondSource, sourceGcStore, trust, roster, sourceId, sourceSeed);
-            Task firstCompleted = await Task.WhenAny(send, receive).WaitAsync(TimeSpan.FromSeconds(30));
+            Task firstCompleted = await Task.WhenAny((Task)send, (Task)receive).WaitAsync(TimeSpan.FromSeconds(30));
             FullReplaceInstalledAck acknowledgement;
             FullReplaceInstalledAck? receiverAck;
             if (firstCompleted == receive)
