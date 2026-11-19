@@ -2864,7 +2864,7 @@ private bool ValidateIncomingBatchForStaging(
                 // Replays use a point lookup, independent of the historical stream length.
                 ulong sequence = frozenLedger.OutboundSequence;
                 byte[] priorPayload = LoadStreamPayloadBody(
-                    payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, sequence);
+                    payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, sequence, operation.ChangeId);
                 if (!priorPayload.AsSpan().SequenceEqual(operation.Payload))
                     throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
                 prior = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, priorPayload)
@@ -2881,7 +2881,7 @@ private bool ValidateIncomingBatchForStaging(
                 if (legacySequence == 0)
                     throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
                 byte[] priorPayload = LoadStreamPayloadBody(
-                    payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, legacySequence);
+                    payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, legacySequence, operation.ChangeId);
                 if (!priorPayload.AsSpan().SequenceEqual(operation.Payload))
                     throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
                 prior = new MetadataOutboundItem(
@@ -6834,7 +6834,7 @@ private bool ValidateIncomingBatchForStaging(
 
     private byte[] LoadStreamPayloadBody(
         StorageSnapshot snapshot, byte[] partitionRoot, byte kind,
-        int namespaceId, NodeId author, ulong sequence)
+        int namespaceId, NodeId author, ulong sequence, BatchId? expectedChangeId = null)
     {
         if (kind is not (20 or 21))
             throw new ArgumentOutOfRangeException(nameof(kind));
@@ -6846,7 +6846,9 @@ private bool ValidateIncomingBatchForStaging(
         BinaryPrimitives.WriteUInt64BigEndian(key.Slice(68, 8), sequence);
         if (!snapshot.TryGet(key, out byte[]? value) || value is null)
             throw new InvalidDataException("Persisted stream payload row is missing.");
-        _ = DecodePayloadHeader(value);
+        BatchId storedChangeId = DecodePayloadHeader(value);
+        if (expectedChangeId is BatchId expected && storedChangeId != expected)
+            throw new InvalidDataException("Outbound ChangeId sequence index points to a different stream payload row.");
         return value.AsSpan(20).ToArray();
     }
 
