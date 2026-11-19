@@ -5312,7 +5312,8 @@ private bool ValidateIncomingBatchForStaging(
         if (TryGetPartition(key, out var state)) return state;
         state = new PartitionState(CreatePendingApplyMap(key), CreatePeerStreamMap(key),
             CreateRequiredPeerStreamSet(key), CreateInterestedPeerSet(key), CreateRetiredPeerEpochMap(key),
-            CreateReceiveMap(key), CreateReceiveChainMap(key), CreateLegacyReceiveChainMap(key))
+            CreateReceiveMap(key), CreateReceiveChainMap(key), CreateLegacyReceiveChainMap(key),
+            CreateReceiptMap(key), CreateChangeLedgerMap(key), CreateCompletedPendingApplyMap(key))
             { StorageCommitSeq = _storage.LastCommitSeq };
         CachePartition(key, state);
         return state;
@@ -6237,7 +6238,8 @@ private bool ValidateIncomingBatchForStaging(
     {
         var state = new PartitionState(CreatePendingApplyMap(partition), CreatePeerStreamMap(partition),
             CreateRequiredPeerStreamSet(partition), CreateInterestedPeerSet(partition), CreateRetiredPeerEpochMap(partition),
-            CreateReceiveMap(partition), CreateReceiveChainMap(partition), CreateLegacyReceiveChainMap(partition))
+            CreateReceiveMap(partition), CreateReceiveChainMap(partition), CreateLegacyReceiveChainMap(partition),
+            CreateReceiptMap(partition), CreateChangeLedgerMap(partition), CreateCompletedPendingApplyMap(partition))
         { StorageCommitSeq = commitSeq, IsPersisted = true };
         bool identitySeen = false;
         bool rowSeen = false;
@@ -6541,8 +6543,6 @@ private bool ValidateIncomingBatchForStaging(
         StorageSnapshot snapshot, byte[] partitionRoot, PartitionState state,
         LedgerKey key, out ChangeLedgerValue value)
     {
-        if (state.ChangeLedger.TryGetValue(key, out value!))
-            return true;
         Span<byte> storageKey = stackalloc byte[68];
         partitionRoot.AsSpan().CopyTo(storageKey);
         storageKey[49] = 3;
@@ -6568,8 +6568,6 @@ private bool ValidateIncomingBatchForStaging(
         StorageSnapshot snapshot, PartitionKey partitionKey, PartitionState state,
         ReceiptKey key, out ReceiptValue value)
     {
-        if (state.Receipts.TryGetValue(key, out value!))
-            return true;
         byte[] storageKey = EncodeReceiptKey(partitionKey, key);
         if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
         {
@@ -6584,8 +6582,6 @@ private bool ValidateIncomingBatchForStaging(
         PartitionKey partitionKey, PartitionState state, Guid applyToken,
         out CompletedPendingApplyValue value)
     {
-        if (state.CompletedPendingApplies.TryGetValue(applyToken, out value!))
-            return true;
         byte[] storageKey = StorageKey(PartitionRoot(partitionKey), 13, applyToken.ToByteArray());
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
         if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
@@ -6600,31 +6596,23 @@ private bool ValidateIncomingBatchForStaging(
     private IEnumerable<(LedgerKey Key, ChangeLedgerValue Value)> EnumerateChangeLedger(
         PartitionKey partitionKey, PartitionState state, int namespaceId)
     {
-        var seen = new HashSet<LedgerKey>();
-        foreach (var pair in state.ChangeLedger)
-        {
-            if (pair.Key.NamespaceId != namespaceId) continue;
-            seen.Add(pair.Key);
-            yield return (pair.Key, pair.Value);
-        }
-
         byte[] root = PartitionRoot(partitionKey);
         byte[] prefix = StorageKey(root, 3, ReadOnlySpan<byte>.Empty);
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
         using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
-        const int pageSize = 512;
+        const int pageSize = 64;
         while (true)
         {
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
             foreach (StorageEntry row in page)
             {
-                ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
-                if (suffix.Length < 1 + 18 || suffix[0] != 3) continue;
-                ReadOnlySpan<byte> keyBytes = suffix.Slice(1);
-                int rowNamespace = BinaryPrimitives.ReadUInt16LittleEndian(keyBytes);
+                byte[] keyBytes = row.Key;
+                int offset = root.Length + 1;
+                if (keyBytes.Length - offset != 18)
+                    throw new InvalidDataException("ChangeLedger storage key is malformed.");
+                int rowNamespace = BinaryPrimitives.ReadUInt16LittleEndian(keyBytes.AsSpan(offset));
                 if (rowNamespace != namespaceId) continue;
-                var ledgerKey = new LedgerKey(rowNamespace, BatchId.From(keyBytes.Slice(2, 16)));
-                if (!seen.Add(ledgerKey)) continue;
+                var ledgerKey = new LedgerKey(rowNamespace, BatchId.From(keyBytes.AsSpan(offset + 2, 16)));
                 yield return (ledgerKey, DecodeChangeLedgerValue(row.Value));
             }
             if (page.Count < pageSize) yield break;
@@ -6634,35 +6622,27 @@ private bool ValidateIncomingBatchForStaging(
     private IEnumerable<(ReceiptKey Key, ReceiptValue Value)> EnumerateReceipts(
         PartitionKey partitionKey, PartitionState state, int namespaceId)
     {
-        var seen = new HashSet<ReceiptKey>();
-        foreach (var pair in state.Receipts)
-        {
-            if (pair.Key.NamespaceId != namespaceId) continue;
-            seen.Add(pair.Key);
-            yield return (pair.Key, pair.Value);
-        }
-
         byte[] root = PartitionRoot(partitionKey);
         byte[] prefix = StorageKey(root, 1, ReadOnlySpan<byte>.Empty);
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
         using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
-        const int pageSize = 512;
+        const int pageSize = 64;
         while (true)
         {
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
             foreach (StorageEntry row in page)
             {
-                ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
-                if (suffix.Length < 1 + 38 || suffix[0] != 1) continue;
-                ReadOnlySpan<byte> keyBytes = suffix.Slice(1);
-                int rowNamespace = BinaryPrimitives.ReadUInt16LittleEndian(keyBytes.Slice(20));
+                byte[] keyBytes = row.Key;
+                int offset = root.Length + 1;
+                if (keyBytes.Length - offset != 38)
+                    throw new InvalidDataException("Receipt storage key is malformed.");
+                int rowNamespace = BinaryPrimitives.ReadUInt16LittleEndian(keyBytes.AsSpan(offset + 20));
                 if (rowNamespace != namespaceId) continue;
                 var receiptKey = new ReceiptKey(
-                    NodeId.From(keyBytes.Slice(0, 16)),
-                    BinaryPrimitives.ReadUInt32LittleEndian(keyBytes.Slice(16)),
+                    NodeId.From(keyBytes.AsSpan(offset, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(keyBytes.AsSpan(offset + 16)),
                     rowNamespace,
-                    BatchId.From(keyBytes.Slice(22, 16)));
-                if (!seen.Add(receiptKey)) continue;
+                    BatchId.From(keyBytes.AsSpan(offset + 22, 16)));
                 yield return (receiptKey, DecodeReceiptValue(row.Value));
             }
             if (page.Count < pageSize) yield break;
@@ -7913,6 +7893,27 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             return (found, value);
         });
 
+    private DiskMap<ReceiptKey, ReceiptValue> CreateReceiptMap(PartitionKey partitionKey)
+        => new(() => EnumerateReceiptRows(partitionKey), key =>
+        {
+            bool found = TryReadReceipt(partitionKey, key, out ReceiptValue value);
+            return (found, value);
+        });
+
+    private DiskMap<LedgerKey, ChangeLedgerValue> CreateChangeLedgerMap(PartitionKey partitionKey)
+        => new(() => EnumerateChangeLedgerRows(partitionKey), key =>
+        {
+            bool found = TryReadChangeLedger(partitionKey, key, out ChangeLedgerValue value);
+            return (found, value);
+        });
+
+    private DiskMap<Guid, CompletedPendingApplyValue> CreateCompletedPendingApplyMap(PartitionKey partitionKey)
+        => new(() => EnumerateCompletedPendingApplies(partitionKey), token =>
+        {
+            bool found = TryReadCompletedPendingApply(partitionKey, token, out CompletedPendingApplyValue value);
+            return (found, value);
+        });
+
     private static byte[] EncodeReceiveKey(PartitionKey partitionKey, ReceiveKey receive)
     {
         byte[] suffix = new byte[38];
@@ -8051,6 +8052,122 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
                     BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset + 20)));
                 yield return new KeyValuePair<LegacyReceiveChainKey, ReceiveChainState>(
                     chainKey, new ReceiveChainState(row.Value));
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
+    private bool TryReadReceipt(PartitionKey partitionKey, ReceiptKey key, out ReceiptValue value)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        if (!snapshot.TryGet(EncodeReceiptKey(partitionKey, key), out byte[]? bytes))
+        {
+            value = null!;
+            return false;
+        }
+        value = DecodeReceiptValue(bytes!);
+        return true;
+    }
+
+    private IEnumerable<KeyValuePair<ReceiptKey, ReceiptValue>> EnumerateReceiptRows(PartitionKey partitionKey)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] prefix = StorageKey(root, 1, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                byte[] key = row.Key;
+                int offset = root.Length + 1;
+                if (key.Length - offset != 38)
+                    throw new InvalidDataException("Receipt storage key is malformed.");
+                var receiptKey = new ReceiptKey(NodeId.From(key.AsSpan(offset, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(offset + 16)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset + 20)),
+                    BatchId.From(key.AsSpan(offset + 22, 16)));
+                yield return new KeyValuePair<ReceiptKey, ReceiptValue>(receiptKey, DecodeReceiptValue(row.Value));
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
+    private bool TryReadChangeLedger(PartitionKey partitionKey, LedgerKey key, out ChangeLedgerValue value)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        Span<byte> storageKey = stackalloc byte[68];
+        PartitionRoot(partitionKey).AsSpan().CopyTo(storageKey);
+        storageKey[49] = 3;
+        BinaryPrimitives.WriteUInt16LittleEndian(storageKey.Slice(50, 2), checked((ushort)key.NamespaceId));
+        key.ChangeId.WriteTo(storageKey.Slice(52, 16));
+        if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
+        {
+            value = null!;
+            return false;
+        }
+        value = DecodeChangeLedgerValue(bytes);
+        return true;
+    }
+
+    private IEnumerable<KeyValuePair<LedgerKey, ChangeLedgerValue>> EnumerateChangeLedgerRows(PartitionKey partitionKey)
+    {
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] prefix = StorageKey(root, 3, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                byte[] key = row.Key;
+                int offset = root.Length + 1;
+                if (key.Length - offset != 18)
+                    throw new InvalidDataException("ChangeLedger storage key is malformed.");
+                var ledgerKey = new LedgerKey(
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
+                    BatchId.From(key.AsSpan(offset + 2, 16)));
+                yield return new KeyValuePair<LedgerKey, ChangeLedgerValue>(
+                    ledgerKey, DecodeChangeLedgerValue(row.Value));
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
+    private bool TryReadCompletedPendingApply(
+        PartitionKey partitionKey, Guid token, out CompletedPendingApplyValue value)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        byte[] key = StorageKey(PartitionRoot(partitionKey), 13, token.ToByteArray());
+        if (!snapshot.TryGet(key, out byte[]? bytes) || bytes is null)
+        {
+            value = null!;
+            return false;
+        }
+        value = DecodeCompleted(bytes);
+        return true;
+    }
+
+    private IEnumerable<KeyValuePair<Guid, CompletedPendingApplyValue>> EnumerateCompletedPendingApplies(
+        PartitionKey partitionKey)
+    {
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 13, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 32;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                if (row.Key.Length != prefix.Length + 16)
+                    throw new InvalidDataException("Completed PendingApply storage key is malformed.");
+                yield return new KeyValuePair<Guid, CompletedPendingApplyValue>(
+                    new Guid(row.Key.AsSpan(prefix.Length)), DecodeCompleted(row.Value));
             }
             if (page.Count < pageSize) yield break;
         }
@@ -8261,6 +8378,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         // The durable B+ tree is authoritative; this facade never shadows unbounded keys.
         public void Add(TKey key, TValue value) { }
         public bool Remove(TKey key) => false;
+        public void Clear() { }
         public TValue this[TKey key]
         {
             get => TryGetValue(key, out TValue value) ? value : throw new KeyNotFoundException();
@@ -8440,11 +8558,11 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
 
     private sealed class PartitionState
     {
-        public Dictionary<ReceiptKey, ReceiptValue> Receipts { get; } = new();
+        public DiskMap<ReceiptKey, ReceiptValue> Receipts { get; }
         public DiskMap<ReceiveKey, ReceiveState> Receives { get; }
         public DiskMap<ReceiveChainKey, ReceiveChainState> ReceiveChains { get; }
         public DiskMap<LegacyReceiveChainKey, ReceiveChainState> LegacyReceiveChains { get; }
-        public Dictionary<LedgerKey, ChangeLedgerValue> ChangeLedger { get; } = new();
+        public DiskMap<LedgerKey, ChangeLedgerValue> ChangeLedger { get; }
         public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
         // Rebuildable in-memory index only; ChangeId→sequence is never duplicated on disk.
         public Dictionary<RelayKey, ulong> RelayAck { get; } = new();
@@ -8460,7 +8578,10 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             RetiredPeerEpochMap retiredPeerEpochs,
             DiskMap<ReceiveKey, ReceiveState> receives,
             DiskMap<ReceiveChainKey, ReceiveChainState> receiveChains,
-            DiskMap<LegacyReceiveChainKey, ReceiveChainState> legacyReceiveChains)
+            DiskMap<LegacyReceiveChainKey, ReceiveChainState> legacyReceiveChains,
+            DiskMap<ReceiptKey, ReceiptValue> receipts,
+            DiskMap<LedgerKey, ChangeLedgerValue> changeLedger,
+            DiskMap<Guid, CompletedPendingApplyValue> completedPendingApplies)
         {
             PendingApplies = pendingApplies ?? throw new ArgumentNullException(nameof(pendingApplies));
             PeerStreams = peerStreams ?? throw new ArgumentNullException(nameof(peerStreams));
@@ -8470,8 +8591,11 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             Receives = receives ?? throw new ArgumentNullException(nameof(receives));
             ReceiveChains = receiveChains ?? throw new ArgumentNullException(nameof(receiveChains));
             LegacyReceiveChains = legacyReceiveChains ?? throw new ArgumentNullException(nameof(legacyReceiveChains));
+            Receipts = receipts ?? throw new ArgumentNullException(nameof(receipts));
+            ChangeLedger = changeLedger ?? throw new ArgumentNullException(nameof(changeLedger));
+            CompletedPendingApplies = completedPendingApplies ?? throw new ArgumentNullException(nameof(completedPendingApplies));
         }
-        public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
+        public DiskMap<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; }
         public PeerStreamMap PeerStreams { get; }
         public DiskKeySet<PeerStreamKey> RequiredPeerStreams { get; }
         public DiskKeySet<InterestedPeerKey> InterestedPeers { get; }
@@ -8490,7 +8614,9 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             var clone = new PartitionState(PendingApplyMap.Empty, PeerStreamMap.Empty,
                 DiskKeySet<PeerStreamKey>.Empty, DiskKeySet<InterestedPeerKey>.Empty, RetiredPeerEpochMap.Empty,
                 DiskMap<ReceiveKey, ReceiveState>.Empty, DiskMap<ReceiveChainKey, ReceiveChainState>.Empty,
-                DiskMap<LegacyReceiveChainKey, ReceiveChainState>.Empty);
+                DiskMap<LegacyReceiveChainKey, ReceiveChainState>.Empty,
+                DiskMap<ReceiptKey, ReceiptValue>.Empty, DiskMap<LedgerKey, ChangeLedgerValue>.Empty,
+                DiskMap<Guid, CompletedPendingApplyValue>.Empty);
             foreach (var pair in RelayAck) clone.RelayAck.Add(pair.Key, pair.Value);
             foreach (var pair in RelayHighWatermarks) clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
             foreach (var pair in OutboundAck) clone.OutboundAck.Add(pair.Key, pair.Value);
