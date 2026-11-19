@@ -1507,11 +1507,11 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Equal(256, first.Items.Count);
             Assert.Equal(Change(1001), first.Items[0].ChangeId);
             Assert.Equal(Change(1256), first.Items[^1].ChangeId);
-            var second = reopened.ReadRelay(scope, local, namespaceId, author, first.ScannedThrough, operationCount);
+            var second = reopened.ReadRelay(scope, local, namespaceId, author, first.ScannedThroughSequence, operationCount);
             Assert.Equal(256, second.Items.Count);
-            var third = reopened.ReadRelay(scope, local, namespaceId, author, second.ScannedThrough, operationCount);
+            var third = reopened.ReadRelay(scope, local, namespaceId, author, second.ScannedThroughSequence, operationCount);
             Assert.Equal(88, third.Items.Count);
-            Assert.Equal((ulong)operationCount, third.ScannedThrough);
+            Assert.Equal((ulong)operationCount, third.ScannedThroughSequence);
             Assert.Equal(0, reopened.CachedRelayHeaderCount);
         }
         finally
@@ -1581,7 +1581,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         var page = store.ReadRelayForPeer(scope, local, downstream, 2, 7, author, 10);
         var item = Assert.Single(page.Items);
         Assert.Equal(1UL, item.Sequence);
-        Assert.Equal(1UL, page.ScannedThrough);
+        Assert.Equal(1UL, page.ScannedThroughSequence);
         Assert.Equal(author, item.OriginalAuthor);
         Assert.Equal(Batch(102), item.ChangeId);
         Assert.Equal(envelope, item.Payload);
