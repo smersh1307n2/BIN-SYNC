@@ -85,7 +85,7 @@ jobs:
             -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
             -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
-            --filter "FullyQualifiedName~FldBinSyncRuntimeHostTests|FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~FldBinSyncGcHostOperationsTests" \
+            --filter "FullyQualifiedName~FldBinSyncRuntimeHostTests|FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~FldBinSyncGcHostOperationsTests|FullyQualifiedName~FldFullReplaceBootstrapTests" \
             --logger "console;verbosity=normal" \
             --logger "trx;LogFileName=stage0-host-policy.trx" \
             --results-directory "$RUNNER_TEMP/gc-final-readiness/stage0" \
