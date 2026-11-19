@@ -113,15 +113,7 @@ public sealed class FldBinSyncRuntimeHostTests
 
             using HttpResponseMessage shutdown = await client.PostAsJsonAsync(
                 "/admin/shutdown", new { reason = "finish idle Tombstone admission-window integration" });
-            if (shutdown.StatusCode != HttpStatusCode.OK)
-            {
-                string shutdownBody = await shutdown.Content.ReadAsStringAsync();
-                string health = await client.GetStringAsync("/health/ready");
-                string peers = await client.GetStringAsync("/operator/peers");
-                Assert.True(false,
-                    $"Host shutdown returned {(int)shutdown.StatusCode}: {shutdownBody}. " +
-                    $"health={health}; peers={peers}");
-            }
+            Assert.Equal(HttpStatusCode.OK, shutdown.StatusCode);
             await runtimeHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
             Assert.Equal(0, runtimeHost.ExitCode);
             runtimeHost.Dispose();
@@ -280,7 +272,15 @@ public sealed class FldBinSyncRuntimeHostTests
 
             using HttpResponseMessage shutdown = await client.PostAsJsonAsync(
                 "/admin/shutdown", new { reason = "finish GC/live-peer pause-resume integration" });
-            Assert.Equal(HttpStatusCode.OK, shutdown.StatusCode);
+            if (shutdown.StatusCode != HttpStatusCode.OK)
+            {
+                string shutdownBody = await shutdown.Content.ReadAsStringAsync();
+                string health = await client.GetStringAsync("/health/ready");
+                string peers = await client.GetStringAsync("/operator/peers");
+                Assert.True(false,
+                    $"Host shutdown returned {(int)shutdown.StatusCode}: {shutdownBody}. " +
+                    $"health={health}; peers={peers}");
+            }
             await runtimeHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
             string stdout = await runtimeStdout;
             string stderr = await runtimeStderr;
