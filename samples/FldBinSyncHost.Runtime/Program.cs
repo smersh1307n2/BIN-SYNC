@@ -247,6 +247,19 @@ try
         }
     });
 
+    app.MapPost("/admin/test/hold-idle-maintenance-window", async (
+        int durationMs,
+        CancellationToken cancellationToken) =>
+    {
+        if (durationMs is < 100 or > 5000)
+            return Results.BadRequest(new { error = "durationMs must be between 100 and 5000." });
+        using IDisposable? window = peerRuntime.TryAcquireIdleMaintenanceWindow();
+        if (window is null)
+            return Results.Conflict(new { error = "An active peer prevents an idle maintenance window." });
+        await Task.Delay(TimeSpan.FromMilliseconds(durationMs), cancellationToken);
+        return Results.Ok(new { idleMaintenanceWindowReleased = true });
+    });
+
     app.MapPost("/admin/test/local-change", async (
         LocalChangeRequest request,
         CancellationToken cancellationToken) =>
