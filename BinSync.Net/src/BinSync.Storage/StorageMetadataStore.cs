@@ -912,7 +912,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     continue;
                 if (!IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
-                if (pendingApplyChangeIds.Contains(pair.Key.ChangeId) ||
+                if (liveChangeIds.Contains(pair.Key.ChangeId) ||
                     streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
                     continue;
@@ -1019,7 +1019,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ChangeLedgerValue ledgerValue = pair.Value;
                 OperationOrigin origin = ledgerValue.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
-                    liveChangeIds.Contains(pair.Key.ChangeId) ||
+                    pendingApplyChangeIds.Contains(pair.Key.ChangeId) ||
                     streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
