@@ -1718,6 +1718,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         out HashSet<RecordId> liveRecordReferences)
     {
         liveRecordReferences = new HashSet<RecordId>();
+        HashSet<RecordId> collectedReferences = liveRecordReferences;
         lock (_gate)
         {
             ThrowIfDisposed();
@@ -1770,7 +1771,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 {
                     _ = DecodePayloadHeader(encodedPayload);
                     return TryAddLiveRecordReference(
-                        liveRecordReferences, encodedPayload.Slice(20).ToArray());
+                        collectedReferences, encodedPayload.Slice(20).ToArray());
                 }))
             {
                 liveRecordReferences.Clear();
