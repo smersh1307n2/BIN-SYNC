@@ -6040,39 +6040,26 @@ private bool ValidateIncomingBatchForStaging(
                     break;
                 }
                 case 5:
-                {
                     RequireLength(key, 18);
                     RequireLength(row.Value, 16);
-                    var streamKey = new RelayKey(
-                        BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        NodeId.From(key.Slice(2, 16)));
-                    state.RelayAck.Add(streamKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
-                    state.RelayHighWatermarks.Add(streamKey,
-                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)));
+                    _ = new RelayKey(BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16)));
+                    _ = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                    _ = BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8));
                     break;
-                }
                 case 8:
-                {
                     RequireLength(key, 18);
                     RequireLength(row.Value, 16);
-                    var outboundKey = new OutboundKey(
-                        BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        NodeId.From(key.Slice(2, 16)));
-                    state.OutboundAck.Add(outboundKey, BinaryPrimitives.ReadUInt64LittleEndian(row.Value));
-                    state.OutboundHighWatermarks.Add(outboundKey,
-                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)));
+                    _ = new OutboundKey(BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16)));
+                    _ = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                    _ = BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8));
                     break;
-                }
                 case 10:
-                {
                     RequireLength(key, 18);
                     RequireLength(row.Value, 24);
-                    var outboundKey = new OutboundKey(BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16)));
-                    state.OutboundLeases.Add(outboundKey, new LeaseState(
-                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
-                        new Guid(row.Value.AsSpan(8, 16))));
+                    _ = new OutboundKey(BinaryPrimitives.ReadUInt16LittleEndian(key), NodeId.From(key.Slice(2, 16)));
+                    _ = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                    _ = new Guid(row.Value.AsSpan(8, 16));
                     break;
-                }
                 case 18:
                     // Retired-peer fences are point-read durable state, not partition cache.
                     RequireLength(key, 18);
@@ -6081,15 +6068,11 @@ private bool ValidateIncomingBatchForStaging(
                         throw new InvalidDataException("Stored retired-peer epoch fence is invalid.");
                     break;
                 case 19:
-                {
                     RequireLength(key, 22);
                     RequireLength(row.Value, 0);
-                    state.CompletedPeerBaselines.Add(new InterestedPeerKey(
-                        BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        NodeId.From(key.Slice(2, 16)),
-                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18))));
+                    _ = new InterestedPeerKey(BinaryPrimitives.ReadUInt16LittleEndian(key),
+                        NodeId.From(key.Slice(2, 16)), BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18)));
                     break;
-                }
                 case 22:
                 {
                     RequireLength(key, 22);
@@ -6100,10 +6083,10 @@ private bool ValidateIncomingBatchForStaging(
                         BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(18)));
                     if (originKey.Author.IsZero || originKey.AuthorEpoch == 0)
                         throw new InvalidDataException("Stored origin-sequence allocator identity is invalid.");
-                    state.OriginHighWatermarks.Add(originKey, new OriginIssuedState(
+                    _ = new OriginIssuedState(
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
                         BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)),
-                        BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(16))));
+                        BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(16)));
                     break;
                 }
                 case 17:
