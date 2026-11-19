@@ -2838,8 +2838,14 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             using (var storage = StorageDatabase.Open(directory, 471))
             using (var store = new StorageMetadataStore(storage))
             {
-                // A retry across a large history resolves existing ChangeIds through
-                // the disk-primary ledger instead of scanning prior outbound headers.
+                // Dense retries validate indexed payloads with one bounded stream
+                // cursor instead of one payload point-read per ChangeId.
+                var denseRetry = store.FreezeOutbound(scope, local, namespaceId, local, history);
+                Assert.Equal(Enumerable.Range(1, 1024).Select(value => (ulong)value),
+                    denseRetry.Select(item => item.Sequence));
+                Assert.Equal(history[511].Payload, denseRetry[511].Payload);
+
+                // Sparse retries still use exact indexed point reads.
                 var retry = store.FreezeOutbound(scope, local, namespaceId, local,
                     new[] { history[0], history[^1], appended });
                 Assert.Equal(new ulong[] { 1, 1024, 1025 },
@@ -2879,6 +2885,33 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(53, ledger.Value.Length);
                 Assert.Equal(1024UL,
                     BinaryPrimitives.ReadUInt64LittleEndian(ledger.Value.AsSpan(45, 8)));
+
+                // The dense cursor path must still fail closed if an indexed payload
+                // row is corrupted after the immutable ledger identity was committed.
+                byte[] payloadKey = new byte[root.Length + 1 + 26];
+                root.CopyTo(payloadKey, 0);
+                payloadKey[root.Length] = 21;
+                BinaryPrimitives.WriteUInt16LittleEndian(
+                    payloadKey.AsSpan(root.Length + 1), checked((ushort)namespaceId));
+                local.WriteTo(payloadKey.AsSpan(root.Length + 3, 16));
+                BinaryPrimitives.WriteUInt64BigEndian(
+                    payloadKey.AsSpan(root.Length + 19, 8), 512);
+                byte[] corruptedPayload;
+                using (StorageSnapshot payloadSnapshot = storage.OpenSnapshot())
+                {
+                    if (!payloadSnapshot.TryGet(payloadKey, out byte[]? storedPayload) ||
+                        storedPayload is null)
+                        throw new InvalidDataException("Test outbound payload row is missing.");
+                    corruptedPayload = storedPayload;
+                }
+                corruptedPayload[20] ^= 0x01;
+                using (var batch = storage.BeginWriteBatch())
+                {
+                    batch.Put(payloadKey, corruptedPayload);
+                    batch.Commit();
+                }
+                Assert.Throws<InvalidDataException>(() =>
+                    store.FreezeOutbound(scope, local, namespaceId, local, history));
             }
         }
         finally

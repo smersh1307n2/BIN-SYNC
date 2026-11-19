@@ -2857,6 +2857,7 @@ private bool ValidateIncomingBatchForStaging(
                 "Outbound publication is fenced while an incoming relay apply for the same author stream is unresolved.");
         var existingByChangeId = new Dictionary<BatchId, MetadataOutboundItem>();
         var newOperations = new List<MetadataFrozenOperation>(operations.Count);
+        var indexedRetryPayloads = new List<(ulong Sequence, MetadataFrozenOperation Operation)>(operations.Count);
         using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
         bool sawNewOperation = false;
         ulong previousExistingSequence = 0;
@@ -2893,14 +2894,14 @@ private bool ValidateIncomingBatchForStaging(
                 // The durable ChangeId ledger is also the outbound identity index.
                 // Replays use a point lookup, independent of the historical stream length.
                 ulong sequence = frozenLedger.StreamSequence;
-                byte[] priorPayload = LoadStreamPayloadBody(
-                    payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, sequence, operation.ChangeId);
-                if (!priorPayload.AsSpan().SequenceEqual(operation.Payload))
-                    throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
-                prior = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, priorPayload)
+                // Validate dense retry payloads through one bounded stream cursor below.
+                // Reuse caller bytes until the public result is cloned; avoid one random
+                // Storage point-read and payload-body allocation per indexed ChangeId.
+                prior = new MetadataOutboundItem(sequence, localAuthor, operation.ChangeId, operation.Payload)
                 {
                     Provenance = frozenLedger.Provenance
                 };
+                indexedRetryPayloads.Add((sequence, operation));
             }
             else
             {
@@ -2925,6 +2926,9 @@ private bool ValidateIncomingBatchForStaging(
             previousExistingSequence = prior.Sequence;
             existingByChangeId.Add(operation.ChangeId, prior);
         }
+
+        ValidateIndexedOutboundRetryPayloads(
+            payloadSnapshot, partitionRoot, namespaceId, localAuthor, indexedRetryPayloads);
 
         // Each ChangeId is an independent immutable operation. A replay may contain
         // already-frozen feed entries plus newer entries appended before the provider
@@ -6896,6 +6900,90 @@ private bool ValidateIncomingBatchForStaging(
         if (expectedChangeId is BatchId expected && storedChangeId != expected)
             throw new InvalidDataException("Outbound ChangeId sequence index points to a different stream payload row.");
         return value.AsSpan(20).ToArray();
+    }
+
+    private void ValidateIndexedOutboundRetryPayloads(
+        StorageSnapshot snapshot,
+        byte[] partitionRoot,
+        int namespaceId,
+        NodeId author,
+        IReadOnlyList<(ulong Sequence, MetadataFrozenOperation Operation)> expected)
+    {
+        if (expected.Count == 0)
+            return;
+
+        ulong firstSequence = expected[0].Sequence;
+        ulong lastSequence = expected[^1].Sequence;
+        ulong sequenceSpan = checked(lastSequence - firstSequence + 1);
+
+        // Sparse retries are cheaper as exact point reads. Dense retries (the normal
+        // post-freeze/provider-ACK retry) are validated with one forward-only B+ tree
+        // cursor, avoiding one random Storage lookup and payload copy per operation.
+        if (expected.Count < 8 || sequenceSpan > (ulong)expected.Count * 2)
+        {
+            foreach ((ulong sequence, MetadataFrozenOperation operation) in expected)
+            {
+                byte[] payload = LoadStreamPayloadBody(
+                    snapshot, partitionRoot, 21, namespaceId, author, sequence, operation.ChangeId);
+                if (!payload.AsSpan().SequenceEqual(operation.Payload))
+                    throw new InvalidDataException(
+                        "Outbound ChangeId was retried with conflicting author or payload.");
+            }
+            return;
+        }
+
+        byte[] prefix = StorageKey(partitionRoot, 21, KeyNamespaceAuthor(namespaceId, author));
+        byte[] afterKey = firstSequence == 1
+            ? Array.Empty<byte>()
+            : StreamPayloadStorageKey(
+                partitionRoot, 21, namespaceId, author, firstSequence - 1);
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix, afterKey);
+
+        int expectedIndex = 0;
+        ulong previousSequence = firstSequence - 1;
+        while (expectedIndex < expected.Count &&
+            cursor.TryReadNext(out StorageEntryView row))
+        {
+            ReadOnlySpan<byte> rowKey = row.Key;
+            ReadOnlySpan<byte> rowValue = row.Value;
+            if (rowKey.Length != partitionRoot.Length + 1 + 26 ||
+                !rowKey.StartsWith(prefix))
+                throw new InvalidDataException(
+                    "Outbound retry cursor returned a row outside its stream prefix.");
+
+            ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(
+                rowKey.Slice(partitionRoot.Length + 1 + 18, 8));
+            if (sequence <= previousSequence)
+                throw new InvalidDataException(
+                    "Outbound retry cursor returned non-monotonic sequences.");
+            previousSequence = sequence;
+
+            if (sequence > lastSequence)
+                break;
+
+            (ulong expectedSequence, MetadataFrozenOperation operation) = expected[expectedIndex];
+            if (sequence < expectedSequence)
+                continue;
+            if (sequence > expectedSequence)
+                throw new InvalidDataException(
+                    "Persisted outbound payload row is missing for a frozen ChangeId.");
+
+            if (rowValue.Length < 20 || rowValue.Length > MaxStreamPayloadBytes + 20)
+                throw new InvalidDataException("Stored outbound payload has an invalid length.");
+            BatchId storedChangeId = DecodePayloadHeader(rowValue);
+            if (storedChangeId != operation.ChangeId)
+                throw new InvalidDataException(
+                    "Outbound ChangeId sequence index points to a different stream payload row.");
+            if (!rowValue.Slice(20).SequenceEqual(operation.Payload))
+                throw new InvalidDataException(
+                    "Outbound ChangeId was retried with conflicting author or payload.");
+
+            expectedIndex++;
+        }
+
+        if (expectedIndex != expected.Count)
+            throw new InvalidDataException(
+                "Persisted outbound payload row is missing for a frozen ChangeId.");
     }
 
     private byte[] ResolveStreamPayload(

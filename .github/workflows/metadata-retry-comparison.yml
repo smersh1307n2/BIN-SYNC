@@ -17,11 +17,11 @@ permissions:
 
 jobs:
   compare-retry-paths:
-    name: Disk-primary baseline vs indexed outbound retry
+    name: Disk-primary baseline vs batched outbound retry
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      BASELINE_SHA: a871750f283f2bd378284ad0c42b551248931cd3
+      BASELINE_SHA: 11e9ad870ddc28a936fbc93788d99549bd2a1013
     steps:
       - name: Checkout current branch with history
         uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
       - name: Create baseline worktree
         run: git worktree add --detach "$RUNNER_TEMP/baseline" "$BASELINE_SHA"
 
-      - name: Run disk-primary pre-index baseline
+      - name: Run disk-primary pre-batched retry baseline
         run: |
           set -euo pipefail
           git -C "$RUNNER_TEMP/baseline" submodule update --init --recursive
@@ -50,7 +50,7 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/comparison-results/baseline"
           cp -a BenchmarkDotNet.Artifacts/. "$GITHUB_WORKSPACE/comparison-results/baseline/"
 
-      - name: Run incremental implementation
+      - name: Run batched retry implementation
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -87,7 +87,7 @@ jobs:
               factor = {"B": 1/1024, "KB": 1.0, "MB": 1024.0}[match.group(2)]
               return float(match.group(1)) * factor
           print("## Same-runner coordinator retry comparison")
-          print("Baseline: disk-primary StorageMetadataStore before outbound sequence index at " + __import__("os").environ["BASELINE_SHA"])
+          print("Baseline: disk-primary StorageMetadataStore before batched retry validation at " + __import__("os").environ["BASELINE_SHA"])
           print("Both versions ran sequentially on this workflow job with the same Ubuntu runner and .NET 10 SDK.")
           print("| Feed rows | Baseline ms | Incremental ms | Latency reduction | Baseline KB | Incremental KB | Allocation reduction |")
           print("|---:|---:|---:|---:|---:|---:|---:|")
