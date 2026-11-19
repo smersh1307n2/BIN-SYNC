@@ -179,14 +179,16 @@ jobs:
             -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
           )
           run_host() {
-            local name="$1" filter="$2" output="$results/cycle-$cycle-$name"
+            local name="$1" filter="$2"
+            local output="$results/cycle-$cycle-$name"
             mkdir -p "$output"
             dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore "${common[@]}" \
               --filter "$filter" --logger "console;verbosity=normal" --logger "trx;LogFileName=$name.trx" \
               --results-directory "$output" --blame-hang-timeout 10m --blame-hang-dump-type mini 2>&1 | tee "$output/$name.log"
           }
           run_fld() {
-            local name="$1" project="$2" filter="$3" output="$results/cycle-$cycle-$name"
+            local name="$1" project="$2" filter="$3"
+            local output="$results/cycle-$cycle-$name"
             mkdir -p "$output"
             dotnet test "$project" --configuration Release --filter "$filter" \
               --logger "console;verbosity=normal" --logger "trx;LogFileName=$name.trx" \
