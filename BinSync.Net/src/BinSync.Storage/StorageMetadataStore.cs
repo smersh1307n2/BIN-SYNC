@@ -1743,7 +1743,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 (key, sequence, encodedPayload) =>
                 {
                     _ = DecodePayloadHeader(encodedPayload);
-                    return TryAddLiveRecordReference(liveRecordReferences, encodedPayload.Slice(20).ToArray());
+                    return TryAddLiveRecordReference(collectedReferences, encodedPayload.Slice(20).ToArray());
                 }))
             {
                 liveRecordReferences.Clear();
