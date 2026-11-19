@@ -2488,6 +2488,88 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
 
     [Fact]
+    public void Large_outbound_history_uses_disk_sequence_index_for_retry_and_cursor_pages()
+    {
+        string directory = Path.Combine(_root, "outbound-disk-sequence-index");
+        Directory.CreateDirectory(directory);
+        const string scope = "outbound-disk-sequence-index";
+        const int namespaceId = 7;
+        NodeId local = Node(1);
+
+        MetadataFrozenOperation CreateOperation(int value)
+        {
+            byte[] identity = new byte[16];
+            BinaryPrimitives.WriteInt32LittleEndian(identity, value);
+            identity[15] = 0x5A;
+            return new MetadataFrozenOperation
+            {
+                ChangeId = BatchId.From(identity),
+                Fingerprint = SHA256.HashData(identity).AsSpan(0, 16).ToArray(),
+                Payload = BitConverter.GetBytes(value),
+                OriginAuthorEpoch = 9
+            };
+        }
+
+        MetadataFrozenOperation[] history = Enumerable.Range(1, 1024)
+            .Select(CreateOperation).ToArray();
+        MetadataFrozenOperation appended = CreateOperation(1025);
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 471))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                Assert.Equal(1024, store.FreezeOutbound(
+                    scope, local, namespaceId, local, history).Count);
+                ulong lease = store.AcquireOutboundLease(
+                    scope, local, namespaceId, local, Guid.NewGuid());
+                var page = store.ReadOutbound(
+                    scope, local, namespaceId, local, lease, 1023, 2);
+                Assert.Equal(new ulong[] { 1024 }, page.Items.Select(item => item.Sequence));
+            }
+
+            using (var storage = StorageDatabase.Open(directory, 471))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                // A retry across a large history resolves existing ChangeIds through
+                // the disk-primary ledger instead of scanning prior outbound headers.
+                var retry = store.FreezeOutbound(scope, local, namespaceId, local,
+                    new[] { history[0], history[^1], appended });
+                Assert.Equal(new ulong[] { 1, 1024, 1025 },
+                    retry.Select(item => item.Sequence));
+
+                ulong lease = store.AcquireOutboundLease(
+                    scope, local, namespaceId, local, Guid.NewGuid());
+                var page = store.ReadOutbound(
+                    scope, local, namespaceId, local, lease, 1023, 2);
+                Assert.Equal(new ulong[] { 1024, 1025 },
+                    page.Items.Select(item => item.Sequence));
+                Assert.Equal(history[^1].Payload, page.Items[0].Payload);
+                Assert.Equal(appended.Payload, page.Items[1].Payload);
+
+                byte[] root = new byte[49];
+                root[0] = 0x70;
+                SHA256.HashData(Encoding.UTF8.GetBytes(scope)).CopyTo(root, 1);
+                local.WriteTo(root.AsSpan(33));
+                using StorageSnapshot snapshot = storage.OpenSnapshot();
+                var rows = snapshot.ScanPrefix(root, ReadOnlySpan<byte>.Empty, 4096);
+                StorageEntry ledger = Assert.Single(rows, row =>
+                    row.Key.Length == root.Length + 1 + 18 &&
+                    row.Key[root.Length] == 3 &&
+                    BinaryPrimitives.ReadUInt16LittleEndian(row.Key.AsSpan(root.Length + 1)) == namespaceId &&
+                    row.Key.AsSpan(root.Length + 3, 16).SequenceEqual(history[^1].ChangeId.ToArray()));
+                Assert.Equal(53, ledger.Value.Length);
+                Assert.Equal(1024UL,
+                    BinaryPrimitives.ReadUInt64LittleEndian(ledger.Value.AsSpan(45, 8)));
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Stale_epoch_can_finish_only_its_exact_durable_reservation_before_retirement()
     {
         using var store = new StorageMetadataStore(Path.Combine(_root, "stale-peer-exact-ack"), 451);
