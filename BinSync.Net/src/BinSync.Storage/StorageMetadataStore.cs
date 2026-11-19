@@ -1546,19 +1546,24 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             }
 
             Report("peer-reservation-check");
-            long payloadCount = 0;
+            // Monotonic stream high-watermarks upper-bound retained row counts. Use
+            // them to size the bounded filter without a separate payload-history scan.
+            long expectedItems = 0;
             foreach (PendingApplyValue pending in state.PendingApplies.Values)
                 if (pending.Batch.NamespaceId == namespaceId)
-                    payloadCount = checked(payloadCount + pending.Batch.Operations.Count);
-            payloadCount = checked(payloadCount + CountRelayRows(
-                new PartitionKey(scopeId, localReplica), state, namespaceId));
-            payloadCount = checked(payloadCount + CountOutboundRows(
-                new PartitionKey(scopeId, localReplica), state, namespaceId));
+                    expectedItems = AddLiveRecordReferenceExpectedItems(
+                        expectedItems, (ulong)pending.Batch.Operations.Count);
+            foreach (var pair in state.RelayHighWatermarks)
+                if (pair.Key.NamespaceId == namespaceId)
+                    expectedItems = AddLiveRecordReferenceExpectedItems(expectedItems, pair.Value);
+            foreach (var pair in state.OutboundHighWatermarks)
+                if (pair.Key.NamespaceId == namespaceId)
+                    expectedItems = AddLiveRecordReferenceExpectedItems(expectedItems, pair.Value);
 
-            Report("payload-count");
-            var builtFilter = new LiveRecordReferenceFilter(payloadCount);
+            Report("payload-count-estimate");
+            var builtFilter = new LiveRecordReferenceFilter(expectedItems);
             filter = builtFilter;
-            bool AddPayload(byte[] payload)
+            bool AddPayload(ReadOnlySpan<byte> payload)
             {
                 try
                 {
@@ -1585,7 +1590,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 (key, sequence, encodedPayload) =>
                 {
                     _ = DecodePayloadHeader(encodedPayload);
-                    return AddPayload(encodedPayload.Slice(20).ToArray());
+                    return AddPayload(encodedPayload.Slice(20));
                 }))
                 return false;
             if (!VisitOutboundStorageRows(payloadSnapshot, partitionRoot, state, namespaceId,
@@ -1648,7 +1653,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!pageMayContainReference)
                 return true;
 
-            bool ScanPayload(byte[] payload)
+            bool ScanPayload(ReadOnlySpan<byte> payload)
             {
                 try
                 {
@@ -1677,7 +1682,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 (key, sequence, encodedPayload) =>
                 {
                     _ = DecodePayloadHeader(encodedPayload);
-                    return ScanPayload(encodedPayload.Slice(20).ToArray());
+                    return ScanPayload(encodedPayload.Slice(20));
                 }))
                 return false;
             if (!VisitOutboundStorageRows(payloadSnapshot, partitionRoot, state, namespaceId,
@@ -1758,7 +1763,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 (key, sequence, encodedPayload) =>
                 {
                     _ = DecodePayloadHeader(encodedPayload);
-                    foundRelayReference = PayloadReferencesRecord(encodedPayload.Slice(20).ToArray(), recordId);
+                    foundRelayReference = PayloadReferencesRecord(encodedPayload.Slice(20), recordId);
                     return !foundRelayReference;
                 });
             if (foundRelayReference) return true;
@@ -1768,7 +1773,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 {
                     _ = DecodePayloadHeader(encodedPayload);
                     foundOutboundReference = PayloadReferencesRecord(
-                        encodedPayload.Slice(20).ToArray(), recordId);
+                        encodedPayload.Slice(20), recordId);
                     return !foundOutboundReference;
                 });
             return foundOutboundReference;
@@ -1822,7 +1827,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 (key, sequence, encodedPayload) =>
                 {
                     _ = DecodePayloadHeader(encodedPayload);
-                    return TryAddLiveRecordReference(collectedReferences, encodedPayload.Slice(20).ToArray());
+                    return TryAddLiveRecordReference(collectedReferences, encodedPayload.Slice(20));
                 }))
             {
                 liveRecordReferences.Clear();
@@ -1834,7 +1839,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 {
                     _ = DecodePayloadHeader(encodedPayload);
                     return TryAddLiveRecordReference(
-                        collectedReferences, encodedPayload.Slice(20).ToArray());
+                        collectedReferences, encodedPayload.Slice(20));
                 }))
             {
                 liveRecordReferences.Clear();
@@ -1846,11 +1851,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     private static bool TryAddLiveRecordReference(
-        HashSet<RecordId> liveRecordReferences, byte[] payload)
+        HashSet<RecordId> liveRecordReferences, ReadOnlySpan<byte> payload)
     {
         try
         {
-            liveRecordReferences.Add(ProviderMutationCodec.Decode(payload).RecordId);
+            liveRecordReferences.Add(ProviderMutationCodec.DecodeRecordId(payload));
             return true;
         }
         catch (Exception exception) when (exception is InvalidDataException or
@@ -1861,11 +1866,20 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
-    private static bool PayloadReferencesRecord(byte[] payload, RecordId recordId)
+    private static long AddLiveRecordReferenceExpectedItems(long current, ulong count)
+    {
+        const long maximumItems = (16L * 1024 * 1024 * 8) / 32;
+        if (current >= maximumItems)
+            return maximumItems;
+        ulong remaining = (ulong)(maximumItems - current);
+        return count >= remaining ? maximumItems : current + (long)count;
+    }
+
+    private static bool PayloadReferencesRecord(ReadOnlySpan<byte> payload, RecordId recordId)
     {
         try
         {
-            return ProviderMutationCodec.Decode(payload).RecordId == recordId;
+            return ProviderMutationCodec.DecodeRecordId(payload) == recordId;
         }
         catch (Exception exception) when (exception is InvalidDataException or
             ArgumentException or EndOfStreamException or IndexOutOfRangeException)
