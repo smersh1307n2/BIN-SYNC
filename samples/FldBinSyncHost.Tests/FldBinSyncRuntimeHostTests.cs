@@ -189,18 +189,18 @@ public sealed class FldBinSyncRuntimeHostTests
             FldDatabaseIpcGcReferenceScan scan = await gcClient.OpenGcReferenceScanAsync();
             Assert.NotEqual(Guid.Empty, scan.Token);
 
+            var blockedMutation = new
+            {
+                recordIdHex = Convert.ToHexString(recordId),
+                fieldId = (ushort)0x1775,
+                changeIdHex = Convert.ToHexString(changeId),
+                valueBase64 = Convert.ToBase64String("write-during-live-peer-gc"u8.ToArray()),
+                keyEpoch = (ushort)0,
+                hlcWall = 987_654_321UL,
+                hlcLogical = 1U
+            };
             Task<HttpResponseMessage> blockedWrite = client.PostAsJsonAsync(
-                "/admin/test/local-change",
-                new
-                {
-                    recordIdHex = Convert.ToHexString(recordId),
-                    fieldId = (ushort)0x1775,
-                    changeIdHex = Convert.ToHexString(changeId),
-                    valueBase64 = Convert.ToBase64String("write-during-live-peer-gc"u8.ToArray()),
-                    keyEpoch = (ushort)0,
-                    hlcWall = 987_654_321UL,
-                    hlcLogical = 1U
-                });
+                "/admin/test/local-change", blockedMutation);
 
             await Task.Delay(TimeSpan.FromMilliseconds(350));
             Assert.False(blockedWrite.IsCompleted,
@@ -210,12 +210,26 @@ public sealed class FldBinSyncRuntimeHostTests
             await gcClient.ReleaseGcReferenceScanAsync(scan.Token);
             await gcClient.ReleaseGcLeaseAsync(lease);
 
-            using HttpResponseMessage resumedWrite =
+            HttpResponseMessage firstWriteResponse =
                 await blockedWrite.WaitAsync(TimeSpan.FromSeconds(8));
-            Assert.Equal(HttpStatusCode.OK, resumedWrite.StatusCode);
-            using JsonDocument receipt = JsonDocument.Parse(
-                await resumedWrite.Content.ReadAsStringAsync());
-            Assert.True(receipt.RootElement.GetProperty("receiptSequence").GetUInt64() > 0);
+            HttpResponseMessage resumedWrite = firstWriteResponse;
+            if (firstWriteResponse.StatusCode == HttpStatusCode.ServiceUnavailable)
+            {
+                // A scheduled bounded metadata slice may acquire the Host lease
+                // immediately after the explicit test lease. Retry the same
+                // ChangeId until that slice releases; the TCP peer stays connected.
+                firstWriteResponse.Dispose();
+                resumedWrite = await PostJsonWithRetry(
+                    client, "/admin/test/local-change", blockedMutation, TimeSpan.FromSeconds(8));
+            }
+            using (resumedWrite)
+            {
+                Assert.Equal(HttpStatusCode.OK, resumedWrite.StatusCode);
+                using JsonDocument receipt = JsonDocument.Parse(
+                    await resumedWrite.Content.ReadAsStringAsync());
+                Assert.True(receipt.RootElement.GetProperty("receiptSequence").GetUInt64() > 0);
+            }
+            
 
             // The same TCP session must still be live after the bounded GC pause;
             // a follow-up provider write must complete without reconnecting.
