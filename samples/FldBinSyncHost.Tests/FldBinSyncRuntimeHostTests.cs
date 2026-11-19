@@ -438,7 +438,7 @@ public sealed class FldBinSyncRuntimeHostTests
             {
                 using JsonDocument pending = JsonDocument.Parse(
                     await clientA.GetStringAsync("/admin/test/pending-outbound"));
-                if (pending.RootElement.GetProperty("pendingOutboundAuthors").GetInt32() == 0)
+                if (pending.RootElement.GetProperty("pendingOutboundBatches").GetInt32() == 0)
                 {
                     deliveryAcked = true;
                     break;
