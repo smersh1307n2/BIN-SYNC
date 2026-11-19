@@ -3195,7 +3195,7 @@ private bool ValidateIncomingBatchForStaging(
         byte[] partitionRoot = PartitionRoot(partitionKey);
         using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
         MetadataOutboundItem[] page = ReadOutboundStoragePage(
-            payloadSnapshot, partitionRoot, state, namespaceId, localAuthor, cursor, limit);
+            payloadSnapshot, partitionRoot, state, namespaceId, localAuthor, cursor, limit, out _);
         ulong scannedThrough = page.Length == 0 ? cursor : page[^1].Sequence;
         return new MetadataOutboundPage(page, scannedThrough);
     
@@ -3848,13 +3848,15 @@ private bool ValidateIncomingBatchForStaging(
             byte[] partitionRoot = PartitionRoot(partitionKey);
             using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
             MetadataOutboundItem[] page = ReadOutboundStoragePage(
-                payloadSnapshot, partitionRoot, state, namespaceId, authorStream, cursor, limit);
+                payloadSnapshot, partitionRoot, state, namespaceId, authorStream, cursor, limit,
+                out bool byteBudgetLimited);
             if (page.Length == 0)
                 throw new InvalidDataException("Outbound high-watermark has no recoverable payload rows.");
             if (progress.AckedCursor == 0 && progress.StreamOffset == 0 &&
                 page.Length > 0 && page[0].Sequence > 1)
                 throw new SyncException("SNAPSHOT_REQUIRED");
-            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, limit, "outbound");
+            int validationLimit = byteBudgetLimited ? page.Length : Math.Min(limit, MaxOutboundPageItems);
+            ValidatePeerPageContinuity(page.Select(item => item.Sequence), cursor, high, page.Length, validationLimit, "outbound");
             return new MetadataOutboundPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
         }
     }
@@ -6754,22 +6756,34 @@ private bool ValidateIncomingBatchForStaging(
         }
     }
 
+    private const int MaxOutboundPageItems = 256;
+    private const int MaxOutboundPageBytes = 1024 * 1024;
+
     private MetadataOutboundItem[] ReadOutboundStoragePage(
         StorageSnapshot snapshot, byte[] partitionRoot, PartitionState state,
-        int namespaceId, NodeId author, ulong afterSequence, int limit)
+        int namespaceId, NodeId author, ulong afterSequence, int limit, out bool byteBudgetLimited)
     {
+        byteBudgetLimited = false;
         if (limit <= 0) return Array.Empty<MetadataOutboundItem>();
+        int pageLimit = Math.Min(limit, MaxOutboundPageItems);
         byte[] prefix = StorageKey(partitionRoot, 21, KeyNamespaceAuthor(namespaceId, author));
         byte[] afterKey = afterSequence == 0
             ? Array.Empty<byte>()
             : StreamPayloadStorageKey(partitionRoot, 21, namespaceId, author, afterSequence);
         using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix, afterKey);
-        var page = new List<MetadataOutboundItem>(Math.Min(limit, 128));
+        var page = new List<MetadataOutboundItem>(Math.Min(pageLimit, 128));
+        int encodedPageBytes = 0;
         ulong previousSequence = afterSequence;
-        cursor.VisitPage(limit, (in StorageEntryView row) =>
+        cursor.VisitPage(pageLimit, (in StorageEntryView row) =>
         {
             ReadOnlySpan<byte> rowKey = row.Key;
             ReadOnlySpan<byte> rowValue = row.Value;
+            if (page.Count > 0 && rowValue.Length > MaxOutboundPageBytes - encodedPageBytes)
+            {
+                byteBudgetLimited = true;
+                return false;
+            }
+            encodedPageBytes = checked(encodedPageBytes + rowValue.Length);
             if (rowKey.Length != partitionRoot.Length + 1 + 26 ||
                 !rowKey.StartsWith(prefix))
                 throw new InvalidDataException("Outbound storage cursor returned a row outside its stream prefix.");
@@ -7387,7 +7401,7 @@ private bool ValidateIncomingBatchForStaging(
                 return new MetadataOutboundPage(Array.Empty<MetadataOutboundItem>(), cursor);
             MetadataOutboundItem[] page = _owner.ReadOutboundStoragePage(
                 GetStorageSnapshot(), PartitionRoot(_partitionKey), state,
-                namespaceId, localAuthor, cursor, limit);
+                namespaceId, localAuthor, cursor, limit, out _);
             return new MetadataOutboundPage(page, page.Length == 0 ? cursor : page[^1].Sequence);
         }
 
