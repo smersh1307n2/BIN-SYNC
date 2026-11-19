@@ -161,4 +161,55 @@ public sealed class FldBinSyncGcHostOperations
         CancellationToken cancellationToken = default)
         => _adapter.RunGcMaintenanceAsync(
             _gcStore, _trustStore, pageLimit, cancellationToken, changeIdPageLimit);
+
+    /// <summary>
+    /// Run exactly one independently bounded GC domain per scheduler tick.
+    /// Receipt and ChangeId pages may run while peers are connected. Tombstone
+    /// replacement remains an idle-window operation because its final FLD
+    /// checkpoint is an atomic namespace generation rewrite.
+    /// </summary>
+    public async Task<FldBinSyncAsyncGcPassResult> RunOneMaintenanceSliceAsync(
+        int pageLimit = 256,
+        int changeIdPageLimit = FldBinSyncAsyncHostAdapter.DefaultChangeIdGcPageLimit,
+        bool allowTombstone = true,
+        CancellationToken cancellationToken = default)
+    {
+        if (pageLimit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(pageLimit));
+        if (changeIdPageLimit is < 1 or > 4096)
+            throw new ArgumentOutOfRangeException(nameof(changeIdPageLimit));
+
+        FldBinSyncAsyncGcReadinessReport readiness =
+            await _adapter.GetGcReadinessAsync(_gcStore, _trustStore, cancellationToken)
+                .ConfigureAwait(false);
+        int start = (Interlocked.Increment(ref _nextMaintenanceSlice) - 1) % 3;
+        for (int offset = 0; offset < 3; offset++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            switch ((start + offset) % 3)
+            {
+                case 0 when readiness.Receipts.ReadyForAttempt:
+                {
+                    int reclaimed = await _adapter.RunReceiptGcPassAsync(
+                        _gcStore, _trustStore, pageLimit, cancellationToken).ConfigureAwait(false);
+                    return new FldBinSyncAsyncGcPassResult(readiness, reclaimed, 0, 0);
+                }
+                case 1 when readiness.ChangeIds.ReadyForAttempt:
+                {
+                    int reclaimed = await _adapter.RunChangeIdGcPassAsync(
+                        _gcStore, _trustStore, changeIdPageLimit, cancellationToken).ConfigureAwait(false);
+                    return new FldBinSyncAsyncGcPassResult(readiness, 0, reclaimed, 0);
+                }
+                case 2 when allowTombstone && readiness.Tombstones.ReadyForAttempt:
+                {
+                    int reclaimed = await _adapter.RunTombstoneGcPassAsync(
+                        _gcStore, _trustStore, pageLimit, cancellationToken).ConfigureAwait(false);
+                    return new FldBinSyncAsyncGcPassResult(readiness, 0, 0, reclaimed);
+                }
+            }
+        }
+
+        return new FldBinSyncAsyncGcPassResult(readiness, 0, 0, 0);
+    }
+
 }
