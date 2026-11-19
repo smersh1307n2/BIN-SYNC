@@ -97,7 +97,7 @@ public sealed class FldBinSyncRuntimeHostTests
             }
 
             Assert.NotNull(acceptedSession);
-            await using SyncSession liveSession = acceptedSession!;
+            SyncSession liveSession = acceptedSession!;
             await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(3));
 
             using HttpResponseMessage shutdown = await client.PostAsJsonAsync(
