@@ -1503,7 +1503,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         using var store = new StorageMetadataStore(Path.Combine(_root, "peer-relay-page"), 422);
         NodeId local = Node(1), upstream = Node(2), downstream = Node(4), author = Node(3);
         const string scope = "peer-relay-page";
-        byte[] envelope = new byte[21];
+        byte[] envelope = new byte[1024 * 1024 + 1];
         Node(9).WriteTo(envelope);
         envelope[16] = 1;
         envelope[17] = 2;
@@ -1534,6 +1534,16 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                     Fingerprint = Enumerable.Repeat((byte)103, 16).ToArray(),
                     Payload = envelope,
                     RelayEligible = true
+                },
+                new MetadataOperation
+                {
+                    AuthorNodeId = author,
+                    ChangeId = Batch(104),
+                    OriginAuthorEpoch = 1,
+                    OriginSequence = 103,
+                    Fingerprint = Enumerable.Repeat((byte)105, 16).ToArray(),
+                    Payload = new byte[] { 6, 7, 8 },
+                    RelayEligible = true
                 }
             }
         };
@@ -1542,9 +1552,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.False(receipt.IsDuplicate);
         Assert.Equal(new[] { author }, store.ReadRelayAuthors(scope, local, 7));
         store.RegisterInterestedPeerStream(scope, local, downstream, 2, 7, author,
-            0, 0, 1, new byte[16]);
+            0, 0, 2, new byte[16]);
         store.CompletePeerInitialSync(scope, local, downstream, 2, 7,
-            new[] { new MetadataPeerStreamBaseline(author, 0, 1) });
+            new[] { new MetadataPeerStreamBaseline(author, 0, 2) });
         var page = store.ReadRelayForPeer(scope, local, downstream, 2, 7, author, 10);
         var item = Assert.Single(page.Items);
         Assert.Equal(1UL, item.Sequence);
