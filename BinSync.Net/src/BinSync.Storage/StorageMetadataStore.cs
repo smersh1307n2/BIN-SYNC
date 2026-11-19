@@ -5321,7 +5321,8 @@ private bool ValidateIncomingBatchForStaging(
     {
         if (TryGetPartition(key, out var state)) return state;
         state = new PartitionState(CreatePendingApplyMap(key), CreatePeerStreamMap(key),
-            CreateRequiredPeerStreamSet(key), CreateInterestedPeerSet(key), CreateRetiredPeerEpochMap(key))
+            CreateRequiredPeerStreamSet(key), CreateInterestedPeerSet(key), CreateRetiredPeerEpochMap(key),
+            CreateReceiveMap(key), CreateReceiveChainMap(key), CreateLegacyReceiveChainMap(key))
             { StorageCommitSeq = _storage.LastCommitSeq };
         CachePartition(key, state);
         return state;
@@ -6068,10 +6069,11 @@ private bool ValidateIncomingBatchForStaging(
 
         foreach (var pair in state.Receives)
         {
-            byte[] suffix = new byte[22];
+            byte[] suffix = new byte[38];
             pair.Key.Sender.WriteTo(suffix);
             BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), pair.Key.Epoch);
             BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)pair.Key.NamespaceId));
+            pair.Key.AuthorStream.WriteTo(suffix.AsSpan(22));
             byte[] value = new byte[8];
             BinaryPrimitives.WriteUInt64LittleEndian(value, pair.Value.CursorEnd);
             Add(StorageKey(root, 2, suffix), value);
@@ -6218,7 +6220,7 @@ private bool ValidateIncomingBatchForStaging(
         const int pageSize = 512;
         for (byte kind = 0; kind <= 26; kind++)
         {
-            if (kind is 1 or 3 or 12 or 13 or 15 or 16 or 17 or 18 or 20 or 21) continue;
+            if (kind is 1 or 2 or 3 or 12 or 13 or 14 or 15 or 16 or 17 or 18 or 20 or 21 or 25) continue;
             byte[] prefix = new byte[root.Length + 1];
             root.CopyTo(prefix, 0);
             prefix[^1] = kind;
@@ -6241,7 +6243,8 @@ private bool ValidateIncomingBatchForStaging(
         ulong commitSeq)
     {
         var state = new PartitionState(CreatePendingApplyMap(partition), CreatePeerStreamMap(partition),
-            CreateRequiredPeerStreamSet(partition), CreateInterestedPeerSet(partition), CreateRetiredPeerEpochMap(partition))
+            CreateRequiredPeerStreamSet(partition), CreateInterestedPeerSet(partition), CreateRetiredPeerEpochMap(partition),
+            CreateReceiveMap(partition), CreateReceiveChainMap(partition), CreateLegacyReceiveChainMap(partition))
         { StorageCommitSeq = commitSeq, IsPersisted = true };
         bool identitySeen = false;
         bool rowSeen = false;
@@ -6277,19 +6280,20 @@ private bool ValidateIncomingBatchForStaging(
                     var sender = NodeId.From(key.Slice(0, 16));
                     uint epoch = BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16));
                     int namespaceId = BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20));
-                    state.Receives.Add(new ReceiveKey(sender, epoch, namespaceId,
-                        NodeId.From(key.Slice(22, 16))),
-                        new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
+                    _ = sender;
+                    _ = epoch;
+                    _ = namespaceId;
+                    _ = NodeId.From(key.Slice(22, 16));
+                    _ = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
                     break;
                 }
                 case 14:
                 {
                     RequireLength(key, 22);
                     RequireLength(row.Value, 16);
-                    var legacyChainKey = new LegacyReceiveChainKey(NodeId.From(key.Slice(0, 16)),
-                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
-                    state.LegacyReceiveChains.Add(legacyChainKey, new ReceiveChainState(row.Value.ToArray()));
+                    _ = NodeId.From(key.Slice(0, 16));
+                    _ = BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16));
+                    _ = BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20));
                     break;
                 }
                 case 26:
@@ -6308,11 +6312,10 @@ private bool ValidateIncomingBatchForStaging(
                 {
                     RequireLength(key, 38);
                     RequireLength(row.Value, 16);
-                    var chainKey = new ReceiveChainKey(NodeId.From(key.Slice(0, 16)),
-                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                        NodeId.From(key.Slice(22, 16)));
-                    state.ReceiveChains.Add(chainKey, new ReceiveChainState(row.Value.ToArray()));
+                    _ = NodeId.From(key.Slice(0, 16));
+                    _ = BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16));
+                    _ = BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20));
+                    _ = NodeId.From(key.Slice(22, 16));
                     break;
                 }
                 case 3:
@@ -7504,7 +7507,7 @@ private bool ValidateIncomingBatchForStaging(
         {
             var state = GetState();
             ulong cursor = 0;
-            foreach (var pair in state.Receives)
+            foreach (var pair in _owner.EnumerateReceives(_partitionKey, GetStorageSnapshot()))
                 if (pair.Key.Sender == sender && pair.Key.Epoch == senderEpoch &&
                     pair.Key.NamespaceId == namespaceId && pair.Value.CursorEnd > cursor)
                     cursor = pair.Value.CursorEnd;
@@ -7514,7 +7517,7 @@ private bool ValidateIncomingBatchForStaging(
         public ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream)
         {
             var state = GetState();
-            return state.Receives.TryGetValue(
+            return _owner.TryReadReceive(GetStorageSnapshot(), _partitionKey,
                 new ReceiveKey(sender, senderEpoch, namespaceId, authorStream), out var receive)
                 ? receive.CursorEnd : 0;
         }
@@ -7890,6 +7893,167 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             () => EnumerateRetiredPeerEpochs(partitionKey),
             key => TryReadRetiredPeerEpoch(partitionKey, key));
 
+    private DiskMap<ReceiveKey, ReceiveState> CreateReceiveMap(PartitionKey partitionKey)
+        => new(() => EnumerateReceives(partitionKey), key =>
+        {
+            bool found = TryReadReceive(partitionKey, key, out ReceiveState value);
+            return (found, value);
+        });
+
+    private DiskMap<ReceiveChainKey, ReceiveChainState> CreateReceiveChainMap(PartitionKey partitionKey)
+        => new(() => EnumerateReceiveChains(partitionKey), key =>
+        {
+            bool found = TryReadReceiveChain(partitionKey, key, out ReceiveChainState value);
+            return (found, value);
+        });
+
+    private DiskMap<LegacyReceiveChainKey, ReceiveChainState> CreateLegacyReceiveChainMap(PartitionKey partitionKey)
+        => new(() => EnumerateLegacyReceiveChains(partitionKey), key =>
+        {
+            bool found = TryReadLegacyReceiveChain(partitionKey, key, out ReceiveChainState value);
+            return (found, value);
+        });
+
+    private static byte[] EncodeReceiveKey(PartitionKey partitionKey, ReceiveKey receive)
+    {
+        byte[] suffix = new byte[38];
+        receive.Sender.WriteTo(suffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), receive.Epoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)receive.NamespaceId));
+        receive.AuthorStream.WriteTo(suffix.AsSpan(22));
+        return StorageKey(PartitionRoot(partitionKey), 2, suffix);
+    }
+
+    private bool TryReadReceive(PartitionKey partitionKey, ReceiveKey key, out ReceiveState value)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        return TryReadReceive(snapshot, partitionKey, key, out value);
+    }
+
+    private bool TryReadReceive(StorageSnapshot snapshot, PartitionKey partitionKey, ReceiveKey key, out ReceiveState value)
+    {
+        if (!snapshot.TryGet(EncodeReceiveKey(partitionKey, key), out byte[]? bytes))
+        {
+            value = default;
+            return false;
+        }
+        if (bytes!.Length != 8)
+            throw new InvalidDataException("Receive cursor storage value has an invalid length.");
+        value = new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(bytes));
+        return true;
+    }
+
+    private IEnumerable<KeyValuePair<ReceiveKey, ReceiveState>> EnumerateReceives(PartitionKey partitionKey)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        foreach (var pair in EnumerateReceives(partitionKey, snapshot))
+            yield return pair;
+    }
+
+    private IEnumerable<KeyValuePair<ReceiveKey, ReceiveState>> EnumerateReceives(
+        PartitionKey partitionKey, StorageSnapshot snapshot)
+    {
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 2, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                ReadOnlySpan<byte> key = row.Key.AsSpan(prefix.Length);
+                if (key.Length != 38 || row.Value.Length != 8)
+                    throw new InvalidDataException("Receive cursor storage row is malformed.");
+                var receiveKey = new ReceiveKey(NodeId.From(key.Slice(0, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
+                    NodeId.From(key.Slice(22, 16)));
+                yield return new KeyValuePair<ReceiveKey, ReceiveState>(receiveKey,
+                    new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
+    private bool TryReadReceiveChain(PartitionKey partitionKey, ReceiveChainKey key, out ReceiveChainState value)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        if (!snapshot.TryGet(EncodeReceiveChainKey(partitionKey, key), out byte[]? bytes))
+        {
+            value = null!;
+            return false;
+        }
+        if (bytes!.Length != 16)
+            throw new InvalidDataException("Receive digest-chain storage value has an invalid length.");
+        value = new ReceiveChainState(bytes);
+        return true;
+    }
+
+    private IEnumerable<KeyValuePair<ReceiveChainKey, ReceiveChainState>> EnumerateReceiveChains(PartitionKey partitionKey)
+    {
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 25, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                ReadOnlySpan<byte> key = row.Key.AsSpan(prefix.Length);
+                if (key.Length != 38 || row.Value.Length != 16)
+                    throw new InvalidDataException("Receive digest-chain storage row is malformed.");
+                var chainKey = new ReceiveChainKey(NodeId.From(key.Slice(0, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
+                    NodeId.From(key.Slice(22, 16)));
+                yield return new KeyValuePair<ReceiveChainKey, ReceiveChainState>(
+                    chainKey, new ReceiveChainState(row.Value));
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
+    private bool TryReadLegacyReceiveChain(
+        PartitionKey partitionKey, LegacyReceiveChainKey key, out ReceiveChainState value)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        if (!snapshot.TryGet(EncodeLegacyReceiveChainKey(partitionKey, key), out byte[]? bytes))
+        {
+            value = null!;
+            return false;
+        }
+        if (bytes!.Length != 16)
+            throw new InvalidDataException("Legacy receive digest-chain storage value has an invalid length.");
+        value = new ReceiveChainState(bytes);
+        return true;
+    }
+
+    private IEnumerable<KeyValuePair<LegacyReceiveChainKey, ReceiveChainState>> EnumerateLegacyReceiveChains(
+        PartitionKey partitionKey)
+    {
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 14, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                ReadOnlySpan<byte> key = row.Key.AsSpan(prefix.Length);
+                if (key.Length != 22 || row.Value.Length != 16)
+                    throw new InvalidDataException("Legacy receive digest-chain storage row is malformed.");
+                var chainKey = new LegacyReceiveChainKey(NodeId.From(key.Slice(0, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
+                yield return new KeyValuePair<LegacyReceiveChainKey, ReceiveChainState>(
+                    chainKey, new ReceiveChainState(row.Value));
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
     private bool ContainsStorageKey(byte[] key)
     {
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
@@ -8054,6 +8218,55 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         return snapshot.TryGet(key, out byte[]? value)
             ? DecodePeerStreamState(value!)
             : null;
+    }
+
+    private sealed class DiskMap<TKey, TValue> : IEnumerable<KeyValuePair<TKey, TValue>>
+        where TKey : notnull
+    {
+        private readonly Func<IEnumerable<KeyValuePair<TKey, TValue>>> _enumerate;
+        private readonly Func<TKey, (bool Found, TValue Value)> _read;
+
+        public static DiskMap<TKey, TValue> Empty { get; } = new(
+            () => Array.Empty<KeyValuePair<TKey, TValue>>(), _ => (false, default!));
+
+        public DiskMap(
+            Func<IEnumerable<KeyValuePair<TKey, TValue>>> enumerate,
+            Func<TKey, (bool Found, TValue Value)> read)
+        {
+            _enumerate = enumerate ?? throw new ArgumentNullException(nameof(enumerate));
+            _read = read ?? throw new ArgumentNullException(nameof(read));
+        }
+
+        public IEnumerable<TKey> Keys
+        {
+            get
+            {
+                foreach (var pair in _enumerate())
+                    yield return pair.Key;
+            }
+        }
+
+        public bool ContainsKey(TKey key) => _read(key).Found;
+
+        public bool TryGetValue(TKey key, out TValue value)
+        {
+            var found = _read(key);
+            value = found.Value;
+            return found.Found;
+        }
+
+        // Mutations are published only after the corresponding Storage batch commits.
+        // The durable B+ tree is authoritative; this facade never shadows unbounded keys.
+        public void Add(TKey key, TValue value) { }
+        public bool Remove(TKey key) => false;
+        public TValue this[TKey key]
+        {
+            get => TryGetValue(key, out TValue value) ? value : throw new KeyNotFoundException();
+            set { }
+        }
+
+        public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator() => _enumerate().GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     private sealed class PendingApplyMap : IEnumerable<KeyValuePair<Guid, PendingApplyValue>>
@@ -8226,9 +8439,9 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
     private sealed class PartitionState
     {
         public Dictionary<ReceiptKey, ReceiptValue> Receipts { get; } = new();
-        public Dictionary<ReceiveKey, ReceiveState> Receives { get; } = new();
-        public Dictionary<ReceiveChainKey, ReceiveChainState> ReceiveChains { get; } = new();
-        public Dictionary<LegacyReceiveChainKey, ReceiveChainState> LegacyReceiveChains { get; } = new();
+        public DiskMap<ReceiveKey, ReceiveState> Receives { get; }
+        public DiskMap<ReceiveChainKey, ReceiveChainState> ReceiveChains { get; }
+        public DiskMap<LegacyReceiveChainKey, ReceiveChainState> LegacyReceiveChains { get; }
         public Dictionary<LedgerKey, ChangeLedgerValue> ChangeLedger { get; } = new();
         public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
         // Rebuildable in-memory index only; ChangeId→sequence is never duplicated on disk.
@@ -8242,13 +8455,19 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
 
         public PartitionState(PendingApplyMap pendingApplies, PeerStreamMap peerStreams,
             DiskKeySet<PeerStreamKey> requiredPeerStreams, DiskKeySet<InterestedPeerKey> interestedPeers,
-            RetiredPeerEpochMap retiredPeerEpochs)
+            RetiredPeerEpochMap retiredPeerEpochs,
+            DiskMap<ReceiveKey, ReceiveState> receives,
+            DiskMap<ReceiveChainKey, ReceiveChainState> receiveChains,
+            DiskMap<LegacyReceiveChainKey, ReceiveChainState> legacyReceiveChains)
         {
             PendingApplies = pendingApplies ?? throw new ArgumentNullException(nameof(pendingApplies));
             PeerStreams = peerStreams ?? throw new ArgumentNullException(nameof(peerStreams));
             RequiredPeerStreams = requiredPeerStreams ?? throw new ArgumentNullException(nameof(requiredPeerStreams));
             InterestedPeers = interestedPeers ?? throw new ArgumentNullException(nameof(interestedPeers));
             RetiredPeerEpochs = retiredPeerEpochs ?? throw new ArgumentNullException(nameof(retiredPeerEpochs));
+            Receives = receives ?? throw new ArgumentNullException(nameof(receives));
+            ReceiveChains = receiveChains ?? throw new ArgumentNullException(nameof(receiveChains));
+            LegacyReceiveChains = legacyReceiveChains ?? throw new ArgumentNullException(nameof(legacyReceiveChains));
         }
         public Dictionary<Guid, CompletedPendingApplyValue> CompletedPendingApplies { get; } = new();
         public PeerStreamMap PeerStreams { get; }
@@ -8266,8 +8485,9 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             // VolatileSnapshot only reads these seven collections. Do not copy
             // ChangeLedger, Receipts, PendingApplies, peer indexes or rebuildable caches.
             var clone = new PartitionState(PendingApplyMap.Empty, PeerStreamMap.Empty,
-                DiskKeySet<PeerStreamKey>.Empty, DiskKeySet<InterestedPeerKey>.Empty, RetiredPeerEpochMap.Empty);
-            foreach (var pair in Receives) clone.Receives.Add(pair.Key, pair.Value);
+                DiskKeySet<PeerStreamKey>.Empty, DiskKeySet<InterestedPeerKey>.Empty, RetiredPeerEpochMap.Empty,
+                DiskMap<ReceiveKey, ReceiveState>.Empty, DiskMap<ReceiveChainKey, ReceiveChainState>.Empty,
+                DiskMap<LegacyReceiveChainKey, ReceiveChainState>.Empty);
             foreach (var pair in RelayAck) clone.RelayAck.Add(pair.Key, pair.Value);
             foreach (var pair in RelayHighWatermarks) clone.RelayHighWatermarks.Add(pair.Key, pair.Value);
             foreach (var pair in OutboundAck) clone.OutboundAck.Add(pair.Key, pair.Value);
