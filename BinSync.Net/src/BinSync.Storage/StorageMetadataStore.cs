@@ -605,7 +605,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
-        bool hasReceipt = state.Receipts.TryGetValue(receiptKey, out ReceiptValue? receipt);
+        bool hasReceipt = TryGetReceipt(new PartitionKey(batch.ScopeId, batch.LocalReplica), state, receiptKey, out ReceiptValue? receipt);
         if (hasReceipt && !receipt!.Matches(batch))
             throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
 
@@ -615,7 +615,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         foreach (MetadataOperation operation in batch.Operations)
         {
-            if (state.ChangeLedger.ContainsKey(new LedgerKey(batch.NamespaceId, operation.ChangeId)))
+            if (TryGetChangeLedger(new PartitionKey(batch.ScopeId, batch.LocalReplica), state, new LedgerKey(batch.NamespaceId, operation.ChangeId), out _))
                 continue;
             if (operation.AuthorNodeId.IsZero || operation.OriginAuthorEpoch == 0 ||
                 operation.OriginSequence == 0 || operation.ChangeId.IsZero)
@@ -698,9 +698,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var sequences = new Dictionary<(NodeId Author, uint Epoch), List<ulong>>();
             if (current is not null)
             {
-                foreach (var pair in current.ChangeLedger)
+                foreach (var pair in EnumerateChangeLedger(partitionKey, current, acceptedRoster.NamespaceId))
                 {
-                    if (pair.Key.NamespaceId != acceptedRoster.NamespaceId) continue;
                     OperationOrigin origin = pair.Value.Provenance;
                     if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
                         continue;
@@ -907,12 +906,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     foreach (MetadataOperation operation in pending.Batch.Operations)
                         liveChangeIds.Add(operation.ChangeId);
 
-            var candidates = new List<(LedgerKey Key, byte[] StorageKey)>(Math.Min(limit, current.ChangeLedger.Count));
+            var candidates = new List<(LedgerKey Key, byte[] StorageKey)>(limit);
             byte[] partitionRoot = PartitionRoot(partitionKey);
-            foreach (var pair in current.ChangeLedger)
+            foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
             {
-                if (pair.Key.NamespaceId != namespaceId)
-                    continue;
+                // namespace already filtered by enumerator
                 OperationOrigin origin = pair.Value.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
                     continue;
@@ -1014,11 +1012,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return 0;
 
             HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
-            candidates = new List<ChangeIdGcCandidate>(Math.Min(limit, current.ChangeLedger.Count));
-            foreach (var pair in current.ChangeLedger)
+            candidates = new List<ChangeIdGcCandidate>(limit);
+            foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
             {
-                if (pair.Key.NamespaceId != namespaceId)
-                    continue;
                 ChangeLedgerValue ledgerValue = pair.Value;
                 OperationOrigin origin = ledgerValue.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
@@ -1079,7 +1075,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ChangeLedgerValue snapshotValue = candidate.Value;
                 if (hostReferenced.Contains(key.ChangeId) ||
                     liveChangeIds.Contains(key.ChangeId) ||
-                    !current.ChangeLedger.TryGetValue(key, out ChangeLedgerValue? currentValue) ||
+                    !TryGetChangeLedger(partitionKey, current, key, out ChangeLedgerValue? currentValue) ||
                     !ReferenceEquals(currentValue, snapshotValue) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, snapshotValue.Provenance))
                     continue;
@@ -1211,7 +1207,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return 0;
             safeOriginFrontier = BuildSafeOriginFrontier(retentionCheckpoint);
             candidates = BuildReceiptGcCandidates(
-                current, namespaceId, roster, safeOriginFrontier, limit);
+                partitionKey, current, namespaceId, roster, safeOriginFrontier, limit);
         }
 
         if (candidates.Count == 0)
@@ -1240,7 +1236,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             foreach ((ReceiptKey key, ReceiptValue observed) in candidates)
             {
                 if (!hostUnreferenced.Contains(key) ||
-                    !current.Receipts.TryGetValue(key, out ReceiptValue? receipt) ||
+                    !TryGetReceipt(partitionKey, current, key, out ReceiptValue? receipt) ||
                     !ReferenceEquals(receipt, observed) ||
                     key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
                     key.Epoch == 0 || receipt.OriginSequence == 0 ||
@@ -1278,14 +1274,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
-    private static List<(ReceiptKey Key, ReceiptValue Value)> BuildReceiptGcCandidates(
-        PartitionState current, int namespaceId, NamespaceRosterCertificate roster,
+    private List<(ReceiptKey Key, ReceiptValue Value)> BuildReceiptGcCandidates(
+        PartitionKey partitionKey, PartitionState current, int namespaceId, NamespaceRosterCertificate roster,
         IReadOnlyDictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier, int limit)
     {
         var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
         HashSet<ReceiptKey> pendingReceiptKeys = BuildPendingReceiptKeySet(current);
-        var candidates = new List<(ReceiptKey, ReceiptValue)>(Math.Min(limit, current.Receipts.Count));
-        foreach (var pair in current.Receipts)
+        var candidates = new List<(ReceiptKey, ReceiptValue)>(limit);
+        foreach (var pair in EnumerateReceipts(partitionKey, current, namespaceId))
         {
             ReceiptKey key = pair.Key;
             ReceiptValue receipt = pair.Value;
@@ -1390,8 +1386,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId));
             }
 
-            var candidates = new List<ReceiptKey>(Math.Min(limit, current.Receipts.Count));
-            foreach (var pair in current.Receipts)
+            var candidates = new List<ReceiptKey>(limit);
+            foreach (var pair in EnumerateReceipts(partitionKey, current, namespaceId))
             {
                 ReceiptKey key = pair.Key;
                 ReceiptValue receipt = pair.Value;
@@ -1845,7 +1841,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var current = GetOrCreatePartition(partitionKey);
         ValidateIncomingTransportPeerEpoch(current, batch);
         RejectForgottenOrigins(current, batch);
-        _ = BuildPendingApplyDecisions(current, batch, Guid.Empty);
+        _ = BuildPendingApplyDecisions(partitionKey, current, batch, Guid.Empty);
         return AcceptIncomingBatchDelta(partitionKey, current, batch);
     
         }
@@ -1866,7 +1862,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         ValidateIncomingTransportPeerEpoch(current, batch);
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
-        bool hasPriorReceipt = current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
+        bool hasPriorReceipt = TryGetReceipt(partitionKey, current, receiptKey, out var priorReceipt);
         if (hasPriorReceipt && !priorReceipt!.Matches(batch))
             throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
         RejectForgottenOrigins(current, batch);
@@ -1885,12 +1881,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             return new MetadataPendingApplyIntent(applyToken, CloneBatch(pending.Batch))
             {
                 IsDuplicate = hasPriorReceipt,
-                ApplyOperations = BuildPendingApplyDecisions(current, pending.Batch, applyToken)
+                ApplyOperations = BuildPendingApplyDecisions(partitionKey, current, pending.Batch, applyToken)
             };
         }
 
-        bool isDuplicate = ValidateIncomingBatchForStaging(current, batch, applyToken);
-        IReadOnlyList<bool> applyOperations = BuildPendingApplyDecisions(current, batch, applyToken);
+        bool isDuplicate = ValidateIncomingBatchForStaging(partitionKey, current, batch, applyToken);
+        IReadOnlyList<bool> applyOperations = BuildPendingApplyDecisions(partitionKey, current, batch, applyToken);
         var pendingValue = new PendingApplyValue(CloneBatch(batch));
         PersistPendingApply(partitionKey, current, applyToken, pendingValue);
         return new MetadataPendingApplyIntent(applyToken, CloneBatch(batch))
@@ -1919,10 +1915,10 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         return state.PendingApplies
             .Select(pair => new MetadataPendingApplyIntent(pair.Key, CloneBatch(pair.Value.Batch))
             {
-                IsDuplicate = state.Receipts.ContainsKey(new ReceiptKey(
+                IsDuplicate = TryGetReceipt(new PartitionKey(scopeId, localReplica), state, new ReceiptKey(
                     pair.Value.Batch.SenderPeer, pair.Value.Batch.SenderEpoch,
-                    pair.Value.Batch.NamespaceId, pair.Value.Batch.BatchId)),
-                ApplyOperations = BuildPendingApplyDecisions(state, pair.Value.Batch, pair.Key)
+                    pair.Value.Batch.NamespaceId, pair.Value.Batch.BatchId), out _),
+                ApplyOperations = BuildPendingApplyDecisions(new PartitionKey(scopeId, localReplica), state, pair.Value.Batch, pair.Key)
             })
             .ToArray();
     
@@ -2103,7 +2099,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var receiptKey = new ReceiptKey(incoming.SenderPeer, incoming.SenderEpoch,
             incoming.NamespaceId, incoming.BatchId);
         MetadataBatchReceipt receipt;
-        bool isNewReceipt = !current.Receipts.TryGetValue(receiptKey, out var priorReceipt);
+        bool isNewReceipt = !TryGetReceipt(partitionKey, current, receiptKey, out var priorReceipt);
         ReceiptValue? refreshedReceipt = null;
         var newLedger = new List<(LedgerKey Key, ChangeLedgerValue Value)>();
         var newRelay = new List<(RelayKey Key, MetadataRelayItem Item)>();
@@ -2154,7 +2150,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             foreach (var operation in incoming.Operations)
             {
                 var ledgerKey = new LedgerKey(incoming.NamespaceId, operation.ChangeId);
-                if (current.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger))
+                if (TryGetChangeLedger(partitionKey, current, ledgerKey, out var priorLedger))
                 {
                     if (!LedgerMatches(priorLedger, operation))
                         throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
@@ -2364,13 +2360,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 "Incoming batch transport epoch was not durably registered for this namespace.");
     }
 
-    private static IReadOnlyList<bool> BuildPendingApplyDecisions(
-        PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
+    private IReadOnlyList<bool> BuildPendingApplyDecisions(
+        PartitionKey partitionKey, PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
     {
         var decisions = new bool[batch.Operations.Count];
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
-        if (state.Receipts.ContainsKey(receiptKey))
+        if (TryGetReceipt(partitionKey, state, receiptKey, out _))
             return Array.AsReadOnly(decisions);
 
         foreach (var otherPending in state.PendingApplies)
@@ -2396,7 +2392,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         {
             var operation = batch.Operations[i];
             var key = new LedgerKey(batch.NamespaceId, operation.ChangeId);
-            if (state.ChangeLedger.TryGetValue(key, out var prior))
+            if (TryGetChangeLedger(partitionKey, state, key, out var prior))
             {
                 if (!LedgerMatches(prior, operation))
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
@@ -2414,12 +2410,12 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         => left.Provenance == right.Provenance
             && left.Fingerprint.AsSpan().SequenceEqual(right.Fingerprint);
 
-private static bool ValidateIncomingBatchForStaging(
-        PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
+private bool ValidateIncomingBatchForStaging(
+        PartitionKey partitionKey, PartitionState state, MetadataIncomingBatch batch, Guid applyToken)
     {
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch,
             batch.NamespaceId, batch.BatchId);
-        if (state.Receipts.TryGetValue(receiptKey, out var receipt))
+        if (TryGetReceipt(partitionKey, state, receiptKey, out var receipt))
         {
             if (!receipt.Matches(batch))
                 throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
@@ -2471,7 +2467,7 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new InvalidDataException("ChangeId was reused with different fingerprint or Origin provenance within one incoming batch.");
             batchIdentities[key] = operation;
 
-            bool hasLedgerIdentity = state.ChangeLedger.TryGetValue(key, out var priorLedger);
+            bool hasLedgerIdentity = TryGetChangeLedger(partitionKey, state, key, out var priorLedger);
             if (hasLedgerIdentity && !LedgerMatches(priorLedger!, operation))
                 throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
             if (!hasLedgerIdentity &&
@@ -2492,7 +2488,7 @@ private static bool ValidateIncomingBatchForStaging(
         PartitionKey partitionKey, PartitionState current, MetadataIncomingBatch batch)
     {
         var receiptKey = new ReceiptKey(batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId);
-        if (current.Receipts.TryGetValue(receiptKey, out var priorReceipt))
+        if (TryGetReceipt(partitionKey, current, receiptKey, out var priorReceipt))
         {
             if (!priorReceipt.Matches(batch))
                 throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
@@ -2530,7 +2526,7 @@ private static bool ValidateIncomingBatchForStaging(
         foreach (var operation in batch.Operations)
         {
             var ledgerKey = new LedgerKey(batch.NamespaceId, operation.ChangeId);
-            if (current.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger))
+            if (TryGetChangeLedger(partitionKey, current, ledgerKey, out var priorLedger))
             {
                 if (!LedgerMatches(priorLedger, operation))
                     throw new InvalidDataException("ChangeId was reused with a different canonical fingerprint.");
@@ -2841,7 +2837,7 @@ private static bool ValidateIncomingBatchForStaging(
         foreach (var operation in operations)
         {
             var ledgerKey = new LedgerKey(namespaceId, operation.ChangeId);
-            bool alreadyFrozen = current.ChangeLedger.TryGetValue(ledgerKey, out var priorLedger)
+            bool alreadyFrozen = TryGetChangeLedger(partitionKey, current, ledgerKey, out var priorLedger)
                 && priorLedger.IsLocalOutbound;
             if (priorLedger is not null)
             {
@@ -2919,7 +2915,7 @@ private static bool ValidateIncomingBatchForStaging(
                 if (!originHighWatermarks.TryGetValue(originKey, out OriginIssuedState issuedState))
                 {
                     if (!current.OriginHighWatermarks.TryGetValue(originKey, out issuedState) &&
-                        current.ChangeLedger.Any(pair => pair.Key.NamespaceId == namespaceId &&
+                        EnumerateChangeLedger(partitionKey, current, namespaceId).Any(pair =>
                             pair.Value.AuthorNodeId == localAuthor &&
                             pair.Value.OriginAuthorEpoch == operation.OriginAuthorEpoch))
                         throw new InvalidDataException("Durable origin-sequence allocator row is missing for an existing local author epoch.");
@@ -2975,11 +2971,12 @@ private static bool ValidateIncomingBatchForStaging(
             if (changeId.IsZero)
                 throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(changeId));
             fingerprint = ReadOnlyMemory<byte>.Empty;
-            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out var state))
                 return false;
 
             var key = new LedgerKey(namespaceId, changeId);
-            if (!state.ChangeLedger.TryGetValue(key, out var prior))
+            if (!TryGetChangeLedger(partitionKey, state, key, out var prior))
                 return false;
             if (!prior.IsLocalOutbound)
                 throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
@@ -3001,11 +2998,12 @@ private static bool ValidateIncomingBatchForStaging(
                 throw new ArgumentException("Outbound ChangeId must be non-zero.", nameof(changeId));
             fingerprint = ReadOnlyMemory<byte>.Empty;
             origin = default;
-            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state))
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out PartitionState? state))
                 return false;
-            if (!state.ChangeLedger.TryGetValue(new LedgerKey(namespaceId, changeId), out ChangeLedgerValue? ledger))
+            if (!TryGetChangeLedger(partitionKey, state, new LedgerKey(namespaceId, changeId), out ChangeLedgerValue? ledger))
                 return false;
-            if (!ledger.IsLocalOutbound)
+            if (!ledger!.IsLocalOutbound)
                 throw new InvalidDataException("Provider ChangeId is already owned by an incoming route and cannot be published locally.");
             if (ledger.AuthorNodeId.IsZero || ledger.OriginAuthorEpoch == 0 || ledger.OriginSequence == 0)
                 throw new InvalidDataException("Frozen local ChangeId is missing its immutable origin provenance.");
@@ -3034,11 +3032,12 @@ private static bool ValidateIncomingBatchForStaging(
             fingerprint = ReadOnlyMemory<byte>.Empty;
             origin = default;
             isLocalOutbound = false;
-            if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out PartitionState? state) ||
-                !state.ChangeLedger.TryGetValue(new LedgerKey(namespaceId, changeId), out ChangeLedgerValue? ledger))
+            var partitionKey = new PartitionKey(scopeId, localReplica);
+            if (!TryGetPartition(partitionKey, out PartitionState? state) ||
+                !TryGetChangeLedger(partitionKey, state, new LedgerKey(namespaceId, changeId), out ChangeLedgerValue? ledger))
                 return false;
 
-            fingerprint = ledger.Fingerprint;
+            fingerprint = ledger!.Fingerprint;
             origin = ledger.Provenance;
             isLocalOutbound = ledger.IsLocalOutbound;
             return true;
@@ -3083,7 +3082,7 @@ private static bool ValidateIncomingBatchForStaging(
             foreach (MetadataLegacyNodeLedgerFingerprint item in fingerprints)
             {
                 var ledgerKey = new LedgerKey(namespaceId, item.ChangeId);
-                if (!state.ChangeLedger.TryGetValue(ledgerKey, out ChangeLedgerValue? ledger))
+                if (!TryGetChangeLedger(partitionKey, state, ledgerKey, out ChangeLedgerValue? ledger))
                     throw new InvalidOperationException("Cannot attach a legacy Node digest to a missing durable ChangeId identity.");
 
                 if (ledger.LegacyNodeLedgerFingerprint is not null)
@@ -5369,9 +5368,12 @@ private static bool ValidateIncomingBatchForStaging(
         current.MetadataRevision = nextRevision;
         current.StorageCommitSeq = commitSeq;
         current.IsPersisted = true;
-        // Stream payload bodies are durable after this commit. Drop cached bodies so
-        // partition residency stays proportional to headers, not retained history.
+        // Stream payload bodies and structural ledger/receipt rows are durable after
+        // this commit. Drop cached bodies and ledger/receipt overlays so residency
+        // stays proportional to stream headers and small control maps.
         ReleaseCachedStreamPayloadBodies(current);
+        current.ChangeLedger.Clear();
+        current.Receipts.Clear();
         return commitSeq;
     }
 
@@ -5422,6 +5424,9 @@ private static bool ValidateIncomingBatchForStaging(
 
         if (snapshot.TryGet(PartitionRevisionKey(key), out byte[]? decodedRevision))
             decoded.MetadataRevision = DecodePartitionRevision(decodedRevision!);
+        // Payload rows intentionally omit OriginEpoch/OriginSequence. Hydrate from
+        // the durable ChangeId ledger after the full partition scan.
+        HydrateStreamProvenance(key, decoded);
         state = decoded;
         CachePartition(key, state);
         return true;
@@ -6221,28 +6226,10 @@ private static bool ValidateIncomingBatchForStaging(
                     break;
                 case 1:
                 {
+                    // Receipts stay on the Storage B+ tree. Validate encoding only; the
+                    // partition cache keeps an overlay of uncommitted mutations.
                     RequireLength(key, 38);
-                    if (row.Value.Length is not (76 or 80 or 92 or 96))
-                        throw new InvalidDataException("Stored v3 inbox receipt value has an invalid length.");
-                    var receiptKey = new ReceiptKey(NodeId.From(key.Slice(0, 16)),
-                        BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                        BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                        BatchId.From(key.Slice(22, 16)));
-                    state.Receipts.Add(receiptKey, new ReceiptValue(
-                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value),
-                        BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(8)),
-                        row.Value.AsSpan(16, 16).ToArray(),
-                        row.Value.AsSpan(32, 16).ToArray(),
-                        BinaryPrimitives.ReadInt32LittleEndian(row.Value.AsSpan(48)),
-                        NodeId.From(row.Value.AsSpan(52, 16)),
-                        row.Value.Length is 92 or 96 ? row.Value.AsSpan(68, 16).ToArray() : Array.Empty<byte>(),
-                        row.Value.Length is 80 or 96
-                            ? BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(row.Value.Length - 4))
-                            : 0,
-                        row.Value.Length is 76 or 80 or 92 or 96
-                            ? BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(
-                                row.Value.Length is 92 or 96 ? 84 : 68))
-                            : 0));
+                    _ = DecodeReceiptValue(row.Value);
                     break;
                 }
                 case 2:
@@ -6292,22 +6279,9 @@ private static bool ValidateIncomingBatchForStaging(
                 }
                 case 3:
                 {
+                    // ChangeId ledger rows stay on Storage. Validate only on cold load.
                     RequireLength(key, 18);
-                    if ((row.Value.Length != 45 && row.Value.Length != 61) || row.Value[44] > 1)
-                        throw new InvalidDataException("Stored v3 ChangeId ledger value has an invalid length or origin flag.");
-                    byte[]? legacyNodeFingerprint = row.Value.Length == 61
-                        ? row.Value.AsSpan(45, 16).ToArray()
-                        : null;
-                    if (legacyNodeFingerprint is not null && legacyNodeFingerprint.All(value => value == 0))
-                        throw new InvalidDataException("Stored legacy Node ChangeId fingerprint cannot be zero.");
-                    state.ChangeLedger.Add(new LedgerKey(
-                        BinaryPrimitives.ReadUInt16LittleEndian(key),
-                        BatchId.From(key.Slice(2, 16))),
-                        new ChangeLedgerValue(row.Value.AsSpan(0, 16).ToArray(), row.Value[44] == 1,
-                            NodeId.From(row.Value.AsSpan(16, 16)),
-                            BinaryPrimitives.ReadUInt32LittleEndian(row.Value.AsSpan(32)),
-                            BinaryPrimitives.ReadUInt64LittleEndian(row.Value.AsSpan(36)),
-                            legacyNodeFingerprint));
+                    _ = DecodeChangeLedgerValue(row.Value);
                     break;
                 }
                 case 20:
@@ -6455,10 +6429,8 @@ private static bool ValidateIncomingBatchForStaging(
         if (!identitySeen)
             throw new InvalidDataException("Metadata partition is missing its scope identity record.");
 
-        // Payload rows intentionally omit OriginEpoch/OriginSequence. The global
-        // ChangeId ledger is the single durable owner of immutable provenance.
-        // Hydrate after the full scan so correctness does not depend on row ordering.
-        HydrateStreamProvenance(state);
+        // Provenance hydration runs after DecodePartition returns so the caller can
+        // use instance Storage lookups against the durable ChangeId ledger.
         return state;
     }
 
@@ -6486,6 +6458,148 @@ private static bool ValidateIncomingBatchForStaging(
         BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(16), payload.Length);
         payload.CopyTo(bytes, 20);
         return bytes;
+    }
+
+    private static ReceiptValue DecodeReceiptValue(ReadOnlySpan<byte> value)
+    {
+        if (value.Length is not (76 or 80 or 92 or 96))
+            throw new InvalidDataException("Stored v3 inbox receipt value has an invalid length.");
+        return new ReceiptValue(
+            BinaryPrimitives.ReadUInt64LittleEndian(value),
+            BinaryPrimitives.ReadUInt64LittleEndian(value.Slice(8)),
+            value.Slice(16, 16).ToArray(),
+            value.Slice(32, 16).ToArray(),
+            BinaryPrimitives.ReadInt32LittleEndian(value.Slice(48)),
+            NodeId.From(value.Slice(52, 16)),
+            value.Length is 92 or 96 ? value.Slice(68, 16).ToArray() : Array.Empty<byte>(),
+            value.Length is 80 or 96
+                ? BinaryPrimitives.ReadUInt32LittleEndian(value.Slice(value.Length - 4))
+                : 0,
+            value.Length is 76 or 80 or 92 or 96
+                ? BinaryPrimitives.ReadUInt64LittleEndian(value.Slice(value.Length is 92 or 96 ? 84 : 68))
+                : 0);
+    }
+
+    private static ChangeLedgerValue DecodeChangeLedgerValue(ReadOnlySpan<byte> value)
+    {
+        if ((value.Length != 45 && value.Length != 61) || value[44] > 1)
+            throw new InvalidDataException("Stored v3 ChangeId ledger value has an invalid length or origin flag.");
+        byte[]? legacyNodeFingerprint = value.Length == 61
+            ? value.Slice(45, 16).ToArray()
+            : null;
+        if (legacyNodeFingerprint is not null && legacyNodeFingerprint.All(b => b == 0))
+            throw new InvalidDataException("Stored legacy Node ChangeId fingerprint cannot be zero.");
+        return new ChangeLedgerValue(
+            value.Slice(0, 16).ToArray(),
+            value[44] == 1,
+            NodeId.From(value.Slice(16, 16)),
+            BinaryPrimitives.ReadUInt32LittleEndian(value.Slice(32)),
+            BinaryPrimitives.ReadUInt64LittleEndian(value.Slice(36)),
+            legacyNodeFingerprint);
+    }
+
+    private bool TryGetChangeLedger(
+        PartitionKey partitionKey, PartitionState state, LedgerKey key, out ChangeLedgerValue value)
+    {
+        if (state.ChangeLedger.TryGetValue(key, out value!))
+            return true;
+        byte[] storageKey = ChangeLedgerStorageKey(PartitionRoot(partitionKey), key.NamespaceId, key.ChangeId);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
+        {
+            value = null!;
+            return false;
+        }
+        value = DecodeChangeLedgerValue(bytes);
+        return true;
+    }
+
+    private bool TryGetReceipt(
+        PartitionKey partitionKey, PartitionState state, ReceiptKey key, out ReceiptValue value)
+    {
+        if (state.Receipts.TryGetValue(key, out value!))
+            return true;
+        byte[] storageKey = EncodeReceiptKey(partitionKey, key);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
+        {
+            value = null!;
+            return false;
+        }
+        value = DecodeReceiptValue(bytes);
+        return true;
+    }
+
+    private IEnumerable<(LedgerKey Key, ChangeLedgerValue Value)> EnumerateChangeLedger(
+        PartitionKey partitionKey, PartitionState state, int namespaceId)
+    {
+        var seen = new HashSet<LedgerKey>();
+        foreach (var pair in state.ChangeLedger)
+        {
+            if (pair.Key.NamespaceId != namespaceId) continue;
+            seen.Add(pair.Key);
+            yield return (pair.Key, pair.Value);
+        }
+
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] prefix = StorageKey(root, 3, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 512;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
+                if (suffix.Length < 1 + 18 || suffix[0] != 3) continue;
+                ReadOnlySpan<byte> keyBytes = suffix.Slice(1);
+                int rowNamespace = BinaryPrimitives.ReadUInt16LittleEndian(keyBytes);
+                if (rowNamespace != namespaceId) continue;
+                var ledgerKey = new LedgerKey(rowNamespace, BatchId.From(keyBytes.Slice(2, 16)));
+                if (!seen.Add(ledgerKey)) continue;
+                yield return (ledgerKey, DecodeChangeLedgerValue(row.Value));
+            }
+            if (page.Count < pageSize) yield break;
+        }
+    }
+
+    private IEnumerable<(ReceiptKey Key, ReceiptValue Value)> EnumerateReceipts(
+        PartitionKey partitionKey, PartitionState state, int namespaceId)
+    {
+        var seen = new HashSet<ReceiptKey>();
+        foreach (var pair in state.Receipts)
+        {
+            if (pair.Key.NamespaceId != namespaceId) continue;
+            seen.Add(pair.Key);
+            yield return (pair.Key, pair.Value);
+        }
+
+        byte[] root = PartitionRoot(partitionKey);
+        byte[] prefix = StorageKey(root, 1, ReadOnlySpan<byte>.Empty);
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 512;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                ReadOnlySpan<byte> suffix = row.Key.AsSpan(root.Length);
+                if (suffix.Length < 1 + 38 || suffix[0] != 1) continue;
+                ReadOnlySpan<byte> keyBytes = suffix.Slice(1);
+                int rowNamespace = BinaryPrimitives.ReadUInt16LittleEndian(keyBytes.Slice(20));
+                if (rowNamespace != namespaceId) continue;
+                var receiptKey = new ReceiptKey(
+                    NodeId.From(keyBytes.Slice(0, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(keyBytes.Slice(16)),
+                    rowNamespace,
+                    BatchId.From(keyBytes.Slice(22, 16)));
+                if (!seen.Add(receiptKey)) continue;
+                yield return (receiptKey, DecodeReceiptValue(row.Value));
+            }
+            if (page.Count < pageSize) yield break;
+        }
     }
 
     private static BatchId DecodePayloadHeader(ReadOnlySpan<byte> bytes)
@@ -6595,14 +6709,14 @@ private static bool ValidateIncomingBatchForStaging(
         }
     }
 
-    private static void HydrateStreamProvenance(PartitionState state)
+    private void HydrateStreamProvenance(PartitionKey partitionKey, PartitionState state)
     {
         foreach (var (key, items) in state.Relay)
         {
             for (int i = 0; i < items.Count; i++)
             {
                 var item = items[i];
-                var provenance = ResolvePayloadProvenance(state, key.NamespaceId, key.Author,
+                var provenance = ResolvePayloadProvenance(partitionKey, state, key.NamespaceId, key.Author,
                     item.ChangeId, isLocalOutbound: false);
                 items[i] = new MetadataRelayItem(item.Sequence, item.OriginalAuthor,
                     item.ChangeId, item.Payload) { Provenance = provenance };
@@ -6614,7 +6728,7 @@ private static bool ValidateIncomingBatchForStaging(
             for (int i = 0; i < items.Count; i++)
             {
                 var item = items[i];
-                var provenance = ResolvePayloadProvenance(state, key.NamespaceId, key.Author,
+                var provenance = ResolvePayloadProvenance(partitionKey, state, key.NamespaceId, key.Author,
                     item.ChangeId, isLocalOutbound: true);
                 items[i] = new MetadataOutboundItem(item.Sequence, item.AuthorNodeId,
                     item.ChangeId, item.Payload) { Provenance = provenance };
@@ -6622,10 +6736,10 @@ private static bool ValidateIncomingBatchForStaging(
         }
     }
 
-    private static OperationOrigin ResolvePayloadProvenance(PartitionState state, int namespaceId,
+    private OperationOrigin ResolvePayloadProvenance(PartitionKey partitionKey, PartitionState state, int namespaceId,
         NodeId author, BatchId changeId, bool isLocalOutbound)
     {
-        if (!state.ChangeLedger.TryGetValue(new LedgerKey(namespaceId, changeId), out var ledger))
+        if (!TryGetChangeLedger(partitionKey, state, new LedgerKey(namespaceId, changeId), out var ledger))
             throw new InvalidDataException("Stream payload row has no global ChangeId identity row.");
         var provenance = ledger.Provenance.EnsureValid();
         if (provenance.AuthorNodeId != author || ledger.IsLocalOutbound != isLocalOutbound)
