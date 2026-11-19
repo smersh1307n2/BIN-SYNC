@@ -34,7 +34,7 @@ public sealed class FldBinSyncRuntimeHostTests
             await WaitForDatabaseHost(fldRoot, databaseHost, TimeSpan.FromSeconds(45));
             runtimeHost = StartRuntimeHost(
                 metadataRoot, fldRoot, MetadataPartition, localNode, ScopeId,
-                MetadataScopeId, ProviderClientId, maintenanceIntervalMs: 60000);
+                MetadataScopeId, NamespaceId, ProviderClientId, maintenanceIntervalMs: 60000);
             (Uri address, int peerPort) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
             using var client = CreateClient(address, OperatorToken);
             using var peerNode = new Node(NodeId.From(peerNodeId));
