@@ -101,7 +101,17 @@ public sealed class FldFullReplaceBootstrapTests
                 author: targetId,
                 originSequence: 0,
                 value: "obsolete-target-row"u8.ToArray());
-            targetProvider.AppendLocalChange(oldTargetRow);
+            targetDatabase.PutWithIdentity(
+                oldTargetRow.RecordId.ToArray(),
+                oldTargetRow.FieldId,
+                oldTargetRow.Value,
+                oldTargetRow.ChangeId.ToArray(),
+                oldTargetRow.OriginAuthorEpoch,
+                oldTargetRow.HlcWall,
+                oldTargetRow.HlcLogical,
+                oldTargetRow.KeyEpoch,
+                oldTargetRow.IsTombstone);
+            _ = targetDatabase.Commit();
             ProviderChangePage targetFeed = targetProvider.ReadLocalChanges(0, 4096);
             Assert.Single(targetFeed.Changes);
             targetProvider.CommitPublishedOrigins(new[]
@@ -263,8 +273,18 @@ public sealed class FldFullReplaceBootstrapTests
                     sourceId,
                     originSequence: 0,
                     Encoding.UTF8.GetBytes($"source-row-{i:D3}"));
-                provider.AppendLocalChange(mutations[i]);
+                sourceDatabase.PutWithIdentity(
+                    mutations[i].RecordId.ToArray(),
+                    mutations[i].FieldId,
+                    mutations[i].Value,
+                    mutations[i].ChangeId.ToArray(),
+                    mutations[i].OriginAuthorEpoch,
+                    mutations[i].HlcWall,
+                    mutations[i].HlcLogical,
+                    mutations[i].KeyEpoch,
+                    mutations[i].IsTombstone);
             }
+            _ = sourceDatabase.Commit();
 
             var changes = new List<ProviderChange>(EntryCount);
             ulong cursor = 0;
