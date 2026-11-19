@@ -154,6 +154,8 @@ public sealed class FldBinSyncRuntimeHostTests
                 metadataRoot, fldRoot, MetadataPartition, localNode, ScopeId,
                 MetadataScopeId, NamespaceId, ProviderClientId,
                 maintenanceIntervalMs: 250);
+            Task<string> runtimeStdout = runtimeHost.StandardOutput.ReadToEndAsync();
+            Task<string> runtimeStderr = runtimeHost.StandardError.ReadToEndAsync();
             (Uri address, int peerPort) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
             using var client = CreateClient(address, OperatorToken);
             await WaitForMaintenanceTick(client, TimeSpan.FromSeconds(20));
@@ -254,7 +256,12 @@ public sealed class FldBinSyncRuntimeHostTests
                 "/admin/shutdown", new { reason = "finish GC/live-peer pause-resume integration" });
             Assert.Equal(HttpStatusCode.OK, shutdown.StatusCode);
             await runtimeHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
-            Assert.Equal(0, runtimeHost.ExitCode);
+            string stdout = await runtimeStdout;
+            string stderr = await runtimeStderr;
+            Assert.True(runtimeHost.ExitCode == 0,
+                $"Runtime Host exited with {runtimeHost.ExitCode}.{Environment.NewLine}" +
+                $"STDOUT:{Environment.NewLine}{stdout}{Environment.NewLine}" +
+                $"STDERR:{Environment.NewLine}{stderr}");
             runtimeHost.Dispose();
             runtimeHost = null;
         }
