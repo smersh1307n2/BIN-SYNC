@@ -1867,7 +1867,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             throw new InvalidDataException("Incoming batch receipt identity was reused with conflicting metadata.");
         RejectForgottenOrigins(current, batch);
 
-        if (current.CompletedPendingApplies.TryGetValue(applyToken, out var completed))
+        if (TryGetCompletedPendingApply(partitionKey, current, applyToken, out var completed))
         {
             if (!completed.BatchDigest.AsSpan().SequenceEqual(batch.BatchDigest))
                 throw new InvalidDataException("Completed apply token was reused for different input.");
@@ -2047,7 +2047,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (!TryGetPartition(partitionKey, out var current))
             throw new InvalidOperationException("Pending apply intent does not exist.");
 
-        if (current.CompletedPendingApplies.TryGetValue(providerReceipt.ApplyToken, out var completed))
+        if (TryGetCompletedPendingApply(partitionKey, current, providerReceipt.ApplyToken, out var completed))
         {
             if (!completed.BatchDigest.AsSpan().SequenceEqual(providerReceipt.BatchDigest))
                 throw new InvalidDataException("Provider receipt conflicts with the completed apply token.");
@@ -2299,8 +2299,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
 
         current.PendingApplies.Remove(applyToken);
-        current.CompletedPendingApplies.Add(applyToken,
-            new CompletedPendingApplyValue(providerDigest.ToArray(), CloneReceipt(receipt, receipt.IsDuplicate)));
+        // Completed-apply marker is already durable in the write batch; do not retain it in RAM.
         if (isNewReceipt)
         {
             current.Receipts.Add(receiptKey, new ReceiptValue(incoming.CursorStart, incoming.CursorEnd,
@@ -5374,6 +5373,9 @@ private bool ValidateIncomingBatchForStaging(
         ReleaseCachedStreamPayloadBodies(current);
         current.ChangeLedger.Clear();
         current.Receipts.Clear();
+        current.CompletedPendingApplies.Clear();
+        // Rebuildable ChangeId→sequence index; drop so residency tracks headers, not indexes.
+        current.RelaySequenceIndexes = null;
         return commitSeq;
     }
 
@@ -6416,8 +6418,9 @@ private bool ValidateIncomingBatchForStaging(
                     state.PendingApplies.Add(new Guid(key), new PendingApplyValue(DecodeIncomingBatch(row.Value)));
                     break;
                 case 13:
+                    // Completed-apply markers stay on Storage; validate only on cold load.
                     RequireLength(key, 16);
-                    state.CompletedPendingApplies.Add(new Guid(key), DecodeCompleted(row.Value));
+                    _ = DecodeCompleted(row.Value);
                     break;
                 default:
                     throw new InvalidDataException($"Unknown metadata storage key kind {kind}.");
@@ -6527,6 +6530,23 @@ private bool ValidateIncomingBatchForStaging(
             return false;
         }
         value = DecodeReceiptValue(bytes);
+        return true;
+    }
+
+    private bool TryGetCompletedPendingApply(
+        PartitionKey partitionKey, PartitionState state, Guid applyToken,
+        out CompletedPendingApplyValue value)
+    {
+        if (state.CompletedPendingApplies.TryGetValue(applyToken, out value!))
+            return true;
+        byte[] storageKey = StorageKey(PartitionRoot(partitionKey), 13, applyToken.ToByteArray());
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        if (!snapshot.TryGet(storageKey, out byte[]? bytes) || bytes is null)
+        {
+            value = null!;
+            return false;
+        }
+        value = DecodeCompleted(bytes);
         return true;
     }
 
