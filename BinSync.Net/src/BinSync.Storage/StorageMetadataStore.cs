@@ -7984,7 +7984,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
         if (!snapshot.TryGet(EncodeReceiveChainKey(partitionKey, key), out byte[]? bytes))
         {
-            value = null!;
+            value = default;
             return false;
         }
         if (bytes!.Length != 16)
@@ -8025,7 +8025,7 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
         if (!snapshot.TryGet(EncodeLegacyReceiveChainKey(partitionKey, key), out byte[]? bytes))
         {
-            value = null!;
+            value = default;
             return false;
         }
         if (bytes!.Length != 16)
