@@ -1597,7 +1597,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 (key, sequence, encodedPayload) =>
                 {
                     _ = DecodePayloadHeader(encodedPayload);
-                    return AddPayload(encodedPayload.Slice(20).ToArray());
+                    return AddPayload(encodedPayload.Slice(20));
                 }))
                 return false;
             Report("bloom-population");
@@ -1689,7 +1689,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 (key, sequence, encodedPayload) =>
                 {
                     _ = DecodePayloadHeader(encodedPayload);
-                    return ScanPayload(encodedPayload.Slice(20).ToArray());
+                    return ScanPayload(encodedPayload.Slice(20));
                 }))
                 return false;
             return true;
