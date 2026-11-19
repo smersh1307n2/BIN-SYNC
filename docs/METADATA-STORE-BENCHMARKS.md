@@ -169,3 +169,25 @@ The pre-optimization baseline for the 1,000-row/1,000-eligible case was 600.9 ms
 **Allocation measurement caveat:** the first MemoryDiagnoser run included fixture-seeding allocations from the per-iteration 1k/10k/50k namespace setup, so its allocated-byte column is not valid for the compaction method itself. The benchmark now measures `GC.GetAllocatedBytesForCurrentThread()` immediately around the compaction call and emits a separate `CHANGEID_GC_ALLOCATED_BYTES` record. That isolated allocation run is pending.
 
 **Scope and limitations:** the benchmark uses a disposable temporary store and a no-reference scanner; it does not include FLD Host IPC, a real provider reference scan, concurrent peer fan-out, restart/reopen cost, p50/p95 or production hardware. It is a core Metadata scaling datapoint, not a production SLA. The benchmark-only fixture enables ChangeId GC in its isolated temporary namespace; production GC flags remain default-off.
+
+
+## 2026-11-19 provider-feed Origin receipt retry
+
+**Workflow:** Metadata Retry Comparison run `44576441987`  
+**Baseline code:** `0cefef71a7ac22ce460a0480f6189aaa337f70c5` (disk-primary provider/Metadata retry before durable feed receipts)  
+**Incremental code:** `feb4a7fad45dc58130a29f6115eaf10e5a2c8e8f` (durable feed Origin receipt, synchronous and asynchronous coordinator fast paths; current equivalent source is included in `92c84b02`)  
+**Environment:** Ubuntu 26.04.1 LTS · AMD EPYC 9V45 (1 CPU, 4 logical / 2 physical cores) · .NET SDK 11.0.100 · .NET runtime 10.0.15 · BenchmarkDotNet 0.14.0. Both revisions ran sequentially on the same GitHub Actions runner and .NET 10 SDK. Each parameter used 3 warmups and 10 measurement iterations, one invocation per iteration.
+
+The benchmark injects a provider ACK failure after Metadata Freeze has durably committed, then measures the real coordinator retry. The new implementation stamps the assigned immutable OriginSequence into the provider's durable feed row in the same Storage transaction as the current-state origin stamp. On replay, the coordinator trusts that receipt, bypasses one Metadata ChangeId point lookup per row, and does not restamp provider rows. If the process stopped between Metadata Freeze and the receipt transaction, the feed remains unstamped and the existing exact Metadata identity/fingerprint recovery path is retained.
+
+| Pending feed rows | Baseline mean | Receipt-path mean | Latency reduction | Baseline allocation | Receipt-path allocation | Allocation reduction |
+|---:|---:|---:|---:|---:|---:|---:|
+| 256 | 14.370 ms | 4.567 ms | 68.2% | 1.46 MB | 415.94 KB | 72.2% |
+| 1,024 | 50.310 ms | 10.090 ms | 79.9% | 6.09 MB | 1,449.78 KB | 76.8% |
+| 4,096 | 194.400 ms | 35.623 ms | 81.7% | 23.36 MB | 5,727.15 KB | 76.1% |
+
+**Decision:** retain the durable provider-feed receipt fast path. At 4,096 pending rows it is 5.46× faster and allocates 76.1% less managed memory in this matched-runner test. The improvement is measured on the complete retry path, not inferred from a direct lookup microbenchmark.
+
+**Scope and limitations:** this measures one real StorageDataProvider + StorageMetadataStore coordinator retry with incremental Node-cache update and provider ACK. It is not a production SLA and does not measure initial publication cost, multi-process writers, host IPC, network latency, or deployment hardware. The benchmark is stateful and uses one invocation per iteration; use the raw reports to inspect variance before capacity planning.
+
+**Raw artifact:** `metadata-retry-comparison` from run `44576441987` (artifact ID `14558095977`) contains baseline and incremental BenchmarkDotNet CSV, Markdown, HTML and logs.
