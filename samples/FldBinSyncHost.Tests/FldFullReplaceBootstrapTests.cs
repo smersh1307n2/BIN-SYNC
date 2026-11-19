@@ -182,7 +182,7 @@ public sealed class FldFullReplaceBootstrapTests
                 _ = await firstSend.WaitAsync(TimeSpan.FromSeconds(5));
             }
             catch (Exception exception) when (
-                exception is IOException or ObjectDisposedException or OperationCanceledException or TimeoutException)
+                exception is IOException or ObjectDisposedException or OperationCanceledException)
             {
                 // Expected: the first receiver generation was intentionally terminated
                 // after its durable page and before the installation ACK.
