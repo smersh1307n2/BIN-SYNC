@@ -286,8 +286,8 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 byte[] streamIdentity = new byte[18];
                 BinaryPrimitives.WriteUInt16LittleEndian(streamIdentity, namespaceId);
                 local.WriteTo(streamIdentity.AsSpan(2));
-                byte[] highWatermark = new byte[8];
-                BinaryPrimitives.WriteUInt64LittleEndian(highWatermark, 1);
+                byte[] highWatermark = new byte[16];
+                BinaryPrimitives.WriteUInt64LittleEndian(highWatermark.AsSpan(8), 1);
                 batch.Put(Key(8, streamIdentity), highWatermark);
                 if (includeLedger)
                 {
