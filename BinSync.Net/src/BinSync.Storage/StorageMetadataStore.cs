@@ -912,7 +912,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     continue;
                 if (!IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
-                if (liveChangeIds.Contains(pair.Key.ChangeId) ||
+                if (pendingApplyChangeIds.Contains(pair.Key.ChangeId) ||
                     streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
                     continue;
@@ -983,6 +983,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var partitionKey = new PartitionKey(scopeId, localReplica);
         List<ChangeIdGcCandidate> candidates;
         MetadataStreamChangeIdBloomFilter streamLiveIds;
+        HashSet<BatchId> pendingApplyChangeIds;
+        ulong initialMetadataRevision;
         Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier;
         lock (_gate)
         {
@@ -1005,7 +1007,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pair.Value.AckedCursor)))
                 return 0;
 
-            HashSet<BatchId> liveChangeIds = BuildPendingApplyChangeIdSet(current, namespaceId);
+            // Every Metadata writer shares writerAdmission. Capture the partition
+            // revision so the post-Host check can revalidate the entire candidate set
+            // with one point read instead of one B+ tree lookup per ChangeId.
+            initialMetadataRevision = current.MetadataRevision;
+            pendingApplyChangeIds = BuildPendingApplyChangeIdSet(current, namespaceId);
             streamLiveIds = BuildMetadataStreamChangeIdBloomFilter(partitionKey, current, namespaceId);
             candidates = new List<ChangeIdGcCandidate>(limit);
             foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
@@ -1048,6 +1054,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             ThrowIfDisposed();
             if (!TryGetPartition(partitionKey, out PartitionState? current))
                 return 0;
+            if (current.MetadataRevision != initialMetadataRevision)
+                return 0;
             if (current.PeerStreams.Any(pair =>
                 pair.Key.NamespaceId == namespaceId &&
                 IsPeerStreamGcReservationOutstanding(
@@ -1055,12 +1063,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pair.Value.PushedCursor,
                     pair.Value.AckedCursor)))
                 return 0;
-            // The Host lease and Metadata writer admission have remained held
-            // since the initial scan, so this signed horizon is still current.
-            HashSet<BatchId> liveChangeIds = BuildPendingApplyChangeIdSet(current, namespaceId);
-            ReportAllocation("metadata-revalidation-pending-set");
+            // The Host lease and shared Metadata writer admission have remained held
+            // since candidate discovery. Every partition mutation advances this
+            // revision atomically with its rows, so one revision check revalidates
+            // the candidate page; per-ChangeId Storage reads would repeat B+ tree work.
             byte[] partitionRoot = PartitionRoot(partitionKey);
-            using StorageSnapshot revalidationSnapshot = _storage.OpenSnapshot();
             // Compact approved entries in the candidate list itself. A second
             // List<(LedgerKey, byte[])> duplicates a large backing array for every
             // GC page; the candidate list is no longer needed after Host revalidation.
@@ -1071,10 +1078,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 LedgerKey key = candidate.Key;
                 ChangeLedgerValue snapshotValue = candidate.Value;
                 if (hostReferenced.Contains(key.ChangeId) ||
-                    liveChangeIds.Contains(key.ChangeId) ||
+                    pendingApplyChangeIds.Contains(key.ChangeId) ||
                     streamLiveIds.MightContain(key.ChangeId) ||
-                    !TryGetChangeLedger(revalidationSnapshot, partitionRoot, current, key, out ChangeLedgerValue? currentValue) ||
-                    !ChangeLedgerValuesEqual(currentValue!, snapshotValue) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, snapshotValue.Provenance))
                     continue;
 
@@ -6252,18 +6257,6 @@ private bool ValidateIncomingBatchForStaging(
             legacyNodeFingerprint,
             outboundSequence);
     }
-
-    private static bool ChangeLedgerValuesEqual(ChangeLedgerValue left, ChangeLedgerValue right)
-        => left.IsLocalOutbound == right.IsLocalOutbound &&
-            left.AuthorNodeId == right.AuthorNodeId &&
-            left.OriginAuthorEpoch == right.OriginAuthorEpoch &&
-            left.OriginSequence == right.OriginSequence &&
-            left.StreamSequence == right.StreamSequence &&
-            left.Fingerprint.AsSpan().SequenceEqual(right.Fingerprint) &&
-            (left.LegacyNodeLedgerFingerprint is null
-                ? right.LegacyNodeLedgerFingerprint is null
-                : right.LegacyNodeLedgerFingerprint is not null &&
-                  left.LegacyNodeLedgerFingerprint.AsSpan().SequenceEqual(right.LegacyNodeLedgerFingerprint));
 
     private static bool ReceiptValuesEqual(ReceiptValue left, ReceiptValue right)
         => left.CursorStart == right.CursorStart &&
