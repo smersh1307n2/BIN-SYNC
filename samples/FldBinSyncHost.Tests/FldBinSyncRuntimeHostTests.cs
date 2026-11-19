@@ -700,10 +700,10 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.Equal(HttpStatusCode.OK, stopped.StatusCode);
             using JsonDocument policy4 = JsonDocument.Parse(await stopped.Content.ReadAsStringAsync());
             Assert.Equal(4UL, policy4.RootElement.GetProperty("generation").GetUInt64());
-            Assert.False(policy2.RootElement.GetProperty("maintenanceStarted").GetBoolean());
-            Assert.False(policy2.RootElement.GetProperty("receiptEnabled").GetBoolean());
-            Assert.False(policy2.RootElement.GetProperty("changeIdEnabled").GetBoolean());
-            Assert.False(policy2.RootElement.GetProperty("tombstoneEnabled").GetBoolean());
+            Assert.False(policy4.RootElement.GetProperty("maintenanceStarted").GetBoolean());
+            Assert.False(policy4.RootElement.GetProperty("receiptEnabled").GetBoolean());
+            Assert.False(policy4.RootElement.GetProperty("changeIdEnabled").GetBoolean());
+            Assert.False(policy4.RootElement.GetProperty("tombstoneEnabled").GetBoolean());
 
             // Simulate an ungraceful process death after the durable stop commit.
             await KillProcess(runtimeHost);
