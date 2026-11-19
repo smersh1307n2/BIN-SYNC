@@ -107,6 +107,9 @@ public sealed class FldBinSyncRuntimeHostTests
 
             Assert.NotNull(acceptedSession);
             await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(3));
+            using HttpResponseMessage activePeerWindow = await client.PostAsync(
+                "/admin/test/hold-idle-maintenance-window?durationMs=200", content: null);
+            Assert.Equal(HttpStatusCode.Conflict, activePeerWindow.StatusCode);
 
             using HttpResponseMessage shutdown = await client.PostAsJsonAsync(
                 "/admin/shutdown", new { reason = "finish idle Tombstone admission-window integration" });
