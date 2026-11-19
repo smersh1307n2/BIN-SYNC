@@ -5373,6 +5373,9 @@ private bool ValidateIncomingBatchForStaging(
     internal int CachedPeerStreamCount => 0;
     internal int CachedPeerRosterIndexCount => 0;
     internal int CachedRetiredPeerEpochCount => 0;
+    internal int CachedReceiveCursorCount => 0;
+    internal int CachedReceiveChainCount => 0;
+    internal int CachedLegacyReceiveChainCount => 0;
 
     private static byte[] PartitionRevisionKey(PartitionKey partitionKey)
     {
@@ -7961,13 +7964,14 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
             foreach (StorageEntry row in page)
             {
-                ReadOnlySpan<byte> key = row.Key.AsSpan(prefix.Length);
-                if (key.Length != 38 || row.Value.Length != 8)
+                byte[] key = row.Key;
+                int offset = prefix.Length;
+                if (key.Length - offset != 38 || row.Value.Length != 8)
                     throw new InvalidDataException("Receive cursor storage row is malformed.");
-                var receiveKey = new ReceiveKey(NodeId.From(key.Slice(0, 16)),
-                    BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                    BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                    NodeId.From(key.Slice(22, 16)));
+                var receiveKey = new ReceiveKey(NodeId.From(key.AsSpan(offset, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(offset + 16)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset + 20)),
+                    NodeId.From(key.AsSpan(offset + 22, 16)));
                 yield return new KeyValuePair<ReceiveKey, ReceiveState>(receiveKey,
                     new ReceiveState(BinaryPrimitives.ReadUInt64LittleEndian(row.Value)));
             }
@@ -8000,13 +8004,14 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
             foreach (StorageEntry row in page)
             {
-                ReadOnlySpan<byte> key = row.Key.AsSpan(prefix.Length);
-                if (key.Length != 38 || row.Value.Length != 16)
+                byte[] key = row.Key;
+                int offset = prefix.Length;
+                if (key.Length - offset != 38 || row.Value.Length != 16)
                     throw new InvalidDataException("Receive digest-chain storage row is malformed.");
-                var chainKey = new ReceiveChainKey(NodeId.From(key.Slice(0, 16)),
-                    BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                    BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)),
-                    NodeId.From(key.Slice(22, 16)));
+                var chainKey = new ReceiveChainKey(NodeId.From(key.AsSpan(offset, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(offset + 16)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset + 20)),
+                    NodeId.From(key.AsSpan(offset + 22, 16)));
                 yield return new KeyValuePair<ReceiveChainKey, ReceiveChainState>(
                     chainKey, new ReceiveChainState(row.Value));
             }
@@ -8041,12 +8046,13 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
             foreach (StorageEntry row in page)
             {
-                ReadOnlySpan<byte> key = row.Key.AsSpan(prefix.Length);
-                if (key.Length != 22 || row.Value.Length != 16)
+                byte[] key = row.Key;
+                int offset = prefix.Length;
+                if (key.Length - offset != 22 || row.Value.Length != 16)
                     throw new InvalidDataException("Legacy receive digest-chain storage row is malformed.");
-                var chainKey = new LegacyReceiveChainKey(NodeId.From(key.Slice(0, 16)),
-                    BinaryPrimitives.ReadUInt32LittleEndian(key.Slice(16)),
-                    BinaryPrimitives.ReadUInt16LittleEndian(key.Slice(20)));
+                var chainKey = new LegacyReceiveChainKey(NodeId.From(key.AsSpan(offset, 16)),
+                    BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(offset + 16)),
+                    BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset + 20)));
                 yield return new KeyValuePair<LegacyReceiveChainKey, ReceiveChainState>(
                     chainKey, new ReceiveChainState(row.Value));
             }
@@ -8482,8 +8488,9 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
 
         public PartitionState CloneForSnapshot()
         {
-            // VolatileSnapshot only reads these seven collections. Do not copy
-            // ChangeLedger, Receipts, PendingApplies, peer indexes or rebuildable caches.
+            // VolatileSnapshot reads bounded control state from its pinned Storage snapshot.
+            // Do not copy disk-primary receipts, receive cursors/digest chains, ChangeLedger,
+            // PendingApplies, peer indexes or rebuildable caches.
             var clone = new PartitionState(PendingApplyMap.Empty, PeerStreamMap.Empty,
                 DiskKeySet<PeerStreamKey>.Empty, DiskKeySet<InterestedPeerKey>.Empty, RetiredPeerEpochMap.Empty,
                 DiskMap<ReceiveKey, ReceiveState>.Empty, DiskMap<ReceiveChainKey, ReceiveChainState>.Empty,
