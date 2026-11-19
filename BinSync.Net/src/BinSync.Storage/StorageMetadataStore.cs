@@ -6686,6 +6686,10 @@ private bool ValidateIncomingBatchForStaging(
             state.InterestedPeers.Any(peer => peer.NamespaceId == key.NamespaceId && peer.Peer != key.Author) ||
             state.RequiredPeerStreams.Any(peer => peer.NamespaceId == key.NamespaceId &&
                 peer.AuthorStream == key.Author && peer.Peer != key.Author);
+        // With no local consumer and no active downstream requirement, old relay
+        // rows may already have been compacted before peers were retired.
+        if (!hasPeerRequirements && !state.RelayAck.ContainsKey(key))
+            return true;
         return hasPeerRequirements && GetSafePeerCursor(state, key.NamespaceId, key.Author) >= highWatermark;
     }
 
