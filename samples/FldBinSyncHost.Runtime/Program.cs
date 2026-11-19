@@ -66,19 +66,40 @@ if (maintenanceIntervalMs is < 100 or > 60000)
 var scheduler = new TestMaintenanceScheduler(
     async cancellationToken =>
     {
-        // Rotate one bounded metadata-GC page per tick while peers are active.
-        // Tombstone replacement remains an idle-window operation: unlike Receipt
-        // and ChangeId compaction, its final FLD checkpoint is an atomic namespace
-        // generation rewrite and is deliberately not placed on the live-peer path.
-        // The operator acquires the admission fence only if its selected domain
-        // is Tombstone. Receipt/ChangeId slices never interrupt new peer admission.
-        await composition!.Operator.RunOneMaintenanceSliceAsync(
-            pageLimit: 256,
-            changeIdPageLimit: 4096,
-            acquireTombstoneMaintenanceWindow: peerRuntime is null
-                ? null
-                : peerRuntime.TryAcquireIdleMaintenanceWindow,
-            cancellationToken: cancellationToken);
+        // A Host reference scan owns the FLD IPC boundary: even Receipt/ChangeId
+        // readiness scans temporarily block provider reads and writes. Do not open
+        // that boundary when every runtime GC domain is stopped, and never start a
+        // scheduled scan while a peer is active. For an enabled domain, acquire the
+        // same admission window used by Tombstone GC around the entire readiness +
+        // compaction slice so a new peer cannot enter between the idle check and scan.
+        bool anyGcDomainEnabled =
+            composition!.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Receipt) ||
+            composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.ChangeId) ||
+            composition.RuntimeControl.IsEnabled(FldBinSyncGcDomain.Tombstone);
+        if (anyGcDomainEnabled)
+        {
+            if (peerRuntime is null)
+            {
+                await composition.Operator.RunOneMaintenanceSliceAsync(
+                    pageLimit: 256,
+                    changeIdPageLimit: 4096,
+                    cancellationToken: cancellationToken);
+            }
+            else
+            {
+                using IDisposable? maintenanceWindow =
+                    peerRuntime.TryAcquireIdleMaintenanceWindow();
+                if (maintenanceWindow is not null)
+                {
+                    await composition.Operator.RunOneMaintenanceSliceAsync(
+                        pageLimit: 256,
+                        changeIdPageLimit: 4096,
+                        acquireTombstoneMaintenanceWindow: null,
+                        cancellationToken: cancellationToken);
+                }
+            }
+        }
+
         if (peerRuntime is not null)
             await peerRuntime.RunOutboundRoundAsync(cancellationToken);
     },

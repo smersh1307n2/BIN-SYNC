@@ -84,9 +84,10 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
     }
 
     /// <summary>
-    /// Excludes new peer admission for one idle-only Tombstone generation rewrite.
-    /// Existing sessions prevent acquisition; admission and acquisition share one gate,
-    /// so a peer cannot slip in between the idle check and the maintenance window.
+    /// Excludes new peer admission while a Host-wide GC reference scan or Tombstone
+    /// generation rewrite is active. Every FLD reference scan owns the IPC boundary,
+    /// so Receipt/ChangeId readiness also requires an idle admission window. Existing
+    /// sessions prevent acquisition; admission and acquisition share one gate.
     /// </summary>
     public IDisposable? TryAcquireIdleMaintenanceWindow()
     {
