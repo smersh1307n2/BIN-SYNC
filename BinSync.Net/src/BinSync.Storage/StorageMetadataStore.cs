@@ -2533,7 +2533,7 @@ private bool ValidateIncomingBatchForStaging(
                 newRelay.Add(relayKey, relayItems = new List<MetadataRelayItem>());
             newLedger.Add(ledgerKey, new ChangeLedgerValue(operation.Fingerprint.ToArray(), false,
                 operation.AuthorNodeId, operation.OriginAuthorEpoch, operation.OriginSequence,
-                OutboundSequence: sequence));
+                StreamSequence: sequence));
             relayItems.Add(new MetadataRelayItem(
                 sequence, operation.AuthorNodeId, operation.ChangeId, operation.Payload.ToArray())
             { Provenance = operation.Provenance });
@@ -2834,11 +2834,11 @@ private bool ValidateIncomingBatchForStaging(
             ChangeLedgerValue frozenLedger = priorLedger
                 ?? throw new InvalidDataException("Frozen outbound ChangeId has no durable ledger identity.");
             MetadataOutboundItem? prior = null;
-            if (frozenLedger.OutboundSequence != 0)
+            if (frozenLedger.StreamSequence != 0)
             {
                 // The durable ChangeId ledger is also the outbound identity index.
                 // Replays use a point lookup, independent of the historical stream length.
-                ulong sequence = frozenLedger.OutboundSequence;
+                ulong sequence = frozenLedger.StreamSequence;
                 byte[] priorPayload = LoadStreamPayloadBody(
                     payloadSnapshot, partitionRoot, 21, namespaceId, localAuthor, sequence, operation.ChangeId);
                 if (!priorPayload.AsSpan().SequenceEqual(operation.Payload))
@@ -2852,7 +2852,7 @@ private bool ValidateIncomingBatchForStaging(
             {
                 // Compatibility for legacy ledger rows written before the sequence
                 // was stored. Scan the B+ tree with a bounded cursor; no header cache.
-                ulong legacySequence = FindOutboundSequenceByChangeId(
+                ulong legacySequence = FindStreamSequenceByChangeId(
                     payloadSnapshot, partitionRoot, namespaceId, localAuthor, operation.ChangeId);
                 if (legacySequence == 0)
                     throw new InvalidDataException("Outbound ChangeId was retried with conflicting author or payload.");
@@ -5552,7 +5552,7 @@ private bool ValidateIncomingBatchForStaging(
             operation.ChangeId.WriteTo(ledgerSuffix.AsSpan(2));
             byte[] ledgerValue = EncodeChangeLedgerValue(new ChangeLedgerValue(
                 operation.Fingerprint.ToArray(), true, localAuthor,
-                item.OriginAuthorEpoch, item.OriginSequence, OutboundSequence: item.Sequence));
+                item.OriginAuthorEpoch, item.OriginSequence, StreamSequence: item.Sequence));
             writes.Add((StorageKey(root, 3, ledgerSuffix), ledgerValue));
         }
 
@@ -5618,7 +5618,7 @@ private bool ValidateIncomingBatchForStaging(
             var frozenItem = frozen[i];
             current.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
                 new ChangeLedgerValue(operation.Fingerprint.ToArray(), true, localAuthor,
-                    frozenItem.OriginAuthorEpoch, frozenItem.OriginSequence, OutboundSequence: frozenItem.Sequence));
+                    frozenItem.OriginAuthorEpoch, frozenItem.OriginSequence, StreamSequence: frozenItem.Sequence));
         }
         current.OutboundHighWatermarks[outboundKey] = highWatermark;
         foreach (var peerStream in newPeerStreams)
@@ -6405,8 +6405,8 @@ private bool ValidateIncomingBatchForStaging(
             : null;
         if (legacyNodeFingerprint is not null && legacyNodeFingerprint.All(b => b == 0))
             throw new InvalidDataException("Stored legacy Node ChangeId fingerprint cannot be zero.");
-        bool hasOutboundSequence = value.Length is 53 or 69;
-        ulong outboundSequence = hasOutboundSequence
+        bool hasStreamSequence = value.Length is 53 or 69;
+        ulong outboundSequence = hasStreamSequence
             ? BinaryPrimitives.ReadUInt64LittleEndian(value.Slice(value.Length == 69 ? 61 : 45, 8))
             : 0;
         return new ChangeLedgerValue(
@@ -6424,7 +6424,7 @@ private bool ValidateIncomingBatchForStaging(
             left.AuthorNodeId == right.AuthorNodeId &&
             left.OriginAuthorEpoch == right.OriginAuthorEpoch &&
             left.OriginSequence == right.OriginSequence &&
-            left.OutboundSequence == right.OutboundSequence &&
+            left.StreamSequence == right.StreamSequence &&
             left.Fingerprint.AsSpan().SequenceEqual(right.Fingerprint) &&
             (left.LegacyNodeLedgerFingerprint is null
                 ? right.LegacyNodeLedgerFingerprint is null
@@ -6618,7 +6618,6 @@ private bool ValidateIncomingBatchForStaging(
             byte[] prefix = StorageKey(partitionRoot, 20, KeyNamespaceAuthor(key.NamespaceId, key.Author));
             using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
             ulong previousSequence = 0;
-            bool first = true;
             while (true)
             {
                 bool keepGoing = true;
@@ -6633,7 +6632,6 @@ private bool ValidateIncomingBatchForStaging(
                         sequence == 0 || sequence > high)
                         throw new InvalidDataException("Relay storage contains a sequence gap or exceeds its high-watermark.");
                     _ = DecodePayloadHeader(row.Value);
-                    first = false;
                     previousSequence = sequence;
                     if (!visitor(key, sequence, row.Value))
                     {
@@ -6767,7 +6765,7 @@ private bool ValidateIncomingBatchForStaging(
         return count;
     }
 
-    private static ulong FindOutboundSequenceByChangeId(
+    private static ulong FindStreamSequenceByChangeId(
         StorageSnapshot snapshot, byte[] partitionRoot,
         int namespaceId, NodeId author, BatchId changeId)
     {
@@ -6834,7 +6832,7 @@ private bool ValidateIncomingBatchForStaging(
             if (!TryGetChangeLedger(snapshot, partitionRoot, state,
                     new LedgerKey(namespaceId, changeId), out ChangeLedgerValue ledger) ||
                 !ledger.IsLocalOutbound || ledger.AuthorNodeId != author ||
-                (ledger.OutboundSequence != 0 && ledger.OutboundSequence != sequence))
+                (ledger.StreamSequence != 0 && ledger.StreamSequence != sequence))
                 throw new InvalidDataException("Outbound payload row has no matching durable ChangeId ledger identity.");
             page[pageCount++] = new MetadataOutboundItem(
                 sequence, author, changeId, rowValue.Slice(20).ToArray())
@@ -7727,7 +7725,7 @@ private bool ValidateIncomingBatchForStaging(
 
 private sealed record ChangeLedgerValue(byte[] Fingerprint, bool IsLocalOutbound,
     NodeId AuthorNodeId, uint OriginAuthorEpoch, ulong OriginSequence,
-    byte[]? LegacyNodeLedgerFingerprint = null, ulong OutboundSequence = 0)
+    byte[]? LegacyNodeLedgerFingerprint = null, ulong StreamSequence = 0)
 {
     public OperationOrigin Provenance => AuthorNodeId.IsZero || OriginAuthorEpoch == 0 || OriginSequence == 0
         ? default : new OperationOrigin(AuthorNodeId, OriginAuthorEpoch, OriginSequence);
@@ -7741,16 +7739,16 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         throw new InvalidDataException("Legacy Node ChangeId fingerprint must be a non-zero 16-byte digest.");
 
     byte[] value = new byte[legacy is null
-        ? (ledger.OutboundSequence == 0 ? 45 : 53)
-        : (ledger.OutboundSequence == 0 ? 61 : 69)];
+        ? (ledger.StreamSequence == 0 ? 45 : 53)
+        : (ledger.StreamSequence == 0 ? 61 : 69)];
     ledger.Fingerprint.CopyTo(value, 0);
     provenance.AuthorNodeId.WriteTo(value.AsSpan(16));
     BinaryPrimitives.WriteUInt32LittleEndian(value.AsSpan(32), provenance.AuthorEpoch);
     BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(36), provenance.Sequence);
     value[44] = ledger.IsLocalOutbound ? (byte)1 : (byte)0;
     legacy?.CopyTo(value, 45);
-    if (ledger.OutboundSequence != 0)
-        BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(legacy is null ? 45 : 61), ledger.OutboundSequence);
+    if (ledger.StreamSequence != 0)
+        BinaryPrimitives.WriteUInt64LittleEndian(value.AsSpan(legacy is null ? 45 : 61), ledger.StreamSequence);
     return value;
 }
 
