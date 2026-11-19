@@ -215,10 +215,21 @@ public sealed class FldFullReplaceBootstrapTests
             await using SyncSession secondTarget = await secondTargetTask;
 
             Task<FullReplaceInstalledAck?> receive = resumedReceiver.ReceiveTransferAsync(secondTarget);
-            FullReplaceInstalledAck acknowledgement = await StorageFullReplaceSender.SendPreparedSnapshotAsync(
-                prepared, secondSource, sourceGcStore, trust, roster, sourceId, sourceSeed)
-                .WaitAsync(TimeSpan.FromSeconds(30));
-            FullReplaceInstalledAck? receiverAck = await receive.WaitAsync(TimeSpan.FromSeconds(30));
+            Task<FullReplaceInstalledAck> send = StorageFullReplaceSender.SendPreparedSnapshotAsync(
+                prepared, secondSource, sourceGcStore, trust, roster, sourceId, sourceSeed);
+            Task firstCompleted = await Task.WhenAny(send, receive).WaitAsync(TimeSpan.FromSeconds(30));
+            FullReplaceInstalledAck acknowledgement;
+            FullReplaceInstalledAck? receiverAck;
+            if (firstCompleted == receive)
+            {
+                receiverAck = await receive;
+                acknowledgement = await send.WaitAsync(TimeSpan.FromSeconds(30));
+            }
+            else
+            {
+                acknowledgement = await send;
+                receiverAck = await receive.WaitAsync(TimeSpan.FromSeconds(30));
+            }
 
             Assert.NotNull(receiverAck);
             Assert.True(acknowledgement.Installed);
