@@ -238,7 +238,7 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, true)]
-    public void Compact_stream_payload_hydration_rejects_missing_or_mismatched_change_id_identity(
+    public void Outbound_page_rejects_missing_or_mismatched_change_id_identity(
         bool includeLedger, bool mismatchedAuthor)
     {
         string directory = Path.Combine(_root, "compact-stream-corruption-" + includeLedger);
@@ -283,6 +283,12 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             {
                 batch.Put(Key(0, ReadOnlySpan<byte>.Empty), identity);
                 batch.Put(Key(21, streamSuffix), compactPayload);
+                byte[] streamIdentity = new byte[18];
+                BinaryPrimitives.WriteUInt16LittleEndian(streamIdentity, namespaceId);
+                local.WriteTo(streamIdentity.AsSpan(2));
+                byte[] highWatermark = new byte[8];
+                BinaryPrimitives.WriteUInt64LittleEndian(highWatermark, 1);
+                batch.Put(Key(8, streamIdentity), highWatermark);
                 if (includeLedger)
                 {
                     byte[] ledgerSuffix = new byte[18];
@@ -300,8 +306,12 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             }
 
             using var metadata = new StorageMetadataStore(storage);
+            ulong lease = metadata.AcquireOutboundLease(
+                scope, local, namespaceId, local, Guid.NewGuid());
+            // Cold load deliberately skips kind-21 history. Integrity is checked
+            // when the bounded outbound page actually consumes the payload row.
             Assert.Throws<InvalidDataException>(() =>
-                metadata.GetOutboundHighWatermark(scope, local, namespaceId, local));
+                metadata.ReadOutbound(scope, local, namespaceId, local, lease, 0, 1));
         }
         finally
         {
