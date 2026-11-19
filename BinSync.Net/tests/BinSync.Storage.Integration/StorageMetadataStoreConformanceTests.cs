@@ -1707,8 +1707,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 store.RegisterInterestedPeer(scope, local, peer, 1, 7);
                 Assert.Equal(beforeRegister + 1, storage.LastCommitSeq);
                 Assert.Equal(0, store.CachedPeerStreamCount);
+                Assert.Equal(0, store.CachedPeerRosterIndexCount);
                 var registered = Assert.Single(store.ReadPeerStreamStates(scope, local, peer, 1, 7));
                 Assert.Equal(0, store.CachedPeerStreamCount);
+                Assert.Equal(0, store.CachedPeerRosterIndexCount);
                 Assert.Equal(author, registered.AuthorStream);
                 Assert.Equal(0UL, registered.State.AckedCursor);
 
@@ -1746,8 +1748,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
             using var reopened = new StorageMetadataStore(storage);
             Assert.Equal(0, reopened.CachedPeerStreamCount);
+            Assert.Equal(0, reopened.CachedPeerRosterIndexCount);
             Assert.Equal(2U, Assert.Single(reopened.ReadInterestedPeers(scope, local, 7)).PeerEpoch);
             Assert.Equal(0, reopened.CachedPeerStreamCount);
+            Assert.Equal(0, reopened.CachedPeerRosterIndexCount);
             Assert.Empty(reopened.ReadPeerStreamStates(scope, local, peer, 1, 7));
             Assert.Equal(2UL, reopened.GetPeerStreamState(scope, local, peer, 2, 7, author).StreamOffset);
             Assert.Equal(1U, reopened.GetRetiredPeerEpoch(scope, local, peer, 7));
