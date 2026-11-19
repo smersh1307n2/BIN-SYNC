@@ -54,6 +54,48 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Current_format_partition_cold_load_skips_full_metadata_history_validation()
+    {
+        string directory = Path.Combine(_root, "disk-primary-cold-load");
+        Directory.CreateDirectory(directory);
+        const string scope = "disk-primary-cold-load";
+        const int namespaceId = 7;
+        NodeId local = Node(1);
+        var operations = Enumerable.Range(1, 64)
+            .Select(i => FrozenOperation((byte)i, (byte)(i + 64)))
+            .ToArray();
+
+        try
+        {
+            using (var storage = StorageDatabase.Open(directory, 475))
+            using (var store = new StorageMetadataStore(storage))
+            {
+                Assert.Equal(64, store.FreezeOutbound(
+                    scope, local, namespaceId, local, operations).Count);
+            }
+
+            using (var storage = StorageDatabase.Open(directory, 475))
+            using (var reopened = new StorageMetadataStore(storage))
+            {
+                int legacyValidationScans = 0;
+                reopened.PartitionColdLoadValidationObserver = () => legacyValidationScans++;
+
+                Assert.Equal(64UL, reopened.GetOutboundHighWatermark(
+                    scope, local, namespaceId, local));
+                ulong lease = reopened.AcquireOutboundLease(
+                    scope, local, namespaceId, local, Guid.NewGuid());
+                Assert.Equal(64, reopened.ReadOutbound(
+                    scope, local, namespaceId, local, lease, 0, 64).Items.Count);
+                Assert.Equal(0, legacyValidationScans);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Outbound_freeze_rejects_missing_origin_epoch_without_allocating_sequence()
     {
         string directory = Path.Combine(_root, "missing-origin-epoch");
