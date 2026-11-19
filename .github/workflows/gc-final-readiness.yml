@@ -1,0 +1,228 @@
+name: BIN-SYNC GC Final Readiness (single integrated run)
+
+on:
+  push:
+    branches:
+      - feature/fld-external-storage
+    paths:
+      - 'BinSync.Net/src/BinSync.Storage/**'
+      - 'samples/FldBinSyncHost/**'
+      - 'samples/FldBinSyncHost.Tests/**'
+      - 'samples/FldBinSyncHost.Runtime/**'
+      - 'external/Fld1.Storage'
+      - 'docs/GC-ENDURANCE-STAGE4.md'
+      - '.github/workflows/gc-final-readiness.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binsync-gc-final-readiness-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  final-readiness:
+    name: GC final readiness (.NET 10, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 100
+    env:
+      ENDURANCE_SECONDS: 900
+    steps:
+      - name: Checkout BIN-SYNC and pinned FLD Storage
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        shell: bash
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Pinned FLD Storage: $sha"
+
+      - name: Checkout exact FLD-DB revision
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build Host, FLD Engine and Storage integration test projects
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB"
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj"
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+          )
+          dotnet build samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release "${common[@]}"
+          dotnet build FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release
+          dotnet build BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release
+
+      - name: Stage 0 — executable Host, durable policy, restart, two-host TCP and live-peer lease
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~FldBinSyncRuntimeHostTests|FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~FldBinSyncGcHostOperationsTests" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=stage0-host-policy.trx" \
+            --results-directory "$RUNNER_TEMP/gc-final-readiness/stage0" \
+            --blame-hang-timeout 8m --blame-hang-dump-type mini
+
+      - name: Stage 1 — ChangeId references, cancellation, durable policy and 4096-page reclaim
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Async_host_adapter_changeid_only_canary_preserves_live_relay_reference_then_reclaims|FullyQualifiedName~Production_composition_restores_changeid_only_policy_and_durable_stop_survives_restart|FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan&DisplayName~candidateCount: 1000&DisplayName~gcPageLimit: 4096" \
+            --logger "console;verbosity=normal" --logger "trx;LogFileName=stage1-changeid.trx" \
+            --results-directory "$RUNNER_TEMP/gc-final-readiness/stage1" --blame-hang-timeout 5m
+
+      - name: Stage 2 — Receipt retirement, WAL seal and replay fence after restart
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Async_host_adapter_receipt_only_canary_reclaims_retired_receipt_and_preserves_replay_fence" \
+            --logger "console;verbosity=normal" --logger "trx;LogFileName=stage2-host.trx" \
+            --results-directory "$RUNNER_TEMP/gc-final-readiness/stage2-host" --blame-hang-timeout 5m
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release \
+            --filter "FullyQualifiedName~Host_gc_reference_scan_exposes_one_immutable_reference_index_and_is_session_owned|FullyQualifiedName~Host_revalidates_exact_tombstone_candidates_and_blocks_relay_references_and_snapshot_pins" \
+            --logger "console;verbosity=normal" --logger "trx;LogFileName=stage2-fld.trx" \
+            --results-directory "$RUNNER_TEMP/gc-final-readiness/stage2-fld" --blame-hang-timeout 5m
+          dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release \
+            --filter "FullyQualifiedName~Receipt_gc_retires_old_epoch_rejoins_new_epoch_and_keeps_replay_fence_after_restart" \
+            --logger "console;verbosity=normal" --logger "trx;LogFileName=stage2-replay.trx" \
+            --results-directory "$RUNNER_TEMP/gc-final-readiness/stage2-replay" --blame-hang-timeout 5m
+
+      - name: Stage 3 — signed Tombstone horizon, peer ACKs, no resurrection and crash cuts
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB"
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj"
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+          )
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore "${common[@]}" \
+            --filter "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references&DisplayName~candidateCount: 1000&DisplayName!~candidateCount: 10000|FullyQualifiedName~Async_coordinator_reclaims_only_signed_safe_tombstones_through_real_host_ipc|FullyQualifiedName~Async_two_host_signed_gc_waits_for_peer_acks_then_reclaims_all_proven_tombstones_on_both_hosts" \
+            --logger "console;verbosity=normal" --logger "trx;LogFileName=stage3-host.trx" \
+            --results-directory "$RUNNER_TEMP/gc-final-readiness/stage3-host" --blame-hang-timeout 10m
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release \
+            --filter "FullyQualifiedName~Field_tombstone_gc_requires_exact_approval_and_does_not_resurrect_old_value|FullyQualifiedName~Record_tombstone_gc_removes_older_fields_but_preserves_newer_fields|FullyQualifiedName~Field_tombstone_is_not_reclaimed_while_its_record_tombstone_is_unproven|FullyQualifiedName~Tombstone_gc_compaction_crash_cuts_recover_one_authoritative_generation" \
+            --logger "console;verbosity=normal" --logger "trx;LogFileName=stage3-fld-crash.trx" \
+            --results-directory "$RUNNER_TEMP/gc-final-readiness/stage3-fld" --blame-hang-timeout 8m
+
+      - name: Scale — isolated 50k, 100k, 250k Tombstone and 50k ChangeId (4096 pages)
+        shell: bash
+        run: |
+          set -euo pipefail
+          common=(
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB"
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj"
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+          )
+          run_case() {
+            local name="$1" filter="$2" timeout="${3:-8m}"
+            echo "::group::Isolated measurement $name"
+            dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore "${common[@]}" \
+              --filter "$filter" --logger "console;verbosity=normal" --logger "trx;LogFileName=$name.trx" \
+              --results-directory "$RUNNER_TEMP/gc-final-readiness/scale/$name" \
+              --blame-hang-timeout "$timeout" --blame-hang-dump-type mini
+            echo "::endgroup::"
+          }
+          for count in 50000 100000 250000; do
+            run_case "tombstone-$count" "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale&DisplayName~candidateCount: $count" 15m
+          done
+          run_case "changeid-50000-page4096" \
+            "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale&DisplayName~candidateCount: 50000&DisplayName~gcPageLimit: 4096" 12m
+
+      - name: Stage 4 — 15-minute repeated full lifecycle endurance
+        shell: bash
+        run: |
+          set -euo pipefail
+          results="$RUNNER_TEMP/gc-final-readiness/endurance"
+          mkdir -p "$results"
+          start=$SECONDS
+          cycle=0
+          common=(
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB"
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj"
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+          )
+          run_host() {
+            local name="$1" filter="$2" output="$results/cycle-$cycle-$name"
+            mkdir -p "$output"
+            dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore "${common[@]}" \
+              --filter "$filter" --logger "console;verbosity=normal" --logger "trx;LogFileName=$name.trx" \
+              --results-directory "$output" --blame-hang-timeout 10m --blame-hang-dump-type mini 2>&1 | tee "$output/$name.log"
+          }
+          run_fld() {
+            local name="$1" project="$2" filter="$3" output="$results/cycle-$cycle-$name"
+            mkdir -p "$output"
+            dotnet test "$project" --configuration Release --filter "$filter" \
+              --logger "console;verbosity=normal" --logger "trx;LogFileName=$name.trx" \
+              --results-directory "$output" --blame-hang-timeout 10m --blame-hang-dump-type mini 2>&1 | tee "$output/$name.log"
+          }
+          while (( SECONDS - start < ENDURANCE_SECONDS )); do
+            cycle=$((cycle + 1))
+            echo "Starting final GC readiness cycle $cycle"
+            run_host "host-lifecycle" "FullyQualifiedName~FldBinSyncRuntimeHostTests"
+            run_host "changeid-canary" "FullyQualifiedName~Async_host_adapter_changeid_only_canary_preserves_live_relay_reference_then_reclaims"
+            run_host "receipt-canary" "FullyQualifiedName~Async_host_adapter_receipt_only_canary_reclaims_retired_receipt_and_preserves_replay_fence"
+            run_host "tombstone-two-host" "FullyQualifiedName~Async_two_host_signed_gc_waits_for_peer_acks_then_reclaims_all_proven_tombstones_on_both_hosts"
+            run_fld "tombstone-crash-cuts" "FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj" "FullyQualifiedName~Tombstone_gc_compaction_crash_cuts_recover_one_authoritative_generation"
+            run_host "changeid-50k-4096" "FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale_uses_real_fld_ipc_reference_scan&DisplayName~candidateCount: 50000&DisplayName~gcPageLimit: 4096"
+            run_host "tombstone-50k-256" "FullyQualifiedName~Async_host_adapter_signed_tombstone_gc_scale_uses_snapshot_spool_and_real_metadata_references&DisplayName~candidateCount: 50000"
+            echo "GC_FINAL_READINESS_CYCLE_PASSED cycle=$cycle elapsed_seconds=$((SECONDS - start))" | tee -a "$results/endurance-summary.log"
+          done
+          if (( cycle < 2 )); then
+            echo "::error::Fewer than two complete cycles finished during the 15-minute endurance window."
+            exit 1
+          fi
+          {
+            echo "# GC Final Readiness Endurance"
+            echo "- OS: $RUNNER_OS"
+            echo "- Complete cycles: $cycle"
+            echo "- Elapsed seconds: $((SECONDS - start))"
+            echo "- ChangeId page limit: 4096"
+            echo "- Receipt/Tombstone page limit: 256"
+            echo "- Disposable test databases only; production GC flags remain off."
+          } > "$results/summary.md"
+
+      - name: Upload complete readiness evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gc-final-readiness-${{ matrix.os }}-${{ github.sha }}
+          path: ${{ runner.temp }}/gc-final-readiness
+          retention-days: 30
+          if-no-files-found: warn
