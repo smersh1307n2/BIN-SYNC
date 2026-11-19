@@ -4929,23 +4929,45 @@ private bool ValidateIncomingBatchForStaging(
 
     private static ulong GetSafePeerCursor(PartitionState state, int namespaceId, NodeId authorStream)
     {
-        var peers = state.InterestedPeers.Where(key => key.NamespaceId == namespaceId && key.Peer != authorStream)
-            .Select(key => (key.Peer, key.PeerEpoch))
-            .Concat(state.RequiredPeerStreams
-                .Where(key => key.NamespaceId == namespaceId && key.AuthorStream == authorStream && key.Peer != authorStream)
-                .Select(key => (key.Peer, key.PeerEpoch)))
-            .Distinct()
-            .ToArray();
-        if (peers.Length == 0) return 0;
         ulong safe = ulong.MaxValue;
-        foreach (var peer in peers)
+        bool found = false;
+
+        // The two durable peer indexes can contain the same peer. Duplicates do not
+        // change a minimum, so process both streams directly without Distinct/ToArray.
+        foreach (InterestedPeerKey peer in state.InterestedPeers)
         {
-            var key = new PeerStreamKey(peer.Peer, peer.PeerEpoch, namespaceId, authorStream);
-            if (!state.CompletedPeerBaselines.Contains(new InterestedPeerKey(namespaceId, peer.Peer, peer.PeerEpoch)) ||
-                !state.PeerStreams.TryGetValue(key, out var progress)) return 0;
-            safe = Math.Min(safe, checked(progress.AckedCursor + progress.StreamOffset));
+            if (peer.NamespaceId != namespaceId || peer.Peer == authorStream) continue;
+            if (!TryGetPeerSafeCursor(state, namespaceId, authorStream, peer.Peer, peer.PeerEpoch, out ulong cursor))
+                return 0;
+            safe = Math.Min(safe, cursor);
+            found = true;
         }
-        return safe == ulong.MaxValue ? 0 : safe;
+        foreach (PeerStreamKey required in state.RequiredPeerStreams)
+        {
+            if (required.NamespaceId != namespaceId || required.AuthorStream != authorStream ||
+                required.Peer == authorStream) continue;
+            if (!TryGetPeerSafeCursor(state, namespaceId, authorStream, required.Peer, required.PeerEpoch, out ulong cursor))
+                return 0;
+            safe = Math.Min(safe, cursor);
+            found = true;
+        }
+        return found ? safe : 0;
+    }
+
+    private static bool TryGetPeerSafeCursor(
+        PartitionState state, int namespaceId, NodeId authorStream,
+        NodeId peer, uint peerEpoch, out ulong cursor)
+    {
+        var rosterKey = new InterestedPeerKey(namespaceId, peer, peerEpoch);
+        var streamKey = new PeerStreamKey(peer, peerEpoch, namespaceId, authorStream);
+        if (!state.CompletedPeerBaselines.Contains(rosterKey) ||
+            !state.PeerStreams.TryGetValue(streamKey, out var progress))
+        {
+            cursor = 0;
+            return false;
+        }
+        cursor = checked(progress.AckedCursor + progress.StreamOffset);
+        return true;
     }
 
     private static void ValidatePendingReservationEpoch(
@@ -5139,12 +5161,9 @@ private bool ValidateIncomingBatchForStaging(
         if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
             return 0;
 
-        ulong cursor = 0;
-        foreach (var pair in state.Receives)
-            if (pair.Key.Sender == sender && pair.Key.Epoch == senderEpoch &&
-                pair.Key.NamespaceId == namespaceId && pair.Value.CursorEnd > cursor)
-                cursor = pair.Value.CursorEnd;
-        return cursor;
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        return GetMaxReceiveCursor(snapshot, new PartitionKey(scopeId, localReplica),
+            sender, senderEpoch, namespaceId);
     
         }
     }
@@ -7410,13 +7429,9 @@ private bool ValidateIncomingBatchForStaging(
 
         public ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId)
         {
-            var state = GetState();
-            ulong cursor = 0;
-            foreach (var pair in _owner.EnumerateReceives(_partitionKey, GetStorageSnapshot()))
-                if (pair.Key.Sender == sender && pair.Key.Epoch == senderEpoch &&
-                    pair.Key.NamespaceId == namespaceId && pair.Value.CursorEnd > cursor)
-                    cursor = pair.Value.CursorEnd;
-            return cursor;
+            _ = GetState();
+            return _owner.GetMaxReceiveCursor(GetStorageSnapshot(), _partitionKey,
+                sender, senderEpoch, namespaceId);
         }
 
         public ulong GetReceiveCursor(NodeId sender, uint senderEpoch, int namespaceId, NodeId authorStream)
@@ -7849,6 +7864,32 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             bool found = TryReadCompletedPendingApply(partitionKey, token, out CompletedPendingApplyValue value);
             return (found, value);
         });
+
+    private ulong GetMaxReceiveCursor(
+        StorageSnapshot snapshot, PartitionKey partitionKey,
+        NodeId sender, uint senderEpoch, int namespaceId)
+    {
+        byte[] suffix = new byte[22];
+        sender.WriteTo(suffix);
+        BinaryPrimitives.WriteUInt32LittleEndian(suffix.AsSpan(16), senderEpoch);
+        BinaryPrimitives.WriteUInt16LittleEndian(suffix.AsSpan(20), checked((ushort)namespaceId));
+        byte[] prefix = StorageKey(PartitionRoot(partitionKey), 2, suffix);
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+        const int pageSize = 64;
+        ulong maximum = 0;
+        while (true)
+        {
+            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
+            foreach (StorageEntry row in page)
+            {
+                if (row.Key.Length != prefix.Length + 16 || row.Value.Length != 8)
+                    throw new InvalidDataException("Receive cursor storage row is malformed.");
+                ulong value = BinaryPrimitives.ReadUInt64LittleEndian(row.Value);
+                if (value > maximum) maximum = value;
+            }
+            if (page.Count < pageSize) return maximum;
+        }
+    }
 
     private static byte[] EncodeReceiveKey(PartitionKey partitionKey, ReceiveKey receive)
     {
