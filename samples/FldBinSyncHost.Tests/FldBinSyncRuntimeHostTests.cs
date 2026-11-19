@@ -154,9 +154,11 @@ public sealed class FldBinSyncRuntimeHostTests
                 metadataRoot, fldRoot, MetadataPartition, localNode, ScopeId,
                 MetadataScopeId, NamespaceId, ProviderClientId,
                 maintenanceIntervalMs: 250);
+            (Uri address, int peerPort) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            // WaitForRuntimeHost owns StandardOutput until it consumes READY. Start
+            // draining both redirected streams only after that read has completed.
             Task<string> runtimeStdout = runtimeHost.StandardOutput.ReadToEndAsync();
             Task<string> runtimeStderr = runtimeHost.StandardError.ReadToEndAsync();
-            (Uri address, int peerPort) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
             using var client = CreateClient(address, OperatorToken);
             await WaitForMaintenanceTick(client, TimeSpan.FromSeconds(20));
 
