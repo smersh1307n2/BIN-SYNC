@@ -5392,9 +5392,7 @@ private bool ValidateIncomingBatchForStaging(
             throw new StorageConflictException(current.StorageCommitSeq, actualBaseCommitSeq);
         batch.Put(storageKey, value);
         CommitPartitionBatch(batch, partitionKey, current);
-        current.Receipts[key] = refreshed;
-        current.StorageCommitSeq = _storage.LastCommitSeq;
-        current.IsPersisted = true;
+        // The refreshed receipt is already durable; the disk-primary map has no shadow entry.
     }
 
     private void PersistStreamWatermark(
@@ -5849,11 +5847,7 @@ private bool ValidateIncomingBatchForStaging(
             batch.Put(rosterRowKey, Array.Empty<byte>());
         CommitPartitionBatch(batch, partitionKey, current);
 
-        current.PeerStreams[key] = value;
-        if (addRequired) current.RequiredPeerStreams.Add(key);
-        if (addRoster) current.InterestedPeers.Add(rosterKey);
-        current.StorageCommitSeq = _storage.LastCommitSeq;
-        current.IsPersisted = true;
+        // Storage is authoritative; no in-memory peer-stream/roster overlay is published.
     }
 
 
