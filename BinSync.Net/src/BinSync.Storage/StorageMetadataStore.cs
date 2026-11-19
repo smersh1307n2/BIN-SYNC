@@ -5308,9 +5308,8 @@ private bool ValidateIncomingBatchForStaging(
         current.MetadataRevision = nextRevision;
         current.StorageCommitSeq = commitSeq;
         current.IsPersisted = true;
-        // Payloads and all metadata maps are disk-primary. No resident overlay is
-        // retained after the durable transaction commits.
-        // Rebuildable ChangeId→sequence index; drop so residency tracks headers, not indexes.
+        // The partition cache contains only bounded adapter state and disk-backed
+        // facades. No per-key metadata map, payload header or ChangeId index is retained.
         return commitSeq;
     }
 
@@ -5407,8 +5406,8 @@ private bool ValidateIncomingBatchForStaging(
         if (storageKind == 5)
         {
             var streamKey = new RelayKey(namespaceId, author);
-            // The ACK map is populated only when the durable watermark row exists;
-            // a newly-created relay stream can have a high watermark but no ACK row yet.
+            // Kind 5 combines ACK and high-watermark. A new relay stream starts
+            // with ACK=0; only a non-zero ACK represents a local consumer here.
             exists = current.RelayAck.TryGetValue(streamKey, out previousAcknowledged);
             current.RelayHighWatermarks.TryGetValue(streamKey, out previousHighWatermark);
         }
