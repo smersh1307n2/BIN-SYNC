@@ -2549,9 +2549,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
 
                 // Volatile snapshots pin the B+ tree generation and page outbound
                 // history directly; they must not depend on a copied header list.
-                using (IMetadataStoreSnapshot snapshot = store.OpenSnapshot(scope, local))
+                using (IMetadataStoreSnapshot pinnedSnapshot = store.OpenSnapshot(scope, local))
                 {
-                    var snapshotPage = snapshot.ReadOutbound(namespaceId, local, 1023, 2);
+                    var snapshotPage = pinnedSnapshot.ReadOutbound(namespaceId, local, 1023, 2);
                     Assert.Equal(new ulong[] { 1024, 1025 },
                         snapshotPage.Items.Select(item => item.Sequence));
                     Assert.Equal(history[^1].Payload, snapshotPage.Items[0].Payload);
