@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/metadata-retry-comparison.yml"
       - "BinSync.Net/bench/BinSync.Bench/MetadataCoordinatorRetryScanBench.cs"
+      - "BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs"
       - "BinSync.Net/src/BinSync.Storage/StorageSyncCoordinator.cs"
       - "BinSync.Net/src/BinSync.Core/Production/Node.ProviderSnapshot.cs"
       - "scripts/vendor-ed25519-from-ztsharp.sh"
@@ -16,16 +17,17 @@ permissions:
 
 jobs:
   compare-retry-paths:
-    name: Full-snapshot baseline vs incremental provider cache
+    name: Disk-primary baseline vs indexed outbound retry
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      BASELINE_SHA: 8e6833e5aa5fe7086dbd72b18cf71e45f30169c9
+      BASELINE_SHA: a871750f283f2bd378284ad0c42b551248931cd3
     steps:
       - name: Checkout current branch with history
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
@@ -35,9 +37,10 @@ jobs:
       - name: Create baseline worktree
         run: git worktree add --detach "$RUNNER_TEMP/baseline" "$BASELINE_SHA"
 
-      - name: Run full-snapshot baseline
+      - name: Run disk-primary pre-index baseline
         run: |
           set -euo pipefail
+          git -C "$RUNNER_TEMP/baseline" submodule update --init --recursive
           cd "$RUNNER_TEMP/baseline"
           bash scripts/vendor-ed25519-from-ztsharp.sh
           cd BinSync.Net
@@ -84,7 +87,7 @@ jobs:
               factor = {"B": 1/1024, "KB": 1.0, "MB": 1024.0}[match.group(2)]
               return float(match.group(1)) * factor
           print("## Same-runner coordinator retry comparison")
-          print("Baseline: full provider snapshot rehydration at " + __import__("os").environ["BASELINE_SHA"])
+          print("Baseline: disk-primary StorageMetadataStore before outbound sequence index at " + __import__("os").environ["BASELINE_SHA"])
           print("Both versions ran sequentially on this workflow job with the same Ubuntu runner and .NET 10 SDK.")
           print("| Feed rows | Baseline ms | Incremental ms | Latency reduction | Baseline KB | Incremental KB | Allocation reduction |")
           print("|---:|---:|---:|---:|---:|---:|---:|")
