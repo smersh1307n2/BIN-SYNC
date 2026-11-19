@@ -152,7 +152,7 @@ public sealed class FldFullReplaceBootstrapTests
                 targetNode, firstToTarget, FullReplaceCapabilities());
             Task<SyncSession> firstSourceTask = SyncSession.ConnectAsync(
                 sourceNode, firstToSource, FullReplaceCapabilities());
-            await Task.WhenAll(firstTargetTask, firstSourceTask);
+            await Task.WhenAll(firstTargetTask, firstSourceTask).WaitAsync(TimeSpan.FromSeconds(30));
             SyncSession firstSource = await firstSourceTask;
             SyncSession firstTarget = await firstTargetTask;
             Task<FullReplaceInstalledAck> firstSend = StorageFullReplaceSender.SendPreparedSnapshotAsync(
@@ -160,14 +160,14 @@ public sealed class FldFullReplaceBootstrapTests
 
             FullReplaceTransferProtocol.Begin firstManifest =
                 await firstTarget.ReceiveFullReplaceBeginAsync(
-                    NamespaceId, roster, trust, expectedFrameSequence: 1);
+                    NamespaceId, roster, trust, expectedFrameSequence: 1).WaitAsync(TimeSpan.FromSeconds(30));
             StorageFullReplaceReceiver firstReceiver = CreateReceiver();
             ProviderFullReplaceProgress firstProgress = firstReceiver.Begin(firstManifest);
             Assert.Equal(0, firstProgress.NextIndex);
             await firstTarget.SendFullReplaceReadyAsync(firstReceiver.GetWireProgress(), frameSequence: 1);
 
             FullReplaceTransferProtocol.Chunk firstChunk =
-                await firstTarget.ReceiveFullReplaceChunkAsync(NamespaceId, expectedFrameSequence: 2);
+                await firstTarget.ReceiveFullReplaceChunkAsync(NamespaceId, expectedFrameSequence: 2).WaitAsync(TimeSpan.FromSeconds(30));
             Assert.Equal(FullReplaceTransferProtocol.MaxChunkEntries, firstChunk.Entries.Count);
             ProviderFullReplaceProgress staged = firstReceiver.Stage(firstChunk);
             Assert.Equal(FullReplaceTransferProtocol.MaxChunkEntries, staged.NextIndex);
@@ -196,7 +196,7 @@ public sealed class FldFullReplaceBootstrapTests
             targetNode = null;
 
             // Reopen the same FLD directory. BEGIN must recover the staging cursor,
-            // and the sender must resume at entry 256 without retransmitting page zero.
+            // and the sender must resume at entry 4096 without retransmitting page zero.
             targetDatabase = FldDatabase.Open(targetFldRoot, NamespaceId, targetId.ToArray());
             targetProvider = new FldDatabaseDataProvider(targetDatabase, static () => 1);
             targetNode = new NodeBuilder().WithNodeId(targetId).WithEpoch(8).Build();
@@ -210,13 +210,14 @@ public sealed class FldFullReplaceBootstrapTests
                 targetNode!, secondToTarget, FullReplaceCapabilities());
             Task<SyncSession> secondSourceTask = SyncSession.ConnectAsync(
                 sourceNode, secondToSource, FullReplaceCapabilities());
-            await Task.WhenAll(secondTargetTask, secondSourceTask);
+            await Task.WhenAll(secondTargetTask, secondSourceTask).WaitAsync(TimeSpan.FromSeconds(30));
             await using SyncSession secondSource = await secondSourceTask;
             await using SyncSession secondTarget = await secondTargetTask;
 
             Task<FullReplaceInstalledAck?> receive = resumedReceiver.ReceiveTransferAsync(secondTarget);
             FullReplaceInstalledAck acknowledgement = await StorageFullReplaceSender.SendPreparedSnapshotAsync(
-                prepared, secondSource, sourceGcStore, trust, roster, sourceId, sourceSeed);
+                prepared, secondSource, sourceGcStore, trust, roster, sourceId, sourceSeed)
+                .WaitAsync(TimeSpan.FromSeconds(30));
             FullReplaceInstalledAck? receiverAck = await receive.WaitAsync(TimeSpan.FromSeconds(30));
 
             Assert.NotNull(receiverAck);
