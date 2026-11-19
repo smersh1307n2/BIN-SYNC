@@ -320,6 +320,89 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Outbound_freeze_retry_rejects_sequence_index_pointing_at_another_change_id()
+    {
+        string directory = Path.Combine(_root, "outbound-index-mismatch");
+        Directory.CreateDirectory(directory);
+        const string scope = "outbound-index-mismatch-scope";
+        const int namespaceId = 7;
+        NodeId local = Node(1);
+        byte[] scopeBytes = Encoding.UTF8.GetBytes(scope);
+        byte[] root = new byte[49];
+        root[0] = 0x70;
+        SHA256.HashData(scopeBytes).CopyTo(root, 1);
+        local.WriteTo(root.AsSpan(33));
+        byte[] identity = new byte[8 + scopeBytes.Length];
+        BinaryPrimitives.WriteUInt32LittleEndian(identity, 0x33534D42);
+        BinaryPrimitives.WriteInt32LittleEndian(identity.AsSpan(4), scopeBytes.Length);
+        scopeBytes.CopyTo(identity, 8);
+
+        byte[] Key(byte kind, ReadOnlySpan<byte> suffix)
+        {
+            byte[] key = new byte[root.Length + 1 + suffix.Length];
+            root.CopyTo(key, 0);
+            key[root.Length] = kind;
+            suffix.CopyTo(key.AsSpan(root.Length + 1));
+            return key;
+        }
+
+        byte[] ledgerSuffix = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(ledgerSuffix, namespaceId);
+        Batch(91).WriteTo(ledgerSuffix.AsSpan(2));
+        byte[] ledgerValue = new byte[53];
+        Enumerable.Repeat((byte)9, 16).ToArray().CopyTo(ledgerValue, 0);
+        local.WriteTo(ledgerValue.AsSpan(16));
+        BinaryPrimitives.WriteUInt32LittleEndian(ledgerValue.AsSpan(32), 7);
+        BinaryPrimitives.WriteUInt64LittleEndian(ledgerValue.AsSpan(36), 1);
+        ledgerValue[44] = 1;
+        BinaryPrimitives.WriteUInt64LittleEndian(ledgerValue.AsSpan(45), 1);
+
+        byte[] streamSuffix = new byte[26];
+        BinaryPrimitives.WriteUInt16LittleEndian(streamSuffix, namespaceId);
+        local.WriteTo(streamSuffix.AsSpan(2));
+        BinaryPrimitives.WriteUInt64BigEndian(streamSuffix.AsSpan(18), 1);
+        byte[] payloadRow = new byte[22];
+        Batch(92).WriteTo(payloadRow);
+        BinaryPrimitives.WriteInt32LittleEndian(payloadRow.AsSpan(16), 2);
+        payloadRow[20] = 0xAA;
+        payloadRow[21] = 0xBB;
+
+        byte[] watermarkSuffix = new byte[18];
+        BinaryPrimitives.WriteUInt16LittleEndian(watermarkSuffix, namespaceId);
+        local.WriteTo(watermarkSuffix.AsSpan(2));
+        byte[] watermark = new byte[8];
+        BinaryPrimitives.WriteUInt64LittleEndian(watermark, 1);
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 472);
+            using (var batch = storage.BeginWriteBatch())
+            {
+                batch.Put(Key(0, ReadOnlySpan<byte>.Empty), identity);
+                batch.Put(Key(3, ledgerSuffix), ledgerValue);
+                batch.Put(Key(8, watermarkSuffix), watermark);
+                batch.Put(Key(21, streamSuffix), payloadRow);
+                batch.Commit();
+            }
+
+            using var metadata = new StorageMetadataStore(storage);
+            var retry = new MetadataFrozenOperation
+            {
+                ChangeId = Batch(91),
+                Fingerprint = Enumerable.Repeat((byte)9, 16).ToArray(),
+                Payload = new byte[] { 0xAA, 0xBB },
+                OriginAuthorEpoch = 7
+            };
+            Assert.Throws<InvalidDataException>(() =>
+                metadata.FreezeOutbound(scope, local, namespaceId, local, new[] { retry }));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Legacy_stream_payload_row_kinds_are_rejected_without_migration()
     {
         string directory = Path.Combine(_root, "legacy-stream-payload");
