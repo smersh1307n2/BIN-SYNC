@@ -127,6 +127,9 @@ public sealed class FldFullReplaceBootstrapTests
             });
             targetProvider.AcknowledgeLocalChanges(targetFeed.ScannedThroughSequence);
             Trace("target-seed-published-and-acked");
+            Trace("target-checkpoint-start");
+            ulong targetCheckpoint = targetDatabase.Checkpoint();
+            Trace($"target-checkpoint-complete sequence={targetCheckpoint}");
 
             targetNode = new NodeBuilder().WithNodeId(targetId).WithEpoch(8).Build();
             var targetCoordinator = new StorageSyncCoordinator(
