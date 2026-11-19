@@ -925,11 +925,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             IReadOnlyList<byte[]> deletes = new ChangeIdTupleStorageKeyView(candidates);
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
-                () =>
-                {
-                    foreach (var item in candidates)
-                        current.ChangeLedger.Remove(item.Key);
-                });
+                static () => { });
             return candidates.Count;
         }
     }
@@ -1093,11 +1089,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             ReportAllocation("metadata-revalidation-delete-view");
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
-                () =>
-                {
-                    for (int i = 0; i < approvedCount; i++)
-                        current.ChangeLedger.Remove(candidates[i].Key);
-                });
+                static () => { });
             ReportAllocation("metadata-revalidation-storage-commit");
             int reclaimed = approvedCount;
             if (allocationObserver is not null)
@@ -1348,11 +1340,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             byte[][] deletes = approved.Select(item => item.StorageKey).ToArray();
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
-                () =>
-                {
-                    foreach ((ReceiptKey key, _) in approved)
-                        current.Receipts.Remove(key);
-                });
+                static () => { });
             return approved.Count;
         }
     }
@@ -1508,11 +1496,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 .ToArray();
             CommitPeerMetadataDelta(partitionKey, current,
                 Array.Empty<(byte[] Key, byte[] Value)>(), deletes,
-                () =>
-                {
-                    foreach (ReceiptKey key in candidates)
-                        current.Receipts.Remove(key);
-                });
+                static () => { });
             return candidates.Count;
         }
     }
@@ -2380,27 +2364,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         // Completed-apply marker is already durable in the write batch; do not retain it in RAM.
         if (isNewReceipt)
         {
-            current.Receipts.Add(receiptKey, new ReceiptValue(incoming.CursorStart, incoming.CursorEnd,
-                incoming.PreviousBatchDigest.ToArray(), incoming.BatchDigest.ToArray(),
-                receipt.NewRelayOperationCount, receipt.DurableAuthor, incoming.HeaderFingerprint.ToArray(), incoming.TransportPeerEpoch, GetMaxOriginSequence(incoming)));
-            current.Receives[new ReceiveKey(incoming.SenderPeer, incoming.SenderEpoch,
-                incoming.NamespaceId, ResolveAuthorStream(incoming))] = new ReceiveState(incoming.CursorEnd);
-            if (legacyTargetKey is { } migratedTarget && migratedTarget != chainKey &&
-                legacyTargetState is { } migratedTargetState)
-                current.ReceiveChains[migratedTarget] =
-                    new ReceiveChainState(migratedTargetState.LastBatchDigest.ToArray());
-            current.ReceiveChains[chainKey] = new ReceiveChainState(incoming.BatchDigest.ToArray());
-            if (legacyChainKey is { } migratedLegacy)
-                current.LegacyReceiveChains.Remove(migratedLegacy);
-        }
-        else if (refreshedReceipt is not null)
-        {
-            current.Receipts[receiptKey] = refreshedReceipt;
-        }
-        foreach (var item in newLedger) current.ChangeLedger.Add(item.Key, item.Value);
-        foreach (var pair in relayHigh) current.RelayHighWatermarks[pair.Key] = pair.Value;
-        foreach (var pair in newPeerStreams) current.PeerStreams.Add(pair.Key, pair.Value);
-        foreach (var key in newRequiredStreams) current.RequiredPeerStreams.Add(key);
 
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
@@ -2755,25 +2718,6 @@ private bool ValidateIncomingBatchForStaging(
             storageBatch.Delete(legacyChainDeleteKey);
         CommitPartitionBatch(storageBatch, partitionKey, current);
 
-        current.Receipts.Add(receiptKey, new ReceiptValue(batch.CursorStart, batch.CursorEnd,
-            batch.PreviousBatchDigest.ToArray(), batch.BatchDigest.ToArray(), relayAdded,
-            receipt.DurableAuthor, batch.HeaderFingerprint.ToArray(), batch.TransportPeerEpoch, GetMaxOriginSequence(batch)));
-        current.Receives[receiveKey] = new ReceiveState(batch.CursorEnd);
-        if (legacyTargetKey is { } migratedTarget && migratedTarget != chainKey &&
-            legacyTargetState is { } migratedTargetState)
-            current.ReceiveChains[migratedTarget] =
-                new ReceiveChainState(migratedTargetState.LastBatchDigest.ToArray());
-        current.ReceiveChains[chainKey] = new ReceiveChainState(batch.BatchDigest.ToArray());
-        if (legacyChainKey is { } migratedLegacy)
-            current.LegacyReceiveChains.Remove(migratedLegacy);
-        foreach (var pair in newLedger)
-            current.ChangeLedger.Add(pair.Key, pair.Value);
-        foreach (var pair in relayHigh)
-            current.RelayHighWatermarks[pair.Key] = pair.Value;
-        foreach (var pair in peerStreamStates)
-            current.PeerStreams.Add(pair.Key, pair.Value);
-        foreach (var key in requiredStreams)
-            current.RequiredPeerStreams.Add(key);
 
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
@@ -4010,14 +3954,7 @@ private bool ValidateIncomingBatchForStaging(
             foreach (var key in requiredKeys)
                 writes.Add((EncodeRequiredPeerStreamKey(partitionKey, key), Array.Empty<byte>()));
 
-            CommitPeerMetadataDelta(partitionKey, current, writes, Array.Empty<byte[]>(), () =>
-            {
-                current.InterestedPeers.Add(rosterKey);
-                foreach (var key in streamKeys)
-                    current.PeerStreams.Add(key, EmptyPeerStreamValue());
-                foreach (var key in requiredKeys)
-                    current.RequiredPeerStreams.Add(key);
-            });
+            CommitPeerMetadataDelta(partitionKey, current, writes, Array.Empty<byte[]>(), static () => { });
         }
     }
 
@@ -4132,14 +4069,7 @@ private bool ValidateIncomingBatchForStaging(
                 }
             }
             baselineWrites.Add((EncodeCompletedPeerBaselineKey(partitionKey, rosterKey), Array.Empty<byte>()));
-            CommitPeerMetadataDelta(partitionKey, current, baselineWrites, Array.Empty<byte[]>(), () =>
-            {
-                foreach (var item in baselineStates)
-                    current.PeerStreams[item.Key] = item.Value;
-                foreach (var key in newRequired)
-                    current.RequiredPeerStreams.Add(key);
-                current.CompletedPeerBaselines.Add(rosterKey);
-            });
+            CommitPeerMetadataDelta(partitionKey, current, baselineWrites, Array.Empty<byte[]>(), static () => { });
         }
     }
 
@@ -4514,31 +4444,7 @@ private bool ValidateIncomingBatchForStaging(
             }
 
             writes.Add((markerKey, markerValue));
-            CommitPeerMetadataDelta(partitionKey, current, writes, deletes, () =>
-            {
-                foreach (var update in peerUpdates)
-                    current.PeerStreams[update.Key] = update.Value;
-                foreach (PeerStreamKey key in requiredAdds)
-                    current.RequiredPeerStreams.Add(key);
-                foreach (InterestedPeerKey key in interestedAdds)
-                    current.InterestedPeers.Add(key);
-                foreach (InterestedPeerKey key in completedAdds)
-                    current.CompletedPeerBaselines.Add(key);
-                foreach (var update in receiveUpdates)
-                {
-                    current.Receives[update.Key] = update.Value;
-                    current.ReceiveChains[update.ChainKey] = update.ChainValue;
-                }
-                foreach (LegacyReceiveChainKey key in legacyDeletes)
-                    current.LegacyReceiveChains.Remove(key);
-                foreach (NamespaceRosterMember retired in acceptedRoster.Members.Where(member =>
-                             member.Status == NamespaceMemberStatus.Retired && member.RetiredThroughEpoch != 0))
-                {
-                    if (!current.RetiredPeerEpochs.TryGetValue((namespaceId, retired.NodeId), out uint priorFence) ||
-                        priorFence < retired.RetiredThroughEpoch)
-                        current.RetiredPeerEpochs[(namespaceId, retired.NodeId)] = retired.RetiredThroughEpoch;
-                }
-            });
+            CommitPeerMetadataDelta(partitionKey, current, writes, deletes, static () => { });
             return true;
         }
     }
@@ -4719,16 +4625,7 @@ private bool ValidateIncomingBatchForStaging(
             {
                 (EncodeRetiredPeerEpochKey(partitionKey, namespaceId, peer), retiredValue)
             };
-            CommitPeerMetadataDelta(partitionKey, current, writes, deletes, () =>
-            {
-                current.InterestedPeers.Remove(oldRosterKey);
-                current.CompletedPeerBaselines.Remove(oldRosterKey);
-                foreach (var key in oldStreams)
-                    current.PeerStreams.Remove(key);
-                foreach (var key in oldRequired)
-                    current.RequiredPeerStreams.Remove(key);
-                current.RetiredPeerEpochs[retiredKey] = nextRetiredThrough;
-            });
+            CommitPeerMetadataDelta(partitionKey, current, writes, deletes, static () => { });
         }
     }
 
@@ -4990,26 +4887,6 @@ private bool ValidateIncomingBatchForStaging(
             .Select(key => key.PeerEpoch).DefaultIfEmpty(0U).Max();
         if (peerEpoch < latestActiveEpoch)
             throw new InvalidDataException("Peer session epoch is stale relative to the durable namespace roster.");
-    }
-
-    private static void EnsurePeerStream(PartitionState state, PeerStreamKey key, uint issuerEpoch)
-    {
-        if (!state.PeerStreams.ContainsKey(key))
-            state.PeerStreams.Add(key, new PeerStreamStateValue(0, 0, 0, issuerEpoch, new byte[16], null));
-        state.RequiredPeerStreams.Add(key);
-    }
-
-    private static void EnsureRegisteredPeerStreams(
-        PartitionState state, int namespaceId, NodeId authorStream, uint issuerEpoch)
-    {
-        var peers = state.InterestedPeers.Where(key => key.NamespaceId == namespaceId)
-            .Select(key => (key.Peer, key.PeerEpoch))
-            .Concat(state.RequiredPeerStreams.Where(key => key.NamespaceId == namespaceId)
-                .Select(key => (key.Peer, key.PeerEpoch)))
-            .Distinct();
-        foreach (var peer in peers.Where(peer => peer.Peer != authorStream))
-            EnsurePeerStream(state,
-                new PeerStreamKey(peer.Peer, peer.PeerEpoch, namespaceId, authorStream), issuerEpoch);
     }
 
     private static void ValidatePeerStreamArguments(string scopeId, NodeId localReplica,
@@ -5438,9 +5315,6 @@ private bool ValidateIncomingBatchForStaging(
         current.IsPersisted = true;
         // Payloads and all metadata maps are disk-primary. No resident overlay is
         // retained after the durable transaction commits.
-        current.ChangeLedger.Clear();
-        current.Receipts.Clear();
-        current.CompletedPendingApplies.Clear();
         // Rebuildable ChangeId→sequence index; drop so residency tracks headers, not indexes.
         return commitSeq;
     }
@@ -5564,10 +5438,6 @@ private bool ValidateIncomingBatchForStaging(
         batch.Put(key, value);
         CommitPartitionBatch(batch, partitionKey, current);
 
-        if (storageKind == 5)
-            current.RelayAck[new RelayKey(namespaceId, author)] = acknowledged;
-        else
-            current.OutboundAck[new OutboundKey(namespaceId, author)] = acknowledged;
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
     }
@@ -5731,21 +5601,6 @@ private bool ValidateIncomingBatchForStaging(
             batch.Put(write.Key, write.Value);
         CommitPartitionBatch(batch, partitionKey, current);
 
-        foreach (var originWatermark in originHighWatermarks)
-            current.OriginHighWatermarks[originWatermark.Key] = originWatermark.Value;
-        for (int i = 0; i < operations.Count; i++)
-        {
-            var operation = operations[i];
-            var frozenItem = frozen[i];
-            current.ChangeLedger.Add(new LedgerKey(namespaceId, operation.ChangeId),
-                new ChangeLedgerValue(operation.Fingerprint.ToArray(), true, localAuthor,
-                    frozenItem.OriginAuthorEpoch, frozenItem.OriginSequence, StreamSequence: frozenItem.Sequence));
-        }
-        current.OutboundHighWatermarks[outboundKey] = highWatermark;
-        foreach (var peerStream in newPeerStreams)
-            current.PeerStreams.Add(peerStream.Key, peerStream.Value);
-        foreach (var required in newRequiredStreams)
-            current.RequiredPeerStreams.Add(required);
 
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
@@ -5774,7 +5629,6 @@ private bool ValidateIncomingBatchForStaging(
             batch.Put(identityKey, identityValue!);
         batch.Put(storageKey, value);
         CommitPartitionBatch(batch, partitionKey, current);
-        current.OutboundLeases[key] = lease;
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
     }
@@ -5798,7 +5652,6 @@ private bool ValidateIncomingBatchForStaging(
         batch.Put(key, value);
         CommitPartitionBatch(batch, partitionKey, current);
 
-        current.CompletedPeerBaselines.Add(peer);
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
     }
@@ -5880,9 +5733,7 @@ private bool ValidateIncomingBatchForStaging(
         ReportAllocation("fld-storage-commit");
 
         publish();
-        current.StorageCommitSeq = _storage.LastCommitSeq;
-        current.IsPersisted = true;
-        ReportAllocation("metadata-cache-publish");
+        ReportAllocation("metadata-commit-complete");
     }
 
     private static byte[] EncodeReceiptKey(PartitionKey partitionKey, ReceiptKey receipt)
