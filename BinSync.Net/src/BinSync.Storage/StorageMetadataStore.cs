@@ -3774,14 +3774,9 @@ private bool ValidateIncomingBatchForStaging(
                 receiveKeys.Add(new ReceiveKey(key.Sender, key.Epoch, key.NamespaceId, key.AuthorStream));
             foreach (LegacyReceiveChainKey legacy in current.LegacyReceiveChains.Keys.Where(key => key.NamespaceId == namespaceId))
             {
-                NodeId[] established = current.Receives
-                    .Where(pair => pair.Key.Sender == legacy.Sender &&
-                        pair.Key.Epoch == legacy.Epoch && pair.Key.NamespaceId == namespaceId &&
-                        pair.Value.CursorEnd != 0)
-                    .Select(pair => pair.Key.AuthorStream).Distinct().ToArray();
-                if (established.Length != 1)
+                if (!TryGetSingleEstablishedAuthor(current, legacy, out NodeId establishedAuthor))
                     throw new InvalidDataException("Ambiguous legacy sender-wide receive digest chain blocks MBR1 capture.");
-                receiveKeys.Add(new ReceiveKey(legacy.Sender, legacy.Epoch, namespaceId, established[0]));
+                receiveKeys.Add(new ReceiveKey(legacy.Sender, legacy.Epoch, namespaceId, establishedAuthor));
             }
 
             var receives = new List<MetadataBaselineReceiveEntry>(receiveKeys.Count);
@@ -4411,15 +4406,10 @@ private bool ValidateIncomingBatchForStaging(
 
             foreach (var legacy in current.LegacyReceiveChains.Keys.Where(key => key.NamespaceId == namespaceId))
             {
-                NodeId[] established = current.Receives
-                    .Where(pair => pair.Key.Sender == legacy.Sender &&
-                        pair.Key.Epoch == legacy.Epoch && pair.Key.NamespaceId == namespaceId &&
-                        pair.Value.CursorEnd != 0)
-                    .Select(pair => pair.Key.AuthorStream).Distinct().ToArray();
-                if (established.Length != 1 ||
-                    !reportReceiveKeys.Contains((legacy.Sender, legacy.Epoch, established[0])) ||
+                if (!TryGetSingleEstablishedAuthor(current, legacy, out NodeId establishedAuthor) ||
+                    !reportReceiveKeys.Contains((legacy.Sender, legacy.Epoch, establishedAuthor)) ||
                     current.ReceiveChains.ContainsKey(new ReceiveChainKey(
-                        legacy.Sender, legacy.Epoch, namespaceId, established[0])))
+                        legacy.Sender, legacy.Epoch, namespaceId, establishedAuthor)))
                     throw new InvalidDataException("Ambiguous legacy sender-wide receive digest chain blocks FULL_REPLACE baseline.");
             }
 
@@ -7685,6 +7675,27 @@ private bool ValidateIncomingBatchForStaging(
     private readonly record struct ReceiveState(ulong CursorEnd);
     private readonly record struct ReceiveChainState(byte[] LastBatchDigest);
 
+    private static bool TryGetSingleEstablishedAuthor(
+        PartitionState state, LegacyReceiveChainKey legacy, out NodeId author)
+    {
+        bool found = false;
+        author = default;
+        foreach (var pair in state.Receives)
+        {
+            if (pair.Key.Sender != legacy.Sender || pair.Key.Epoch != legacy.Epoch ||
+                pair.Key.NamespaceId != legacy.NamespaceId || pair.Value.CursorEnd == 0)
+                continue;
+            if (found && pair.Key.AuthorStream != author)
+            {
+                author = default;
+                return false;
+            }
+            author = pair.Key.AuthorStream;
+            found = true;
+        }
+        return found;
+    }
+
     private static ReceiveChainState GetReceiveChainStateForAuthor(
         PartitionState state, ReceiveKey receiveKey,
         out LegacyReceiveChainKey? legacyKey,
@@ -7713,23 +7724,15 @@ private bool ValidateIncomingBatchForStaging(
             return new ReceiveChainState(new byte[16]);
         }
 
-        NodeId[] establishedAuthors = state.Receives
-            .Where(pair => pair.Key.Sender == receiveKey.Sender &&
-                pair.Key.Epoch == receiveKey.Epoch &&
-                pair.Key.NamespaceId == receiveKey.NamespaceId &&
-                pair.Value.CursorEnd != 0)
-            .Select(pair => pair.Key.AuthorStream)
-            .Distinct()
-            .ToArray();
-        if (establishedAuthors.Length != 1)
+        if (!TryGetSingleEstablishedAuthor(state, legacy, out NodeId establishedAuthor))
             throw new InvalidDataException(
                 "Legacy sender-wide digest chain is ambiguous across author streams; a FULL_REPLACE baseline is required.");
 
         legacyKey = legacy;
         legacyTargetKey = new ReceiveChainKey(receiveKey.Sender, receiveKey.Epoch,
-            receiveKey.NamespaceId, establishedAuthors[0]);
+            receiveKey.NamespaceId, establishedAuthor);
         legacyTargetState = legacyState;
-        return establishedAuthors[0] == receiveKey.AuthorStream
+        return establishedAuthor == receiveKey.AuthorStream
             ? legacyState
             : new ReceiveChainState(new byte[16]);
     }
@@ -7742,15 +7745,8 @@ private bool ValidateIncomingBatchForStaging(
         if (state.ReceiveChains.ContainsKey(key))
             return !state.LegacyReceiveChains.ContainsKey(legacy);
         if (!state.LegacyReceiveChains.ContainsKey(legacy)) return false;
-        NodeId[] establishedAuthors = state.Receives
-            .Where(pair => pair.Key.Sender == receiveKey.Sender &&
-                pair.Key.Epoch == receiveKey.Epoch &&
-                pair.Key.NamespaceId == receiveKey.NamespaceId &&
-                pair.Value.CursorEnd != 0)
-            .Select(pair => pair.Key.AuthorStream)
-            .Distinct()
-            .ToArray();
-        return establishedAuthors.Length == 1 && establishedAuthors[0] == receiveKey.AuthorStream;
+        return TryGetSingleEstablishedAuthor(state, legacy, out NodeId establishedAuthor) &&
+            establishedAuthor == receiveKey.AuthorStream;
     }
 
     private static byte[] EncodeReceiveChainKey(PartitionKey partitionKey, ReceiveChainKey chain)
