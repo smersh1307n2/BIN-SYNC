@@ -5417,11 +5417,8 @@ private bool ValidateIncomingBatchForStaging(
         current.MetadataRevision = nextRevision;
         current.StorageCommitSeq = commitSeq;
         current.IsPersisted = true;
-        // Stream payload bodies and structural ledger/receipt rows are durable after
-        // this commit. Drop cached bodies and ledger/receipt overlays so residency
-        // stays proportional to stream headers and small control maps.
-        ReleaseCachedStreamPayloadBodies(current);
-        current.Relay.Clear();
+        // Payloads and all metadata maps are disk-primary. No resident overlay is
+        // retained after the durable transaction commits.
         current.ChangeLedger.Clear();
         current.Receipts.Clear();
         current.CompletedPendingApplies.Clear();
@@ -6108,21 +6105,6 @@ private bool ValidateIncomingBatchForStaging(
             pair.Key.ChangeId.WriteTo(suffix.AsSpan(2));
             byte[] value = EncodeChangeLedgerValue(pair.Value);
             Add(StorageKey(root, 3, suffix), value);
-        }
-
-        foreach (var pair in state.Relay)
-        {
-            foreach (var item in pair.Value)
-            {
-                byte[] suffix = new byte[26];
-                BinaryPrimitives.WriteUInt16LittleEndian(suffix, checked((ushort)pair.Key.NamespaceId));
-                pair.Key.Author.WriteTo(suffix.AsSpan(2));
-                BinaryPrimitives.WriteUInt64BigEndian(suffix.AsSpan(18), item.Sequence);
-                if (item.Payload.Length == 0)
-                    throw new InvalidOperationException("StateEntries requires in-memory stream payload bodies.");
-                byte[] value = EncodePayloadItem(item.ChangeId, item.Payload);
-                Add(StorageKey(root, 20, suffix), value);
-            }
         }
 
         var relayWatermarkKeys = new HashSet<RelayKey>(state.RelayAck.Keys);
@@ -7189,62 +7171,6 @@ private bool ValidateIncomingBatchForStaging(
         => cached.Length > 0
             ? cached
             : LoadStreamPayloadBody(snapshot, partitionRoot, kind, namespaceId, author, sequence);
-
-    private void HydrateCachedStreamPayloadBodies(PartitionKey partitionKey, PartitionState state)
-    {
-        using StorageSnapshot snapshot = _storage.OpenSnapshot();
-        byte[] partitionRoot = PartitionRoot(partitionKey);
-        foreach (var pair in state.Relay)
-        {
-            List<MetadataRelayItem> items = pair.Value;
-            for (int i = 0; i < items.Count; i++)
-            {
-                MetadataRelayItem item = items[i];
-                if (item.Payload.Length > 0) continue;
-                byte[] payload = LoadStreamPayloadBody(
-                    snapshot, partitionRoot, 20, pair.Key.NamespaceId, pair.Key.Author, item.Sequence);
-                items[i] = new MetadataRelayItem(item.Sequence, item.OriginalAuthor, item.ChangeId, payload)
-                {
-                    Provenance = item.Provenance
-                };
-            }
-        }
-    }
-
-    private static void ReleaseCachedStreamPayloadBodies(PartitionState state)
-    {
-        foreach (var pair in state.Relay)
-        {
-            List<MetadataRelayItem> items = pair.Value;
-            for (int i = 0; i < items.Count; i++)
-            {
-                MetadataRelayItem item = items[i];
-                if (item.Payload.Length == 0) continue;
-                items[i] = new MetadataRelayItem(item.Sequence, item.OriginalAuthor, item.ChangeId, Array.Empty<byte>())
-                {
-                    Provenance = item.Provenance
-                };
-            }
-        }
-    }
-
-    private void HydrateStreamProvenance(PartitionKey partitionKey, PartitionState state)
-    {
-        using StorageSnapshot snapshot = _storage.OpenSnapshot();
-        byte[] partitionRoot = PartitionRoot(partitionKey);
-        foreach (var (key, items) in state.Relay)
-        {
-            for (int i = 0; i < items.Count; i++)
-            {
-                var item = items[i];
-                var provenance = ResolvePayloadProvenance(snapshot, partitionRoot, state, key.NamespaceId, key.Author,
-                    item.ChangeId, isLocalOutbound: false);
-                items[i] = new MetadataRelayItem(item.Sequence, item.OriginalAuthor,
-                    item.ChangeId, item.Payload) { Provenance = provenance };
-            }
-        }
-
-    }
 
     private OperationOrigin ResolvePayloadProvenance(PartitionKey partitionKey, PartitionState state, int namespaceId,
         NodeId author, BatchId changeId, bool isLocalOutbound)
@@ -8888,7 +8814,6 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
         public DiskMap<ReceiveChainKey, ReceiveChainState> ReceiveChains { get; }
         public DiskMap<LegacyReceiveChainKey, ReceiveChainState> LegacyReceiveChains { get; }
         public DiskMap<LedgerKey, ChangeLedgerValue> ChangeLedger { get; }
-        public Dictionary<RelayKey, List<MetadataRelayItem>> Relay { get; } = new();
         // Rebuildable in-memory index only; ChangeId→sequence is never duplicated on disk.
         public DiskMap<RelayKey, ulong> RelayAck { get; }
         public DiskMap<RelayKey, ulong> RelayHighWatermarks { get; }
