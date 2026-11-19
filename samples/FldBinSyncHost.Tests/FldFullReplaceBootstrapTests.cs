@@ -98,7 +98,7 @@ public sealed class FldFullReplaceBootstrapTests
                 changeId: Id(0x710001),
                 fieldId: 0x2222,
                 author: rowAuthor,
-                originSequence: 700001,
+                originSequence: 1,
                 value: "obsolete-target-row"u8.ToArray());
             _ = targetProvider.ApplyRemoteBatch(Guid.NewGuid(), new[] { oldTargetRow });
 
