@@ -16,6 +16,7 @@ public sealed class FldFullReplaceBootstrapTests
 {
     private const ushort NamespaceId = 0x638;
     private const string Scope = "fld-full-replace-bootstrap";
+    private const int EntryCount = FullReplaceTransferProtocol.MaxChunkEntries + 1;
 
     private sealed class CallbackLease(Action release) : IDisposable
     {
@@ -134,7 +135,7 @@ public sealed class FldFullReplaceBootstrapTests
                 targetMetadata,
                 baselineReportSequence: 1);
 
-            // First connection stages exactly one canonical 256-entry page. We then
+            // First connection stages exactly one maximum-size canonical page. We then
             // close the receiver database as if its process died before COMMIT/ACK.
             var (firstToSource, firstToTarget) = PipeTransport.CreatePair();
             Task<SyncSession> firstTargetTask = SyncSession.AcceptAsync(
@@ -157,9 +158,9 @@ public sealed class FldFullReplaceBootstrapTests
 
             FullReplaceTransferProtocol.Chunk firstChunk =
                 await firstTarget.ReceiveFullReplaceChunkAsync(NamespaceId, expectedFrameSequence: 2);
-            Assert.Equal(256, firstChunk.Entries.Count);
+            Assert.Equal(FullReplaceTransferProtocol.MaxChunkEntries, firstChunk.Entries.Count);
             ProviderFullReplaceProgress staged = firstReceiver.Stage(firstChunk);
-            Assert.Equal(256, staged.NextIndex);
+            Assert.Equal(FullReplaceTransferProtocol.MaxChunkEntries, staged.NextIndex);
             Assert.False(staged.IsCommitted);
 
             await firstSource.DisposeAsync();
@@ -213,22 +214,22 @@ public sealed class FldFullReplaceBootstrapTests
             Assert.True(targetMetadata.IsPeerInitialSyncComplete(
                 Scope, targetId, sourceId, 7, NamespaceId));
             Assert.Equal(prepared.Generation, acknowledgement.Generation);
-            Assert.Equal(257, prepared.ExpectedEntryCount);
+            Assert.Equal(EntryCount, prepared.ExpectedEntryCount);
             Assert.Equal(targetId, acknowledgement.MemberNodeId);
             Assert.Equal(8U, acknowledgement.MemberTransportEpoch);
 
             Assert.False(targetDatabase!.TryGetBytes(oldTargetRow.RecordId.ToArray(), oldTargetRow.FieldId, out _),
                 "The previous target generation must be replaced, not merged.");
-            for (int i = 0; i < 257; i++)
+            for (int i = 0; i < EntryCount; i++)
             {
                 Assert.True(targetDatabase!.TryGetBytes(Id(0x100000 + i), 0x1111, out byte[]? value));
                 Assert.Equal(Encoding.UTF8.GetBytes($"source-row-{i:D3}"), value);
             }
 
-            Assert.True(targetDatabase!.TryResolve(Id(0x100100), 0x1111, out var metadata));
-            Assert.Equal(Id(0x200100), metadata.ChangeId);
+            Assert.True(targetDatabase!.TryResolve(Id(0x100000 + EntryCount - 1), 0x1111, out var metadata));
+            Assert.Equal(Id(0x200000 + EntryCount - 1), metadata.ChangeId);
             Assert.Equal(1U, metadata.OriginAuthorEpoch);
-            Assert.Equal(257UL, metadata.OriginSequence);
+            Assert.Equal((ulong)EntryCount, metadata.OriginSequence);
 
             FullReplaceInstalledAck accepted = Assert.Single(
                 sourceGcStore.ReadFullReplaceInstalledAcks(roster, prepared.Generation));
@@ -252,7 +253,7 @@ public sealed class FldFullReplaceBootstrapTests
             // Publish the source's own local feed, stamp immutable Origin values,
             // then ACK that feed so the FULL_REPLACE snapshot contains no drafts.
             FldDatabaseDataProvider provider = sourceProvider;
-            var mutations = new ProviderMutation[257];
+            var mutations = new ProviderMutation[EntryCount];
             for (int i = 0; i < mutations.Length; i++)
             {
                 mutations[i] = Mutation(
@@ -265,14 +266,27 @@ public sealed class FldFullReplaceBootstrapTests
                 provider.AppendLocalChange(mutations[i]);
             }
 
-            ProviderChangePage feed = provider.ReadLocalChanges(0, 4096);
-            Assert.Equal(257, feed.Changes.Count);
-            var published = new ProviderPublishedOrigin[feed.Changes.Count];
+            var changes = new List<ProviderChange>(EntryCount);
+            ulong cursor = 0;
+            ulong highWatermark = provider.LocalChangeHighWatermark;
+            while (cursor < highWatermark)
+            {
+                ProviderChangePage page = provider.ReadLocalChanges(cursor, 4096);
+                changes.AddRange(page.Changes);
+                if (page.ScannedThroughSequence <= cursor)
+                    throw new InvalidDataException("FLD source feed did not advance while preparing the full-replace snapshot.");
+                cursor = page.ScannedThroughSequence;
+            }
+
+            Assert.Equal(EntryCount, changes.Count);
+            var published = new ProviderPublishedOrigin[changes.Count];
             for (int i = 0; i < published.Length; i++)
                 published[i] = new ProviderPublishedOrigin(
-                    feed.Changes[i], new OperationOrigin(sourceId, 1, checked((ulong)i + 1)));
-            provider.CommitPublishedOrigins(published);
-            provider.AcknowledgeLocalChanges(feed.ScannedThroughSequence);
+                    changes[i], new OperationOrigin(sourceId, 1, checked((ulong)i + 1)));
+            for (int offset = 0; offset < published.Length; offset += 4096)
+                provider.CommitPublishedOrigins(
+                    published.Skip(offset).Take(Math.Min(4096, published.Length - offset)).ToArray());
+            provider.AcknowledgeLocalChanges(cursor);
 
             return StorageFullReplaceSender.PrepareSnapshot(
                 provider, trust, roster, sourceId, Guid.NewGuid(), sourceSeed);
