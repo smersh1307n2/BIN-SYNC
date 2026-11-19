@@ -66,18 +66,15 @@ if (maintenanceIntervalMs is < 100 or > 60000)
 var scheduler = new TestMaintenanceScheduler(
     async cancellationToken =>
     {
-        // The test Host conservatively yields the FLD Host-wide GC lease while
-        // any peer is connected. Sync publication has priority; GC resumes when
-        // the peer set becomes empty.
-        if (peerRuntime is not null && peerRuntime.ActivePeers > 0)
-        {
-            await peerRuntime.RunOutboundRoundAsync(cancellationToken);
-            return;
-        }
-
-        await composition!.Operator.RunOneMaintenanceRoundAsync(
+        // Rotate one bounded metadata-GC page per tick while peers are active.
+        // Tombstone replacement remains an idle-window operation: unlike Receipt
+        // and ChangeId compaction, its final FLD checkpoint is an atomic namespace
+        // generation rewrite and is deliberately not placed on the live-peer path.
+        bool hasActivePeers = peerRuntime is not null && peerRuntime.ActivePeers > 0;
+        await composition!.Operator.RunOneMaintenanceSliceAsync(
             pageLimit: 256,
             changeIdPageLimit: 4096,
+            allowTombstone: !hasActivePeers,
             cancellationToken: cancellationToken);
         if (peerRuntime is not null)
             await peerRuntime.RunOutboundRoundAsync(cancellationToken);
