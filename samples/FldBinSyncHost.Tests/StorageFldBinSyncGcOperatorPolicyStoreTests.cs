@@ -77,18 +77,19 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
 
             // Model a concurrent Node checkpoint, which uses this exact shared
             // StorageDatabase transaction gate but does not take Metadata admission.
-            Task gateHolder = Task.Run(() =>
+            Task gateHolder = Task.Factory.StartNew(() =>
             {
                 using IDisposable held = metadata.AcquireStorageTransactionGate();
                 gateEntered.Set();
                 if (!releaseGate.Wait(TimeSpan.FromSeconds(10)))
                     throw new TimeoutException("Test did not release the shared Storage transaction gate.");
-            });
+            }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             Assert.True(gateEntered.Wait(TimeSpan.FromSeconds(5)));
 
             var (policy, audit) = Next(1, 1, receipt: true);
-            Task<bool> commit = Task.Run(async () =>
-                await store.TryCommitAsync(0, policy, audit));
+            Task<bool> commit = Task.Factory.StartNew(
+                () => store.TryCommitAsync(0, policy, audit).AsTask().GetAwaiter().GetResult(),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             bool remainedBlocked;
             try
             {
