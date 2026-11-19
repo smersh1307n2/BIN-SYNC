@@ -84,7 +84,7 @@ public sealed class FldFullReplaceBootstrapTests
         FldDatabaseDataProvider? targetProvider = null;
         Node? targetNode = null;
         Node sourceNode = new NodeBuilder().WithNodeId(sourceId).WithEpoch(7).Build();
-        using PreparedFullReplaceSnapshot prepared = CreateSourceSnapshot();
+        PreparedFullReplaceSnapshot prepared = CreateSourceSnapshot();
 
         try
         {
@@ -222,6 +222,7 @@ public sealed class FldFullReplaceBootstrapTests
             targetProvider?.Dispose();
             targetDatabase?.Dispose();
             targetNode?.Dispose();
+            prepared.Dispose();
             sourceProvider.Dispose();
             sourceDatabase.Dispose();
             sourceNode.Dispose();
