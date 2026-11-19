@@ -609,7 +609,8 @@ public sealed class AsyncStorageSyncCoordinator
                         if (!stampedOrigin.IsValid)
                             throw new InvalidDataException(
                                 "Stamped async provider feed row has an invalid immutable Origin.");
-                        recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, stampedOrigin));
+                        // The durable feed receipt and current-state stamp were
+                        // committed atomically; do not restamp or reread this row.
                         previouslyFrozen = true;
                     }
                     else if (identityStore.TryGetOutboundChangeIdentity(
