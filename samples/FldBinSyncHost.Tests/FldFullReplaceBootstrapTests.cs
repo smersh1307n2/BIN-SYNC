@@ -95,7 +95,7 @@ public sealed class FldFullReplaceBootstrapTests
             // The target starts with a different, durable remote row. FULL_REPLACE
             // must remove it atomically rather than merely append the source snapshot.
             ProviderMutation oldTargetRow = Mutation(
-                recordId: Id(0x700001),
+                recordId: Id(1),
                 changeId: Id(0x710001),
                 fieldId: 0x2222,
                 author: targetId,
