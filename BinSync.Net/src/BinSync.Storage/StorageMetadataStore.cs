@@ -6765,6 +6765,7 @@ private bool ValidateIncomingBatchForStaging(
     {
         byteBudgetLimited = false;
         if (limit <= 0) return Array.Empty<MetadataOutboundItem>();
+        bool budgetLimited = false;
         int pageLimit = Math.Min(limit, MaxOutboundPageItems);
         byte[] prefix = StorageKey(partitionRoot, 21, KeyNamespaceAuthor(namespaceId, author));
         byte[] afterKey = afterSequence == 0
@@ -6780,7 +6781,7 @@ private bool ValidateIncomingBatchForStaging(
             ReadOnlySpan<byte> rowValue = row.Value;
             if (page.Count > 0 && rowValue.Length > MaxOutboundPageBytes - encodedPageBytes)
             {
-                byteBudgetLimited = true;
+                budgetLimited = true;
                 return false;
             }
             encodedPageBytes = checked(encodedPageBytes + rowValue.Length);
@@ -6806,6 +6807,7 @@ private bool ValidateIncomingBatchForStaging(
             });
             return true;
         });
+        byteBudgetLimited = budgetLimited;
         return page.ToArray();
     }
 
