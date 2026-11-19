@@ -146,7 +146,7 @@ public sealed class FldFullReplaceBootstrapTests
             await firstTarget.SendFullReplaceReadyAsync(firstReceiver.GetWireProgress(), frameSequence: 1);
 
             FullReplaceTransferProtocol.Chunk firstChunk =
-                await firstTarget.ReceiveFullReplaceChunkAsync(NamespaceId, expectedFrameSequence: 1);
+                await firstTarget.ReceiveFullReplaceChunkAsync(NamespaceId, expectedFrameSequence: 2);
             Assert.Equal(256, firstChunk.Entries.Count);
             ProviderFullReplaceProgress staged = firstReceiver.Stage(firstChunk);
             Assert.Equal(256, staged.NextIndex);
