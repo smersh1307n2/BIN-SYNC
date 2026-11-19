@@ -195,7 +195,7 @@ public sealed class FldFullReplaceBootstrapTests
             Assert.NotNull(receiverAck);
             Assert.True(acknowledgement.Installed);
             Assert.Equal(prepared.Generation, acknowledgement.Generation);
-            Assert.Equal(prepared.ExpectedEntryCount, 257);
+            Assert.Equal(257, prepared.ExpectedEntryCount);
             Assert.Equal(targetId, acknowledgement.MemberNodeId);
             Assert.Equal(8U, acknowledgement.MemberTransportEpoch);
 
@@ -207,7 +207,7 @@ public sealed class FldFullReplaceBootstrapTests
                 Assert.Equal(Encoding.UTF8.GetBytes($"source-row-{i:D3}"), value);
             }
 
-            Assert.True(targetDatabase!.TryResolve(Id(0x100100), 0x1111, out FieldResolver.Resolved metadata));
+            Assert.True(targetDatabase!.TryResolve(Id(0x100100), 0x1111, out var metadata));
             Assert.Equal(Id(0x200100), metadata.ChangeId);
             Assert.Equal(1U, metadata.OriginAuthorEpoch);
             Assert.Equal(257UL, metadata.OriginSequence);
