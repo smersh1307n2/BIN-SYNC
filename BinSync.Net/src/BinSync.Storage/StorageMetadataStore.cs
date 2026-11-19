@@ -2375,7 +2375,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             CommitPartitionBatch(storageBatch, partitionKey, current);
         }
 
-        current.PendingApplies.Remove(applyToken);
+        // PendingApply deletion is already durable in the write batch; the disk-backed
+        // view observes it immediately without publishing a resident dictionary mutation.
         // Completed-apply marker is already durable in the write batch; do not retain it in RAM.
         if (isNewReceipt)
         {
@@ -5798,7 +5799,7 @@ private bool ValidateIncomingBatchForStaging(
         batch.Put(key, encoded);
         CommitPartitionBatch(batch, partitionKey, current);
 
-        current.PendingApplies.Add(applyToken, value);
+        // The disk-backed PendingApply view reads the just-committed row on demand.
         current.StorageCommitSeq = _storage.LastCommitSeq;
         current.IsPersisted = true;
     }
@@ -7951,11 +7952,6 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             value = found;
             return true;
         }
-
-        // Mutations are deliberately storage-first: callers invoke Add/Remove only
-        // after the corresponding WAL-backed Storage batch has committed.
-        public void Add(Guid key, PendingApplyValue value) { }
-        public bool Remove(Guid key) => false;
 
         public IEnumerator<KeyValuePair<Guid, PendingApplyValue>> GetEnumerator()
             => _enumerate().GetEnumerator();
