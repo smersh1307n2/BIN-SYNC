@@ -87,7 +87,8 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
             Assert.True(gateEntered.Wait(TimeSpan.FromSeconds(5)));
 
             var (policy, audit) = Next(1, 1, receipt: true);
-            Task<bool> commit = store.TryCommitAsync(0, policy, audit).AsTask();
+            Task<bool> commit = Task.Run(async () =>
+                await store.TryCommitAsync(0, policy, audit));
             bool remainedBlocked;
             try
             {
