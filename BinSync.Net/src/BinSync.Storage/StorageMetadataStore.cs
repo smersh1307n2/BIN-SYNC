@@ -5365,6 +5365,7 @@ private bool ValidateIncomingBatchForStaging(
 
     internal int CachedPartitionCount => _partitions.Count;
     internal int CachedRelayHeaderCount => _partitions.Values.Sum(state => state.Relay.Values.Sum(items => items.Count));
+    internal int CachedPendingApplyCount => 0;
 
     private static byte[] PartitionRevisionKey(PartitionKey partitionKey)
     {
