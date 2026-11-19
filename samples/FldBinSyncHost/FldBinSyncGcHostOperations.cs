@@ -171,7 +171,7 @@ public sealed class FldBinSyncGcHostOperations
     public async Task<FldBinSyncAsyncGcPassResult> RunOneMaintenanceSliceAsync(
         int pageLimit = 256,
         int changeIdPageLimit = FldBinSyncAsyncHostAdapter.DefaultChangeIdGcPageLimit,
-        bool allowTombstone = true,
+        Func<IDisposable?>? acquireTombstoneMaintenanceWindow = null,
         CancellationToken cancellationToken = default)
     {
         if (pageLimit is < 1 or > 4096)
@@ -200,8 +200,12 @@ public sealed class FldBinSyncGcHostOperations
                         _gcStore, _trustStore, changeIdPageLimit, cancellationToken).ConfigureAwait(false);
                     return new FldBinSyncAsyncGcPassResult(readiness, 0, reclaimed, 0);
                 }
-                case 2 when allowTombstone && readiness.Tombstones.ReadyForAttempt:
+                case 2 when readiness.Tombstones.ReadyForAttempt:
                 {
+                    using IDisposable? idleWindow = acquireTombstoneMaintenanceWindow?.Invoke();
+                    if (acquireTombstoneMaintenanceWindow is not null && idleWindow is null)
+                        break;
+
                     int reclaimed = await _adapter.RunTombstoneGcPassAsync(
                         _gcStore, _trustStore, pageLimit, cancellationToken).ConfigureAwait(false);
                     return new FldBinSyncAsyncGcPassResult(readiness, 0, 0, reclaimed);
