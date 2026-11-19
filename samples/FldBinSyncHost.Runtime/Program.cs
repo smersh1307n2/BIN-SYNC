@@ -225,13 +225,29 @@ try
         lastPeerError = peerRuntime.LastError
     }));
 
-    // Test-only ACK visibility: a published stream remains pending until the
-    // remote durable apply is acknowledged and the sender commits that receipt.
-    app.MapGet("/admin/test/pending-outbound", () => Results.Ok(new
+    // Test-only ACK visibility. ReadOutboundAuthors is a set of author feed
+    // identities, not a pending-delivery count: it intentionally remains populated
+    // after ACK. Inspect each interested peer's durable in-flight reservation instead.
+    app.MapGet("/admin/test/pending-outbound", () =>
     {
-        pendingOutboundAuthors = composition!.MetadataStore.ReadOutboundAuthors(
-            scopeId, node.NodeId, namespaceId).Count
-    }));
+        var pending = composition!.MetadataStore.ReadInterestedPeers(
+                scopeId, node.NodeId, namespaceId)
+            .SelectMany(peer => composition.MetadataStore.ReadPeerStreamStates(
+                scopeId, node.NodeId, peer.Peer, peer.PeerEpoch, namespaceId))
+            .Where(stream => stream.State.PendingBatch is not null)
+            .Select(stream => new
+            {
+                author = Convert.ToHexString(stream.AuthorStream.ToArray()),
+                cursorStart = stream.State.PendingBatch!.CursorStart,
+                cursorEnd = stream.State.PendingBatch.CursorEnd
+            })
+            .ToArray();
+        return Results.Ok(new
+        {
+            pendingOutboundBatches = pending.Length,
+            pending
+        });
+    });
 
     app.MapPost("/admin/test/verify-empty-namespace", async (CancellationToken cancellationToken) =>
     {
