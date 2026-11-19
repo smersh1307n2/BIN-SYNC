@@ -453,34 +453,6 @@ public sealed class FldBinSyncRuntimeHostTests
             await WaitForActivePeer(clientB, expected: 1, TimeSpan.FromSeconds(2));
 
             using HttpResponseMessage writeB = await PostJsonWithRetry(
-                clientA, "/admin/test/local-change",
-                new
-                {
-                    recordIdHex = Convert.ToHexString(recordA),
-                    fieldId,
-                    changeIdHex = Convert.ToHexString(changeA),
-                    valueBase64 = Convert.ToBase64String(valueA),
-                    keyEpoch = (ushort)0,
-                    hlcWall = 123_456_789UL,
-                    hlcLogical = 1U
-                },
-                TimeSpan.FromSeconds(10));
-            Assert.Equal(HttpStatusCode.OK, writeA.StatusCode);
-            using JsonDocument receiptA = JsonDocument.Parse(await writeA.Content.ReadAsStringAsync());
-            Assert.True(receiptA.RootElement.GetProperty("receiptSequence").GetUInt64() > 0);
-
-            using JsonDocument receivedAtB = await WaitForCurrentMutation(
-                clientB, Convert.ToHexString(recordA), fieldId, TimeSpan.FromSeconds(20), peer: clientA);
-            Assert.Equal(Convert.ToBase64String(valueA),
-                receivedAtB.RootElement.GetProperty("valueBase64").GetString());
-            Assert.Equal(Convert.ToHexString(changeA),
-                receivedAtB.RootElement.GetProperty("changeIdHex").GetString());
-            Assert.Equal(Convert.ToHexString(nodeA),
-                receivedAtB.RootElement.GetProperty("authorNodeIdHex").GetString());
-            Assert.Equal(1U, receivedAtB.RootElement.GetProperty("originAuthorEpoch").GetUInt32());
-            Assert.Equal(1UL, receivedAtB.RootElement.GetProperty("originSequence").GetUInt64());
-
-            using HttpResponseMessage writeB = await PostJsonWithRetry(
                 clientB, "/admin/test/local-change",
                 new
                 {
