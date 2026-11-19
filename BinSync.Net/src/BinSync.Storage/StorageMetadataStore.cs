@@ -6049,15 +6049,17 @@ private bool ValidateIncomingBatchForStaging(
     private static IEnumerable<StorageEntry> EnumeratePartitionRows(
         StorageSnapshot snapshot, byte[] root)
     {
-        // Cold partition hydration is limited to bounded control state. Receipts (1),
-        // PendingApply payloads (12), completed-apply markers (13), ChangeId ledger rows
-        // (3), relay headers (20) and outbound headers/payloads (21) are disk-primary.
-        // Their readers use exact-key or bounded prefix cursors; unrelated operations
-        // must not hydrate their payloads into a resident PartitionState.
+        // All cardinality-bearing metadata keyspaces are disk-primary and skipped here:
+        // receipts (1), receive cursors (2), ChangeId ledger (3), stream watermarks (5/8),
+        // leases (10), PendingApply intents/completions (12/13), receive digest chains (14/25),
+        // peer state/rosters (15/16/17/18/19), relay/outbound payloads (20/21),
+        // origin allocators (22), and FULL_REPLACE commit markers (26). Their readers use
+        // exact-key lookups or bounded prefix pages; cold hydration only sees the partition
+        // identity and any genuinely bounded control rows.
         const int pageSize = 512;
         for (byte kind = 0; kind <= 26; kind++)
         {
-            if (kind is 1 or 2 or 3 or 5 or 8 or 10 or 12 or 13 or 14 or 15 or 16 or 17 or 18 or 19 or 20 or 21 or 22 or 25) continue;
+            if (kind is 1 or 2 or 3 or 5 or 8 or 10 or 12 or 13 or 14 or 15 or 16 or 17 or 18 or 19 or 20 or 21 or 22 or 25 or 26) continue;
             byte[] prefix = new byte[root.Length + 1];
             root.CopyTo(prefix, 0);
             prefix[^1] = kind;
