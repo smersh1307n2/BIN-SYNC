@@ -6813,6 +6813,7 @@ private bool ValidateIncomingBatchForStaging(
             ReadOnlySpan<byte> rowValue = row.Value;
             if (rowValue.Length > MaxStreamPayloadBytes + 20)
                 throw new InvalidDataException("Outbound payload exceeds the protocol maximum.");
+            bool oversizedFirstRow = pageCount == 0 && rowValue.Length > MaxOutboundPageBytes;
             if (pageCount > 0 && rowValue.Length > MaxOutboundPageBytes - encodedPageBytes)
             {
                 budgetLimited = true;
@@ -6839,6 +6840,11 @@ private bool ValidateIncomingBatchForStaging(
             {
                 Provenance = ledger.Provenance
             };
+            if (oversizedFirstRow)
+            {
+                budgetLimited = true;
+                return false;
+            }
             return true;
         });
         byteBudgetLimited = budgetLimited;
@@ -6871,6 +6877,7 @@ private bool ValidateIncomingBatchForStaging(
             ReadOnlySpan<byte> rowValue = row.Value;
             if (rowValue.Length > MaxStreamPayloadBytes + 20)
                 throw new InvalidDataException("Relay payload exceeds the protocol maximum.");
+            bool oversizedFirstRow = count == 0 && rowValue.Length > MaxOutboundPageBytes;
             if (count > 0 && rowValue.Length > MaxOutboundPageBytes - encodedPageBytes)
             {
                 budgetLimited = true;
@@ -6896,6 +6903,11 @@ private bool ValidateIncomingBatchForStaging(
             page[count++] = new MetadataRelayItem(
                 sequence, author, changeId, rowValue.Slice(20).ToArray())
             { Provenance = ledger.Provenance };
+            if (oversizedFirstRow)
+            {
+                budgetLimited = true;
+                return false;
+            }
             return true;
         });
 
