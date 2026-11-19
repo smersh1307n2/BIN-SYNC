@@ -232,6 +232,51 @@ public sealed class StorageDataProviderConformanceTests : DataProviderConformanc
     }
 
     [Fact]
+    public void Published_origin_is_stamped_into_durable_local_feed_for_ack_retry()
+    {
+        string directory = Path.Combine(_root, "published-origin-feed-receipt");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            ProviderChange published;
+            OperationOrigin origin;
+            using (var provider = new StorageDataProvider(directory, partitionId: 97, deleteOnDispose: false))
+            {
+                provider.AppendLocalChange(Mutation(12, 8, 120, 1));
+                ProviderChange draft = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+                Assert.Equal(0UL, draft.Mutation.OriginSequence);
+
+                origin = new OperationOrigin(
+                    draft.Mutation.AuthorNodeId,
+                    draft.Mutation.OriginAuthorEpoch,
+                    17);
+                provider.CommitPublishedOrigins(new[] { new ProviderPublishedOrigin(draft, origin) });
+
+                published = Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+                Assert.Equal(draft.ChangeId, published.ChangeId);
+                Assert.Equal(origin.Sequence, published.Mutation.OriginSequence);
+
+                // Repeating the same durable receipt is idempotent.
+                provider.CommitPublishedOrigins(new[] { new ProviderPublishedOrigin(published, origin) });
+                Assert.Equal(origin.Sequence,
+                    Assert.Single(provider.ReadLocalChanges(0, 10).Changes).Mutation.OriginSequence);
+            }
+
+            using var reopened = new StorageDataProvider(directory, partitionId: 97, deleteOnDispose: false);
+            ProviderChange replayed = Assert.Single(reopened.ReadLocalChanges(0, 10).Changes);
+            Assert.Equal(published.ChangeId, replayed.ChangeId);
+            Assert.Equal(origin.Sequence, replayed.Mutation.OriginSequence);
+            Assert.True(reopened.TryReadCurrent(
+                replayed.Mutation.RecordId, replayed.Mutation.FieldId, out ProviderMutation? current));
+            Assert.Equal(origin.Sequence, current!.OriginSequence);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Legacy_local_feed_row_without_change_id_fails_closed()
     {
         string directory = Path.Combine(_root, "legacy-feed-identity");
