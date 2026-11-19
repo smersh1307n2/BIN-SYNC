@@ -127,10 +127,13 @@ public sealed class FldFullReplaceBootstrapTests
             // First connection stages exactly one canonical 256-entry page. We then
             // close the receiver database as if its process died before COMMIT/ACK.
             var (firstToSource, firstToTarget) = PipeTransport.CreatePair();
-            SyncSession firstSource = await SyncSession.ConnectAsync(
-                sourceNode, firstToSource, FullReplaceCapabilities());
-            SyncSession firstTarget = await SyncSession.AcceptAsync(
+            Task<SyncSession> firstTargetTask = SyncSession.AcceptAsync(
                 targetNode, firstToTarget, FullReplaceCapabilities());
+            Task<SyncSession> firstSourceTask = SyncSession.ConnectAsync(
+                sourceNode, firstToSource, FullReplaceCapabilities());
+            await Task.WhenAll(firstTargetTask, firstSourceTask);
+            SyncSession firstSource = await firstSourceTask;
+            SyncSession firstTarget = await firstTargetTask;
             Task<FullReplaceInstalledAck> firstSend = StorageFullReplaceSender.SendPreparedSnapshotAsync(
                 prepared, firstSource, sourceGcStore, trust, roster, sourceId, sourceSeed);
 
@@ -182,10 +185,13 @@ public sealed class FldFullReplaceBootstrapTests
             StorageFullReplaceReceiver resumedReceiver = CreateReceiver();
 
             var (secondToSource, secondToTarget) = PipeTransport.CreatePair();
-            await using SyncSession secondSource = await SyncSession.ConnectAsync(
-                sourceNode, secondToSource, FullReplaceCapabilities());
-            await using SyncSession secondTarget = await SyncSession.AcceptAsync(
+            Task<SyncSession> secondTargetTask = SyncSession.AcceptAsync(
                 targetNode!, secondToTarget, FullReplaceCapabilities());
+            Task<SyncSession> secondSourceTask = SyncSession.ConnectAsync(
+                sourceNode, secondToSource, FullReplaceCapabilities());
+            await Task.WhenAll(secondTargetTask, secondSourceTask);
+            await using SyncSession secondSource = await secondSourceTask;
+            await using SyncSession secondTarget = await secondTargetTask;
 
             Task<FullReplaceInstalledAck?> receive = resumedReceiver.ReceiveTransferAsync(secondTarget);
             FullReplaceInstalledAck acknowledgement = await StorageFullReplaceSender.SendPreparedSnapshotAsync(
