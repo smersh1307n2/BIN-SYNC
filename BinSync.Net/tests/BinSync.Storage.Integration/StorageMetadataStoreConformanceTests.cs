@@ -1136,6 +1136,9 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Equal(0, store.CachedReceiveCursorCount);
             Assert.Equal(0, store.CachedReceiveChainCount);
             Assert.Equal(0, store.CachedLegacyReceiveChainCount);
+            Assert.Equal(0, store.CachedReceiptCount);
+            Assert.Equal(0, store.CachedChangeLedgerCount);
+            Assert.Equal(0, store.CachedCompletedPendingApplyCount);
             store.BeginPendingApply(second, token);
             var finalized = store.FinalizePendingApply(scope, local,
                 new MetadataProviderApplyReceipt(token, secondDigest));
@@ -1148,7 +1151,12 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
         Assert.Equal(0, reopened.CachedReceiveCursorCount);
         Assert.Equal(0, reopened.CachedReceiveChainCount);
         Assert.Equal(0, reopened.CachedLegacyReceiveChainCount);
+        Assert.Equal(0, reopened.CachedReceiptCount);
+        Assert.Equal(0, reopened.CachedChangeLedgerCount);
+        Assert.Equal(0, reopened.CachedCompletedPendingApplyCount);
         Assert.Equal(2UL, reopened.GetReceiveCursor(scope, local, sender, 1, 7, author));
+        Assert.Equal(0, reopened.CachedReceiptCount);
+        Assert.Equal(0, reopened.CachedChangeLedgerCount);
         Assert.Equal(0, reopened.CachedReceiveCursorCount);
         Assert.Equal(0, reopened.CachedReceiveChainCount);
         Assert.Equal(2UL, reopened.GetRelayHighWatermark(scope, local, 7, author));
@@ -1717,6 +1725,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 Assert.Equal(0, store.CachedPeerStreamCount);
                 Assert.Equal(0, store.CachedPeerRosterIndexCount);
                 Assert.Equal(0, store.CachedRetiredPeerEpochCount);
+                Assert.Equal(0, store.CachedStreamWatermarkCount);
+                Assert.Equal(0, store.CachedOutboundLeaseCount);
+                Assert.Equal(0, store.CachedOriginHighWatermarkCount);
+                Assert.Equal(0, store.CachedCompletedPeerBaselineCount);
                 var registered = Assert.Single(store.ReadPeerStreamStates(scope, local, peer, 1, 7));
                 Assert.Equal(0, store.CachedPeerStreamCount);
                 Assert.Equal(0, store.CachedPeerRosterIndexCount);
@@ -1759,6 +1771,10 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
             Assert.Equal(0, reopened.CachedPeerStreamCount);
             Assert.Equal(0, reopened.CachedPeerRosterIndexCount);
             Assert.Equal(0, reopened.CachedRetiredPeerEpochCount);
+            Assert.Equal(0, reopened.CachedStreamWatermarkCount);
+            Assert.Equal(0, reopened.CachedOutboundLeaseCount);
+            Assert.Equal(0, reopened.CachedOriginHighWatermarkCount);
+            Assert.Equal(0, reopened.CachedCompletedPeerBaselineCount);
             Assert.Equal(2U, Assert.Single(reopened.ReadInterestedPeers(scope, local, 7)).PeerEpoch);
             Assert.Equal(0, reopened.CachedPeerStreamCount);
             Assert.Equal(0, reopened.CachedPeerRosterIndexCount);
