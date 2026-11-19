@@ -1709,7 +1709,8 @@ public sealed class StorageSyncCoordinator
                             change.Mutation.OriginSequence);
                         if (!stampedOrigin.IsValid)
                             throw new InvalidDataException("Stamped provider feed row has an invalid immutable Origin.");
-                        recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, stampedOrigin));
+                        // The durable feed receipt and current-state stamp were
+                        // committed atomically; no second provider point-read/stamp is needed.
                         previouslyFrozen = true;
                     }
                     else if (outboundIdentityStore!.TryGetOutboundChangeIdentity(
