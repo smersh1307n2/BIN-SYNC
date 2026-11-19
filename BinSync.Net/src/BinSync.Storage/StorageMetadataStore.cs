@@ -6011,8 +6011,8 @@ private bool ValidateIncomingBatchForStaging(
                     break;
                 case 1:
                 {
-                    // Receipts stay on the Storage B+ tree. Validate encoding only; the
-                    // partition cache keeps an overlay of uncommitted mutations.
+                    // Defensive validation for scans that explicitly include receipts.
+                    // Normal partition hydration skips this disk-primary keyspace; point reads decode on demand.
                     RequireLength(key, 38);
                     _ = DecodeReceiptValue(row.Value);
                     break;
@@ -6064,7 +6064,8 @@ private bool ValidateIncomingBatchForStaging(
                 }
                 case 3:
                 {
-                    // ChangeId ledger rows stay on Storage. Validate only on cold load.
+                    // Defensive validation for scans that explicitly include ledger rows.
+                    // Normal hydration skips the disk-primary ledger; point reads and bounded GC scans decode on demand.
                     RequireLength(key, 18);
                     _ = DecodeChangeLedgerValue(row.Value);
                     break;
@@ -6072,6 +6073,8 @@ private bool ValidateIncomingBatchForStaging(
                 case 20:
                 case 21:
                 {
+                    // Payload rows are normally skipped during partition hydration;
+                    // the page readers validate their headers while streaming from Storage.
                     RequireLength(key, 26);
                     _ = DecodePayloadHeader(row.Value);
                     break;
