@@ -334,12 +334,15 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
         }
         finally
         {
+            // Keep the session in the active set until its transport is closed.
+            // An idle Tombstone window must never start while a peer is still
+            // physically connected but its receive loop is unwinding.
+            try { await session.DisposeAsync().ConfigureAwait(false); } catch { }
             lock (_maintenanceGate)
             {
                 _sessions.TryRemove(session.PeerNodeId, out _);
                 _baselineReady.TryRemove(session.PeerNodeId, out _);
             }
-            try { await session.DisposeAsync().ConfigureAwait(false); } catch { }
         }
     }
 
