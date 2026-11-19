@@ -320,6 +320,63 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
     }
 
     [Fact]
+    public void Outbound_pages_stop_at_the_encoded_byte_budget_and_resume_without_gaps()
+    {
+        string directory = Path.Combine(_root, "outbound-page-byte-budget");
+        Directory.CreateDirectory(directory);
+        const string scope = "outbound-page-byte-budget-scope";
+        const int namespaceId = 7;
+        NodeId local = Node(1);
+
+        MetadataFrozenOperation CreateOperation(int value)
+        {
+            byte[] identity = new byte[16];
+            BinaryPrimitives.WriteInt32LittleEndian(identity, value);
+            identity[15] = 0x6B;
+            return new MetadataFrozenOperation
+            {
+                ChangeId = BatchId.From(identity),
+                Fingerprint = SHA256.HashData(identity).AsSpan(0, 16).ToArray(),
+                Payload = Enumerable.Repeat((byte)0xA5, 8192).ToArray(),
+                OriginAuthorEpoch = 11
+            };
+        }
+
+        MetadataFrozenOperation[] operations = Enumerable.Range(1, 300)
+            .Select(CreateOperation).ToArray();
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 473);
+            using var store = new StorageMetadataStore(storage);
+            Assert.Equal(300, store.FreezeOutbound(
+                scope, local, namespaceId, local, operations).Count);
+            ulong lease = store.AcquireOutboundLease(
+                scope, local, namespaceId, local, Guid.NewGuid());
+
+            var first = store.ReadOutbound(
+                scope, local, namespaceId, local, lease, 0, 300);
+            Assert.Equal(127, first.Items.Count);
+            Assert.Equal(127UL, first.Items[^1].Sequence);
+
+            var second = store.ReadOutbound(
+                scope, local, namespaceId, local, lease, first.Items[^1].Sequence, 300);
+            Assert.Equal(127, second.Items.Count);
+            Assert.Equal(128UL, second.Items[0].Sequence);
+            Assert.Equal(254UL, second.Items[^1].Sequence);
+
+            var third = store.ReadOutbound(
+                scope, local, namespaceId, local, lease, second.Items[^1].Sequence, 300);
+            Assert.Equal(46, third.Items.Count);
+            Assert.Equal(255UL, third.Items[0].Sequence);
+            Assert.Equal(300UL, third.Items[^1].Sequence);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Outbound_freeze_retry_rejects_sequence_index_pointing_at_another_change_id()
     {
         string directory = Path.Combine(_root, "outbound-index-mismatch");
