@@ -95,6 +95,10 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStore : IFldBinSyncGcOperat
 
         using IDisposable writerAdmission =
             await _metadata.AcquireWriterAdmissionAsync(cancellationToken).ConfigureAwait(false);
+        // Node checkpoints use the shared StorageDatabase transaction gate rather
+        // than Metadata writer admission. Join that same gate before opening a batch
+        // so an in-flight Node save cannot invalidate this policy/audit transaction.
+        using IDisposable transactionGate = _metadata.AcquireStorageTransactionGate();
 
         using StorageWriteBatch batch = _storage.BeginWriteBatch();
         byte[] policyKey = PolicyKey(policy.Binding);

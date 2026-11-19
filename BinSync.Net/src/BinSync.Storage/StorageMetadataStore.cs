@@ -112,6 +112,27 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     public ValueTask<IDisposable> AcquireWriterAdmissionAsync(CancellationToken cancellationToken = default)
         => _writerAdmission.EnterAsync(cancellationToken);
 
+    /// <summary>
+    /// Acquire the shared StorageDatabase transaction gate for a host-owned synchronous
+    /// write batch. Call after writer admission and do not await while this lease is held.
+    /// This serializes the batch with Node checkpoints and all other adapters using the
+    /// same StorageDatabase transaction gate.
+    /// </summary>
+    public IDisposable AcquireStorageTransactionGate()
+    {
+        Monitor.Enter(_gate);
+        try
+        {
+            ThrowIfDisposed();
+            return new StorageTransactionGateLease(_gate);
+        }
+        catch
+        {
+            Monitor.Exit(_gate);
+            throw;
+        }
+    }
+
     internal ValueTask<IDisposable> AcquireGcWriterAdmissionAsync(CancellationToken cancellationToken)
         => AcquireWriterAdmissionAsync(cancellationToken);
 
@@ -7062,6 +7083,20 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
     legacy?.CopyTo(value, 45);
     return value;
 }
+
+    private sealed class StorageTransactionGateLease : IDisposable
+    {
+        private object? _gate;
+
+        public StorageTransactionGateLease(object gate) => _gate = gate;
+
+        public void Dispose()
+        {
+            object? gate = Interlocked.Exchange(ref _gate, null);
+            if (gate is not null)
+                Monitor.Exit(gate);
+        }
+    }
 
     private sealed class FullReplaceCommitLease : IDisposable
     {

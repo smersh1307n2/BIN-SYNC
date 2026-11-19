@@ -62,6 +62,57 @@ public sealed class StorageFldBinSyncGcOperatorPolicyStoreTests
     }
 
     [Fact]
+    public async Task Policy_commit_waits_for_shared_storage_transaction_gate()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-gc-policy-storage-gate-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        using var gateEntered = new ManualResetEventSlim();
+        using var releaseGate = new ManualResetEventSlim();
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 978);
+            using var metadata = new StorageMetadataStore(storage);
+            var store = new StorageFldBinSyncGcOperatorPolicyStore(storage, metadata);
+
+            // Model a concurrent Node checkpoint, which uses this exact shared
+            // StorageDatabase transaction gate but does not take Metadata admission.
+            Task gateHolder = Task.Run(() =>
+            {
+                using IDisposable held = metadata.AcquireStorageTransactionGate();
+                gateEntered.Set();
+                if (!releaseGate.Wait(TimeSpan.FromSeconds(10)))
+                    throw new TimeoutException("Test did not release the shared Storage transaction gate.");
+            });
+            Assert.True(gateEntered.Wait(TimeSpan.FromSeconds(5)));
+
+            var (policy, audit) = Next(1, 1, receipt: true);
+            Task<bool> commit = store.TryCommitAsync(0, policy, audit).AsTask();
+            bool remainedBlocked;
+            try
+            {
+                await Task.Delay(150);
+                remainedBlocked = !commit.IsCompleted;
+            }
+            finally
+            {
+                releaseGate.Set();
+            }
+
+            await gateHolder.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(remainedBlocked,
+                "Policy/audit StorageWriteBatch must wait for the shared transaction gate.");
+            Assert.True(await commit.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(policy, await store.ReadAsync(Binding()));
+        }
+        finally
+        {
+            releaseGate.Set();
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task Policy_update_waits_for_matching_domain_lease_and_commits_after_release()
     {
         string directory = Path.Combine(Path.GetTempPath(),
