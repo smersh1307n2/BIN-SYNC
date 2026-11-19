@@ -144,7 +144,7 @@ public sealed class ProviderMutation
     public BatchId ChangeId { get; init; }
     /// <summary>Immutable origin author incarnation; zero for legacy materialized rows or a local draft before host epoch binding.</summary>
     public uint OriginAuthorEpoch { get; init; }
-    /// <summary>Immutable origin sequence; zero for legacy rows and unpublished drafts until Metadata Store freeze.</summary>
+    /// <summary>Immutable origin sequence; zero for unpublished drafts and non-zero after durable Metadata Store freeze. Published local feed replays retain this receipt.</summary>
     public ulong OriginSequence { get; init; }
     public OperationOrigin Provenance
     {
@@ -181,8 +181,9 @@ public sealed record ProviderChangePage(IReadOnlyList<ProviderChange> Changes, u
 public sealed record ProviderPublishedOrigin(ProviderChange Change, OperationOrigin Origin);
 
 /// <summary>
-/// Optional provider capability for atomically stamping the current-state projection
-/// with the Origin assigned by immutable publication. Feed sequence is never OriginSequence.
+/// Optional provider capability for atomically stamping both the current-state
+/// projection and durable local-feed receipt with the Origin assigned by immutable
+/// Metadata publication. Feed sequence is never OriginSequence.
 /// </summary>
 public interface IProviderPublishedOriginStore
 {
