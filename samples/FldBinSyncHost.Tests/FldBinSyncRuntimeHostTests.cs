@@ -685,7 +685,7 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.Equal(3UL, policy3.RootElement.GetProperty("generation").GetUInt64());
             Assert.True(policy3.RootElement.GetProperty("tombstoneEnabled").GetBoolean());
 
-            await WaitForMaintenanceTick(client, TimeSpan.FromSeconds(25));
+            await WaitForGcMaintenanceSlice(client, TimeSpan.FromSeconds(25));
             using JsonDocument enabledHealth = JsonDocument.Parse(await client.GetStringAsync("/health/ready"));
             Assert.True(enabledHealth.RootElement.GetProperty("gcStartupProofEnabled").GetBoolean());
             Assert.True(enabledHealth.RootElement.GetProperty("gcExecutionEnabled").GetBoolean());
@@ -968,6 +968,21 @@ public sealed class FldBinSyncRuntimeHostTests
         throw new TimeoutException(
             $"Remote FLD value {recordIdHex}/{fieldId} was not observed. " +
             $"receiverHealth={health}; receiverPeers={peers}; senderPeers={remotePeers}");
+    }
+
+    private static async Task WaitForGcMaintenanceSlice(HttpClient client, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            using JsonDocument ready = JsonDocument.Parse(await client.GetStringAsync("/health/ready"));
+            if (ready.RootElement.GetProperty("gcExecutionEnabled").GetBoolean() &&
+                ready.RootElement.GetProperty("gcMaintenanceSlices").GetInt64() > 0)
+                return;
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException("The enabled Host scheduler did not complete a GC maintenance slice.");
     }
 
     private static async Task WaitForMaintenanceTick(HttpClient client, TimeSpan timeout)
