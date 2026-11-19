@@ -41,7 +41,16 @@ public sealed class FldBinSyncRuntimeHostTests
 
             Task<HttpResponseMessage> windowTask = client.PostAsync(
                 "/admin/test/hold-idle-maintenance-window?durationMs=1000", content: null);
-            await Task.Delay(TimeSpan.FromMilliseconds(150));
+            bool windowActive = false;
+            for (int attempt = 0; attempt < 40 && !windowActive; attempt++)
+            {
+                using HttpResponseMessage ready = await client.GetAsync("/health/ready");
+                using JsonDocument state = JsonDocument.Parse(await ready.Content.ReadAsStringAsync());
+                windowActive = state.RootElement.GetProperty("idleMaintenanceWindowActive").GetBoolean();
+                if (!windowActive)
+                    await Task.Delay(TimeSpan.FromMilliseconds(25));
+            }
+            Assert.True(windowActive, "The test Host did not acquire the idle maintenance window.");
 
             SyncSession? rejectedSession = null;
             try
