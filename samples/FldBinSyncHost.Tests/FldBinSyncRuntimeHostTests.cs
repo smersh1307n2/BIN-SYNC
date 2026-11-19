@@ -277,7 +277,7 @@ public sealed class FldBinSyncRuntimeHostTests
                 string shutdownBody = await shutdown.Content.ReadAsStringAsync();
                 string health = await client.GetStringAsync("/health/ready");
                 string peers = await client.GetStringAsync("/operator/peers");
-                Assert.True(false,
+                Assert.Fail(
                     $"Host shutdown returned {(int)shutdown.StatusCode}: {shutdownBody}. " +
                     $"health={health}; peers={peers}");
             }
