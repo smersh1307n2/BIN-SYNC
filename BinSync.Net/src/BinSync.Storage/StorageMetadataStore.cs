@@ -6206,10 +6206,10 @@ private bool ValidateIncomingBatchForStaging(
         // Cold partition hydration is limited to bounded control state. Receipts (1),
         // ChangeId ledger rows (3), completed-apply markers (13), relay headers (20)
         // and outbound headers/payloads (21) are disk-primary keyspaces: their readers
-        // use exact-key or bounded prefix
-        // cursors and must never be swept just because an unrelated partition operation
-        // needs a control-state snapshot. DecodePartition only validated kinds 1, 3 and
-        // 20; it did not materialize them, so omitting those scans changes no cache state.
+        // use exact-key or bounded prefix cursors and must never be swept just because an
+        // unrelated partition operation needs a control-state snapshot. DecodePartition
+        // only validated these rows; it did not materialize them, so omitting the scans
+        // changes no cache state.
         const int pageSize = 512;
         for (byte kind = 0; kind <= 26; kind++)
         {
