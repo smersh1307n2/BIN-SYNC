@@ -6825,8 +6825,9 @@ private bool ValidateIncomingBatchForStaging(
                 throw new InvalidDataException("Outbound storage cursor returned a row outside its stream prefix.");
             ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(
                 rowKey.Slice(partitionRoot.Length + 1 + 18, 8));
-            if (sequence <= previousSequence)
-                throw new InvalidDataException("Outbound storage cursor returned non-monotonic sequences.");
+            if (sequence <= previousSequence ||
+                (pageCount > 0 && sequence != checked(previousSequence + 1)))
+                throw new InvalidDataException("Outbound storage cursor returned a gap or non-monotonic sequence.");
             previousSequence = sequence;
 
             BatchId changeId = DecodePayloadHeader(rowValue);
@@ -6889,8 +6890,9 @@ private bool ValidateIncomingBatchForStaging(
 
             ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(
                 rowKey.Slice(partitionRoot.Length + 1 + 18, 8));
-            if (sequence <= previousSequence)
-                throw new InvalidDataException("Relay storage cursor returned a non-monotonic sequence.");
+            if (sequence <= previousSequence ||
+                (count > 0 && sequence != checked(previousSequence + 1)))
+                throw new InvalidDataException("Relay storage cursor returned a gap or non-monotonic sequence.");
             previousSequence = sequence;
 
             BatchId changeId = DecodePayloadHeader(rowValue);
