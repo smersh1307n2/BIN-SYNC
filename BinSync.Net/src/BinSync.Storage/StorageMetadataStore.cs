@@ -6698,36 +6698,36 @@ private bool ValidateIncomingBatchForStaging(
         byte[] afterKey = afterSequence == 0
             ? Array.Empty<byte>()
             : StreamPayloadStorageKey(partitionRoot, 21, namespaceId, author, afterSequence);
-        IReadOnlyList<StorageEntry> rows = snapshot.ScanPrefix(prefix, afterKey, limit);
-        if (rows.Count == 0) return Array.Empty<MetadataOutboundItem>();
-
-        var page = new MetadataOutboundItem[rows.Count];
+        using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix, afterKey);
+        var page = new List<MetadataOutboundItem>(Math.Min(limit, 128));
         ulong previousSequence = afterSequence;
-        for (int i = 0; i < rows.Count; i++)
+        cursor.VisitPage(limit, (in StorageEntryView row) =>
         {
-            StorageEntry row = rows[i];
-            if (row.Key.Length != partitionRoot.Length + 1 + 26 ||
-                !row.Key.AsSpan(0, prefix.Length).SequenceEqual(prefix))
+            ReadOnlySpan<byte> rowKey = row.Key;
+            ReadOnlySpan<byte> rowValue = row.Value;
+            if (rowKey.Length != partitionRoot.Length + 1 + 26 ||
+                !rowKey.StartsWith(prefix))
                 throw new InvalidDataException("Outbound storage cursor returned a row outside its stream prefix.");
             ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(
-                row.Key.AsSpan(partitionRoot.Length + 1 + 18, 8));
+                rowKey.Slice(partitionRoot.Length + 1 + 18, 8));
             if (sequence <= previousSequence)
                 throw new InvalidDataException("Outbound storage cursor returned non-monotonic sequences.");
             previousSequence = sequence;
 
-            MetadataOutboundItem decoded = DecodePayloadItem(sequence, author, row.Value);
+            BatchId changeId = DecodePayloadHeader(rowValue);
             if (!TryGetChangeLedger(snapshot, partitionRoot, state,
-                    new LedgerKey(namespaceId, decoded.ChangeId), out ChangeLedgerValue ledger) ||
+                    new LedgerKey(namespaceId, changeId), out ChangeLedgerValue ledger) ||
                 !ledger.IsLocalOutbound || ledger.AuthorNodeId != author ||
                 (ledger.OutboundSequence != 0 && ledger.OutboundSequence != sequence))
                 throw new InvalidDataException("Outbound payload row has no matching durable ChangeId ledger identity.");
-            page[i] = new MetadataOutboundItem(
-                decoded.Sequence, decoded.AuthorNodeId, decoded.ChangeId, decoded.Payload)
+            page.Add(new MetadataOutboundItem(
+                sequence, author, changeId, rowValue.Slice(20).ToArray())
             {
                 Provenance = ledger.Provenance
-            };
-        }
-        return page;
+            });
+            return true;
+        });
+        return page.ToArray();
     }
 
     private static BatchId DecodePayloadHeader(ReadOnlySpan<byte> bytes)
