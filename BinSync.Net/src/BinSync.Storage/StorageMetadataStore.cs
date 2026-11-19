@@ -897,10 +897,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (stream.Key.NamespaceId == namespaceId)
                     foreach (var item in stream.Value)
                         liveChangeIds.Add(item.ChangeId);
-            foreach (var stream in current.Outbound)
-                if (stream.Key.NamespaceId == namespaceId)
-                    foreach (var item in stream.Value)
-                        liveChangeIds.Add(item.ChangeId);
+            AddOutboundChangeIds(partitionKey, current, namespaceId, liveChangeIds);
             foreach (PendingApplyValue pending in current.PendingApplies.Values)
                 if (pending.Batch.NamespaceId == namespaceId)
                     foreach (MetadataOperation operation in pending.Batch.Operations)
@@ -1011,7 +1008,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pair.Value.AckedCursor)))
                 return 0;
 
-            HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
+            HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(partitionKey, current, namespaceId);
             candidates = new List<ChangeIdGcCandidate>(limit);
             foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
             {
@@ -1061,7 +1058,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return 0;
             // The Host lease and Metadata writer admission have remained held
             // since the initial scan, so this signed horizon is still current.
-            HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(current, namespaceId);
+            HashSet<BatchId> liveChangeIds = BuildMetadataLiveChangeIdSet(partitionKey, current, namespaceId);
             ReportAllocation("metadata-revalidation-live-set");
             byte[] partitionRoot = PartitionRoot(partitionKey);
             using StorageSnapshot revalidationSnapshot = _storage.OpenSnapshot();
@@ -1138,18 +1135,15 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         => frontier.TryGetValue((author, epoch), out ulong safeSequence) &&
            sequence <= safeSequence;
 
-    private static HashSet<BatchId> BuildMetadataLiveChangeIdSet(
-        PartitionState current, int namespaceId)
+    private HashSet<BatchId> BuildMetadataLiveChangeIdSet(
+        PartitionKey partitionKey, PartitionState current, int namespaceId)
     {
         var live = new HashSet<BatchId>();
         foreach (var stream in current.Relay)
             if (stream.Key.NamespaceId == namespaceId)
                 foreach (MetadataRelayItem item in stream.Value)
                     live.Add(item.ChangeId);
-        foreach (var stream in current.Outbound)
-            if (stream.Key.NamespaceId == namespaceId)
-                foreach (MetadataOutboundItem item in stream.Value)
-                    live.Add(item.ChangeId);
+        AddOutboundChangeIds(partitionKey, current, namespaceId, live);
         foreach (PendingApplyValue pending in current.PendingApplies.Values)
             if (pending.Batch.NamespaceId == namespaceId)
                 foreach (MetadataOperation operation in pending.Batch.Operations)
@@ -1486,9 +1480,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             foreach (var stream in state.Relay)
                 if (stream.Key.NamespaceId == namespaceId)
                     payloadCount = checked(payloadCount + stream.Value.Count);
-            foreach (var stream in state.Outbound)
-                if (stream.Key.NamespaceId == namespaceId)
-                    payloadCount = checked(payloadCount + stream.Value.Count);
+            payloadCount = checked(payloadCount + CountOutboundRows(
+                new PartitionKey(scopeId, localReplica), state, namespaceId));
 
             Report("payload-count");
             var builtFilter = new LiveRecordReferenceFilter(payloadCount);
@@ -1525,15 +1518,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     if (!AddPayload(payload)) return false;
                 }
             }
-            foreach (var stream in state.Outbound)
-            {
-                if (stream.Key.NamespaceId != namespaceId) continue;
-                foreach (var item in stream.Value)
+            if (!VisitOutboundStorageRows(payloadSnapshot, partitionRoot, state, namespaceId,
+                (key, sequence, encodedPayload) =>
                 {
-                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
-                    if (!AddPayload(payload)) return false;
-                }
-            }
+                    _ = DecodePayloadHeader(encodedPayload);
+                    return AddPayload(encodedPayload.Slice(20).ToArray());
+                }))
+                return false;
             Report("bloom-population");
             return true;
         }
@@ -1621,15 +1612,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     if (!ScanPayload(payload)) return false;
                 }
             }
-            foreach (var stream in state.Outbound)
-            {
-                if (stream.Key.NamespaceId != namespaceId) continue;
-                foreach (var item in stream.Value)
+            if (!VisitOutboundStorageRows(payloadSnapshot, partitionRoot, state, namespaceId,
+                (key, sequence, encodedPayload) =>
                 {
-                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, stream.Key.NamespaceId, stream.Key.Author, item.Sequence, item.Payload);
-                    if (!ScanPayload(payload)) return false;
-                }
-            }
+                    _ = DecodePayloadHeader(encodedPayload);
+                    return ScanPayload(encodedPayload.Slice(20).ToArray());
+                }))
+                return false;
             return true;
         }
     }
@@ -1665,9 +1654,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             int relayPayloads = state.Relay
                 .Where(pair => pair.Key.NamespaceId == namespaceId)
                 .Sum(pair => pair.Value.Count);
-            int outboundPayloads = state.Outbound
-                .Where(pair => pair.Key.NamespaceId == namespaceId)
-                .Sum(pair => pair.Value.Count);
+            int outboundPayloads = CountOutboundRows(
+                new PartitionKey(scopeId, localReplica), state, namespaceId);
 
             return new MetadataGcReservationDiagnostics(
                 pendingApplies, outstandingPeerReservations, relayPayloads, outboundPayloads);
@@ -1707,16 +1695,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     if (PayloadReferencesRecord(payload, recordId)) return true;
                 }
             }
-            foreach (var pair in state.Outbound)
-            {
-                if (pair.Key.NamespaceId != namespaceId) continue;
-                foreach (var item in pair.Value)
+            bool foundOutboundReference = false;
+            VisitOutboundStorageRows(payloadSnapshot, partitionRoot, state, namespaceId,
+                (key, sequence, encodedPayload) =>
                 {
-                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, pair.Key.NamespaceId, pair.Key.Author, item.Sequence, item.Payload);
-                    if (PayloadReferencesRecord(payload, recordId)) return true;
-                }
-            }
-            return false;
+                    _ = DecodePayloadHeader(encodedPayload);
+                    foundOutboundReference = PayloadReferencesRecord(
+                        encodedPayload.Slice(20).ToArray(), recordId);
+                    return !foundOutboundReference;
+                });
+            return foundOutboundReference;
         }
     }
 
@@ -1777,19 +1765,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 }
             }
 
-            foreach (var outbound in state.Outbound)
-            {
-                if (outbound.Key.NamespaceId != namespaceId)
-                    continue;
-                foreach (var item in outbound.Value)
+            if (!VisitOutboundStorageRows(payloadSnapshot, partitionRoot, state, namespaceId,
+                (key, sequence, encodedPayload) =>
                 {
-                    byte[] payload = ResolveStreamPayload(payloadSnapshot, partitionRoot, 21, outbound.Key.NamespaceId, outbound.Key.Author, item.Sequence, item.Payload);
-                    if (!TryAddLiveRecordReference(liveRecordReferences, payload))
-                    {
-                        liveRecordReferences.Clear();
-                        return false;
-                    }
-                }
+                    _ = DecodePayloadHeader(encodedPayload);
+                    return TryAddLiveRecordReference(
+                        liveRecordReferences, encodedPayload.Slice(20).ToArray());
+                }))
+            {
+                liveRecordReferences.Clear();
+                return false;
             }
 
             return true;
@@ -6687,6 +6672,69 @@ private bool ValidateIncomingBatchForStaging(
             }
             if (page.Count < pageSize) yield break;
         }
+    }
+
+    private delegate bool OutboundStorageRowVisitor(
+        OutboundKey key, ulong sequence, ReadOnlySpan<byte> encodedPayload);
+
+    private bool VisitOutboundStorageRows(
+        StorageSnapshot snapshot, byte[] partitionRoot, PartitionState state,
+        int namespaceId, OutboundStorageRowVisitor visitor)
+    {
+        foreach (OutboundKey key in state.OutboundHighWatermarks.Keys)
+        {
+            if (key.NamespaceId != namespaceId) continue;
+            byte[] prefix = StorageKey(partitionRoot, 21, KeyNamespaceAuthor(key.NamespaceId, key.Author));
+            using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
+            while (true)
+            {
+                bool keepGoing = true;
+                int visited = cursor.VisitPage(512, (in StorageEntryView row) =>
+                {
+                    ReadOnlySpan<byte> rowKey = row.Key;
+                    if (rowKey.Length != partitionRoot.Length + 1 + 26 ||
+                        !rowKey.StartsWith(prefix))
+                        throw new InvalidDataException("Outbound storage scan escaped its stream prefix.");
+                    ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(
+                        rowKey.Slice(partitionRoot.Length + 1 + 18, 8));
+                    if (!visitor(key, sequence, row.Value))
+                    {
+                        keepGoing = false;
+                        return false;
+                    }
+                    return true;
+                });
+                if (!keepGoing) return false;
+                if (visited < 512) break;
+            }
+        }
+        return true;
+    }
+
+    private void AddOutboundChangeIds(
+        PartitionKey partitionKey, PartitionState state, int namespaceId, HashSet<BatchId> destination)
+    {
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        byte[] root = PartitionRoot(partitionKey);
+        VisitOutboundStorageRows(snapshot, root, state, namespaceId, (key, sequence, payload) =>
+        {
+            destination.Add(DecodePayloadHeader(payload));
+            return true;
+        });
+    }
+
+    private int CountOutboundRows(
+        PartitionKey partitionKey, PartitionState state, int namespaceId)
+    {
+        int count = 0;
+        using StorageSnapshot snapshot = _storage.OpenSnapshot();
+        byte[] root = PartitionRoot(partitionKey);
+        VisitOutboundStorageRows(snapshot, root, state, namespaceId, (key, sequence, payload) =>
+        {
+            count = checked(count + 1);
+            return true;
+        });
+        return count;
     }
 
     private MetadataOutboundItem[] ReadOutboundStoragePage(
