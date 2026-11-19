@@ -1189,6 +1189,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         return filter;
     }
 
+    // Conservative prefilter only: positives retain metadata; false positives never delete data.
     private sealed class MetadataStreamChangeIdBloomFilter
     {
         private const int HashCount = 7;
@@ -1226,11 +1227,14 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
         private static ulong Mix(ulong value)
         {
-            value ^= value >> 30;
-            value *= 0xBF58476D1CE4E5B9UL;
-            value ^= value >> 27;
-            value *= 0x94D049BB133111EBUL;
-            return value ^ (value >> 31);
+            unchecked
+            {
+                value ^= value >> 30;
+                value *= 0xBF58476D1CE4E5B9UL;
+                value ^= value >> 27;
+                value *= 0x94D049BB133111EBUL;
+                return value ^ (value >> 31);
+            }
         }
     }
 
