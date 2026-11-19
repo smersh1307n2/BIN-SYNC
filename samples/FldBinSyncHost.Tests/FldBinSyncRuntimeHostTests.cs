@@ -329,6 +329,7 @@ public sealed class FldBinSyncRuntimeHostTests
         Process? databaseB = null;
         Process? runtimeA = null;
         Process? runtimeB = null;
+        FldDatabaseIpcClient? gcClient = null;
 
         ulong partitionA = 1201;
         ulong partitionB = 1202;
@@ -384,7 +385,74 @@ public sealed class FldBinSyncRuntimeHostTests
                     response.Dispose();
             }
 
-            using HttpResponseMessage writeA = await PostJsonWithRetry(
+            // Final GC regression: hold the real FLD reference-scan lease while
+            // both executable Hosts keep the same TCP SyncSession established.
+            // A provider mutation must wait; after release it must durably apply
+            // remotely and its outbound stream must disappear only after ACK.
+            gcClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                fldA, Guid.NewGuid(), TimeSpan.FromSeconds(10));
+            Guid gcLease = await gcClient.AcquireGcLeaseAsync();
+            FldDatabaseIpcGcReferenceScan gcScan = await gcClient.OpenGcReferenceScanAsync();
+            Assert.NotEqual(Guid.Empty, gcScan.Token);
+
+            var postLeaseMutation = new
+            {
+                recordIdHex = Convert.ToHexString(recordA),
+                fieldId,
+                changeIdHex = Convert.ToHexString(changeA),
+                valueBase64 = Convert.ToBase64String(valueA),
+                keyEpoch = (ushort)0,
+                hlcWall = 123_456_789UL,
+                hlcLogical = 1U
+            };
+            Task<HttpResponseMessage> heldWrite = clientA.PostAsJsonAsync(
+                "/admin/test/local-change", postLeaseMutation);
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            Assert.False(heldWrite.IsCompleted,
+                "Provider mutation crossed the active GC reference-scan lease.");
+            await WaitForActivePeer(clientA, expected: 1, TimeSpan.FromSeconds(2));
+            await WaitForActivePeer(clientB, expected: 1, TimeSpan.FromSeconds(2));
+
+            await gcClient.ReleaseGcReferenceScanAsync(gcScan.Token);
+            await gcClient.ReleaseGcLeaseAsync(gcLease);
+            using HttpResponseMessage writeA = await heldWrite.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(HttpStatusCode.OK, writeA.StatusCode);
+            using JsonDocument receiptA = JsonDocument.Parse(await writeA.Content.ReadAsStringAsync());
+            Assert.True(receiptA.RootElement.GetProperty("receiptSequence").GetUInt64() > 0);
+
+            using JsonDocument receivedAtB = await WaitForCurrentMutation(
+                clientB, Convert.ToHexString(recordA), fieldId, TimeSpan.FromSeconds(20), peer: clientA);
+            Assert.Equal(Convert.ToBase64String(valueA),
+                receivedAtB.RootElement.GetProperty("valueBase64").GetString());
+            Assert.Equal(Convert.ToHexString(changeA),
+                receivedAtB.RootElement.GetProperty("changeIdHex").GetString());
+            Assert.Equal(Convert.ToHexString(nodeA),
+                receivedAtB.RootElement.GetProperty("authorNodeIdHex").GetString());
+
+            // Remote durable apply is necessary but not sufficient: wait until
+            // sender Metadata has committed the delivery ACK and no outbound
+            // author stream remains. Both peer counts must stay at one throughout.
+            DateTime ackDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+            bool deliveryAcked = false;
+            while (DateTime.UtcNow < ackDeadline)
+            {
+                using JsonDocument pending = JsonDocument.Parse(
+                    await clientA.GetStringAsync("/admin/test/pending-outbound"));
+                if (pending.RootElement.GetProperty("pendingOutboundAuthors").GetInt32() == 0)
+                {
+                    deliveryAcked = true;
+                    break;
+                }
+                await WaitForActivePeer(clientA, expected: 1, TimeSpan.FromSeconds(2));
+                await WaitForActivePeer(clientB, expected: 1, TimeSpan.FromSeconds(2));
+                await Task.Delay(100);
+            }
+            Assert.True(deliveryAcked,
+                "The sender did not durably retire its outbound stream after the remote apply ACK.");
+            await WaitForActivePeer(clientA, expected: 1, TimeSpan.FromSeconds(2));
+            await WaitForActivePeer(clientB, expected: 1, TimeSpan.FromSeconds(2));
+
+            using HttpResponseMessage writeB = await PostJsonWithRetry(
                 clientA, "/admin/test/local-change",
                 new
                 {
@@ -503,6 +571,7 @@ public sealed class FldBinSyncRuntimeHostTests
         }
         finally
         {
+            if (gcClient is not null) await gcClient.DisposeAsync();
             if (runtimeA is not null) await KillProcess(runtimeA);
             if (runtimeB is not null) await KillProcess(runtimeB);
             if (databaseA is not null) await KillProcess(databaseA);
