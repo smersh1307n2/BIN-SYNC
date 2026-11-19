@@ -225,6 +225,14 @@ try
         lastPeerError = peerRuntime.LastError
     }));
 
+    // Test-only ACK visibility: a published stream remains pending until the
+    // remote durable apply is acknowledged and the sender commits that receipt.
+    app.MapGet("/admin/test/pending-outbound", () => Results.Ok(new
+    {
+        pendingOutboundAuthors = composition!.MetadataStore.ReadOutboundAuthors(
+            scopeId, node.NodeId, namespaceId).Count
+    }));
+
     app.MapPost("/admin/test/verify-empty-namespace", async (CancellationToken cancellationToken) =>
     {
         try
