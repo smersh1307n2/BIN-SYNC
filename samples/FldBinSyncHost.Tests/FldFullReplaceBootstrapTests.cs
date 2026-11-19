@@ -85,6 +85,7 @@ public sealed class FldFullReplaceBootstrapTests
         using var targetMetadata = new StorageMetadataStore(targetMetadataStorage);
         var sourceGcStore = new StorageNamespaceGcStore(sourceMetadataStorage, Scope, sourceId);
         var targetGcStore = new StorageNamespaceGcStore(targetMetadataStorage, Scope, targetId);
+        targetMetadata.AttachNamespaceGcGuard(targetGcStore, trust, Scope, targetId);
         _ = sourceGcStore.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, sourceSeed), trust);
         _ = targetGcStore.AcceptNamespaceRoster(NamespaceRosterProtocol.Sign(roster, sourceSeed), trust);
 
@@ -132,7 +133,9 @@ public sealed class FldFullReplaceBootstrapTests
                 externalState,
                 () => targetCoordinator.AcquireFullReplaceCommitGuard(
                     static () => new CallbackLease(static () => { })),
-                (wall, logical) => targetNode!.AdvanceClockToFloor(wall, logical));
+                (wall, logical) => targetNode!.AdvanceClockToFloor(wall, logical),
+                targetMetadata,
+                baselineReportSequence: 1);
 
             // First connection stages exactly one canonical 256-entry page. We then
             // close the receiver database as if its process died before COMMIT/ACK.
@@ -210,6 +213,8 @@ public sealed class FldFullReplaceBootstrapTests
 
             Assert.NotNull(receiverAck);
             Assert.True(acknowledgement.Installed);
+            Assert.True(targetMetadata.IsPeerInitialSyncComplete(
+                Scope, targetId, sourceId, 7, NamespaceId));
             Assert.Equal(prepared.Generation, acknowledgement.Generation);
             Assert.Equal(257, prepared.ExpectedEntryCount);
             Assert.Equal(targetId, acknowledgement.MemberNodeId);
