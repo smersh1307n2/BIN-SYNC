@@ -9,12 +9,138 @@ using System.Text;
 using System.Text.Json;
 using System.Net.Http.Json;
 using Fld1.Storage.Ipc;
+using Fld1.Engine.Db;
 using Xunit;
 
 namespace BinSync.FldHost.Tests;
 
 public sealed class FldBinSyncRuntimeHostTests
 {
+    [Fact]
+    public async Task Active_tcp_peer_survives_host_gc_reference_lease_and_provider_write_resumes_after_release()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "binsync-gc-peer-pause-" + Guid.NewGuid().ToString("N"));
+        string metadataRoot = Path.Combine(root, "metadata");
+        string fldRoot = Path.Combine(root, "fld");
+        byte[] localNode = Id(0x53);
+        byte[] peerNodeId = Id(0x54);
+        byte[] recordId = Id(0x75);
+        byte[] changeId = Id(0x76);
+        Process? databaseHost = null;
+        Process? runtimeHost = null;
+        FldDatabaseIpcClient? gcClient = null;
+
+        try
+        {
+            databaseHost = StartDatabaseHost(fldRoot, localNode);
+            await WaitForDatabaseHost(fldRoot, databaseHost, TimeSpan.FromSeconds(45));
+
+            runtimeHost = StartRuntimeHost(
+                metadataRoot, fldRoot, MetadataPartition, localNode, ScopeId,
+                MetadataScopeId, NamespaceId, ProviderClientId,
+                maintenanceIntervalMs: 250);
+            (Uri address, int peerPort) = await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45));
+            using var client = CreateClient(address, OperatorToken);
+            await WaitForMaintenanceTick(client, TimeSpan.FromSeconds(20));
+
+            using var peerNode = new Node(NodeId.From(peerNodeId));
+            await using SyncSession peerSession = await TcpSync.ConnectAsync(
+                peerNode,
+                "127.0.0.1",
+                peerPort,
+                SessionCapabilities.FullAuthorId |
+                SessionCapabilities.FlowControl |
+                SessionCapabilities.NamespaceRosterV31 |
+                SessionCapabilities.OriginFrontierV31 |
+                SessionCapabilities.FullReplaceV31).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(NodeId.From(localNode), peerSession.PeerNodeId);
+            await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(5));
+
+            Task<HttpResponseMessage> hostBaselineTask = client.PostAsJsonAsync(
+                "/admin/test/complete-peer-baseline", new { });
+            Task<(int Prefixes, int FieldsApplied)> peerBaselineTask =
+                peerSession.AutoReconcileAsync(
+                    peerNode, NamespaceId, initiate: false, maxPrefixes: 16);
+            await Task.WhenAll(hostBaselineTask, peerBaselineTask);
+            using HttpResponseMessage hostBaseline = await hostBaselineTask;
+            Assert.Equal(HttpStatusCode.OK, hostBaseline.StatusCode);
+
+            // Hold the exact Host-wide FLD reference-scan lease used by physical GC.
+            // A live SyncSession remains connected, but provider IPC must not cross
+            // the reference snapshot until the scan is revalidated and released.
+            gcClient = await FldDatabaseIpcClient.ConnectToDatabaseAsync(
+                fldRoot, Guid.NewGuid(), TimeSpan.FromSeconds(10));
+            Guid lease = await gcClient.AcquireGcLeaseAsync();
+            FldDatabaseIpcGcReferenceScan scan = await gcClient.OpenGcReferenceScanAsync();
+            Assert.NotEqual(Guid.Empty, scan.Token);
+
+            Task<HttpResponseMessage> blockedWrite = client.PostAsJsonAsync(
+                "/admin/test/local-change",
+                new
+                {
+                    recordIdHex = Convert.ToHexString(recordId),
+                    fieldId = (ushort)0x1775,
+                    changeIdHex = Convert.ToHexString(changeId),
+                    valueBase64 = Convert.ToBase64String("write-during-live-peer-gc"u8.ToArray()),
+                    keyEpoch = (ushort)0,
+                    hlcWall = 987_654_321UL,
+                    hlcLogical = 1U
+                });
+
+            await Task.Delay(TimeSpan.FromMilliseconds(350));
+            Assert.False(blockedWrite.IsCompleted,
+                "Provider mutation must remain outside the Host reference-scan critical section.");
+            await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(2));
+
+            await gcClient.ReleaseGcReferenceScanAsync(scan.Token);
+            await gcClient.ReleaseGcLeaseAsync(lease);
+
+            using HttpResponseMessage resumedWrite =
+                await blockedWrite.WaitAsync(TimeSpan.FromSeconds(8));
+            Assert.Equal(HttpStatusCode.OK, resumedWrite.StatusCode);
+            using JsonDocument receipt = JsonDocument.Parse(
+                await resumedWrite.Content.ReadAsStringAsync());
+            Assert.True(receipt.RootElement.GetProperty("receiptSequence").GetUInt64() > 0);
+
+            // The same TCP session must still be live after the bounded GC pause;
+            // a follow-up provider write must complete without reconnecting.
+            using HttpResponseMessage followUp = await PostJsonWithRetry(
+                client,
+                "/admin/test/local-change",
+                new
+                {
+                    recordIdHex = Convert.ToHexString(Id(0x77)),
+                    fieldId = (ushort)0x1776,
+                    changeIdHex = Convert.ToHexString(Id(0x78)),
+                    valueBase64 = Convert.ToBase64String("post-gc-peer-still-live"u8.ToArray()),
+                    keyEpoch = (ushort)0,
+                    hlcWall = 987_654_322UL,
+                    hlcLogical = 1U
+                },
+                TimeSpan.FromSeconds(8));
+            Assert.Equal(HttpStatusCode.OK, followUp.StatusCode);
+            await WaitForActivePeer(client, expected: 1, TimeSpan.FromSeconds(2));
+
+            using HttpResponseMessage shutdown = await client.PostAsJsonAsync(
+                "/admin/shutdown", new { reason = "finish GC/live-peer pause-resume integration" });
+            Assert.Equal(HttpStatusCode.OK, shutdown.StatusCode);
+            await runtimeHost.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            Assert.Equal(0, runtimeHost.ExitCode);
+            runtimeHost.Dispose();
+            runtimeHost = null;
+        }
+        finally
+        {
+            if (gcClient is not null)
+                await gcClient.DisposeAsync();
+            if (runtimeHost is not null)
+                await KillProcess(runtimeHost);
+            if (databaseHost is not null)
+                await KillProcess(databaseHost);
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
     private const ushort NamespaceId = 53;
     private const ulong MetadataPartition = 985;
     private const string ScopeId = "stage0-runtime-host";
