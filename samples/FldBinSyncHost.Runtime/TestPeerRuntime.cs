@@ -62,6 +62,10 @@ internal sealed class TestPeerRuntime : IAsyncDisposable
     public bool IsRunning => Volatile.Read(ref _running) != 0;
     public int Port => _listener?.Port ?? 0;
     public int ActivePeers => _sessions.Count;
+    public bool IsIdleMaintenanceWindowActive
+    {
+        get { lock (_maintenanceGate) return _idleMaintenanceWindow; }
+    }
     public int BaselineReadyPeers => _baselineReady.Count;
     public long OutboundRounds => Interlocked.Read(ref _outboundRounds);
     public long OutboundBatches => Interlocked.Read(ref _outboundBatches);
