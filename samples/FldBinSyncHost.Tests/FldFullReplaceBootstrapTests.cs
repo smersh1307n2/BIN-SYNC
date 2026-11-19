@@ -85,11 +85,15 @@ public sealed class FldFullReplaceBootstrapTests
         FldDatabaseDataProvider? targetProvider = null;
         Node? targetNode = null;
         Node sourceNode = new NodeBuilder().WithNodeId(sourceId).WithEpoch(7).Build();
+        Trace("source-snapshot-prepare-start");
         PreparedFullReplaceSnapshot prepared = CreateSourceSnapshot();
+        Trace($"source-snapshot-prepare-complete entries={prepared.ExpectedEntryCount}");
 
         try
         {
+            Trace("target-reopen-start");
             targetDatabase = FldDatabase.Open(targetFldRoot, NamespaceId, targetId.ToArray());
+            Trace("target-reopen-complete");
             targetProvider = new FldDatabaseDataProvider(targetDatabase, static () => 1);
 
             // The target starts with a different, durable remote row. FULL_REPLACE
@@ -111,7 +115,9 @@ public sealed class FldFullReplaceBootstrapTests
                 oldTargetRow.HlcLogical,
                 oldTargetRow.KeyEpoch,
                 oldTargetRow.IsTombstone);
+            Trace("target-seed-commit-start");
             _ = targetDatabase.Commit();
+            Trace("target-seed-commit-complete");
             ProviderChangePage targetFeed = targetProvider.ReadLocalChanges(0, 4096);
             Assert.Single(targetFeed.Changes);
             targetProvider.CommitPublishedOrigins(new[]
@@ -120,6 +126,7 @@ public sealed class FldFullReplaceBootstrapTests
                     targetFeed.Changes[0], new OperationOrigin(targetId, 1, 1))
             });
             targetProvider.AcknowledgeLocalChanges(targetFeed.ScannedThroughSequence);
+            Trace("target-seed-published-and-acked");
 
             targetNode = new NodeBuilder().WithNodeId(targetId).WithEpoch(8).Build();
             var targetCoordinator = new StorageSyncCoordinator(
@@ -153,28 +160,37 @@ public sealed class FldFullReplaceBootstrapTests
             Task<SyncSession> firstSourceTask = SyncSession.ConnectAsync(
                 sourceNode, firstToSource, FullReplaceCapabilities());
             await Task.WhenAll(firstTargetTask, firstSourceTask).WaitAsync(TimeSpan.FromSeconds(30));
+            Trace("first-session-handshake-complete");
             SyncSession firstSource = await firstSourceTask;
             SyncSession firstTarget = await firstTargetTask;
             Task<FullReplaceInstalledAck> firstSend = StorageFullReplaceSender.SendPreparedSnapshotAsync(
                 prepared, firstSource, sourceGcStore, trust, roster, sourceId, sourceSeed);
 
+            Trace("first-begin-receive-start");
             FullReplaceTransferProtocol.Begin firstManifest =
                 await firstTarget.ReceiveFullReplaceBeginAsync(
                     NamespaceId, roster, trust, expectedFrameSequence: 1).WaitAsync(TimeSpan.FromSeconds(30));
             StorageFullReplaceReceiver firstReceiver = CreateReceiver();
+            Trace("first-begin-received");
             ProviderFullReplaceProgress firstProgress = firstReceiver.Begin(firstManifest);
+            Trace($"first-stage-begin-complete next={firstProgress.NextIndex}");
             Assert.Equal(0, firstProgress.NextIndex);
             await firstTarget.SendFullReplaceReadyAsync(firstReceiver.GetWireProgress(), frameSequence: 1);
 
+            Trace("first-chunk-receive-start");
             FullReplaceTransferProtocol.Chunk firstChunk =
                 await firstTarget.ReceiveFullReplaceChunkAsync(NamespaceId, expectedFrameSequence: 2).WaitAsync(TimeSpan.FromSeconds(30));
             Assert.Equal(FullReplaceTransferProtocol.MaxChunkEntries, firstChunk.Entries.Count);
+            Trace($"first-chunk-received entries={firstChunk.Entries.Count}");
             ProviderFullReplaceProgress staged = firstReceiver.Stage(firstChunk);
+            Trace($"first-chunk-staged next={staged.NextIndex}");
             Assert.Equal(FullReplaceTransferProtocol.MaxChunkEntries, staged.NextIndex);
             Assert.False(staged.IsCommitted);
 
+            Trace("first-session-dispose-start");
             await firstSource.DisposeAsync();
             await firstTarget.DisposeAsync();
+            Trace("first-session-dispose-complete");
             try
             {
                 Assert.False(firstSend.IsCompletedSuccessfully,
@@ -188,12 +204,14 @@ public sealed class FldFullReplaceBootstrapTests
                 // after its durable page and before the installation ACK.
             }
 
+            Trace("target-provider-dispose-start");
             targetProvider.Dispose();
             targetProvider = null;
             targetDatabase.Dispose();
             targetDatabase = null;
             targetNode.Dispose();
             targetNode = null;
+            Trace("target-runtime-disposed");
 
             // Reopen the same FLD directory. BEGIN must recover the staging cursor,
             // and the sender must resume at entry 4096 without retransmitting page zero.
@@ -211,23 +229,30 @@ public sealed class FldFullReplaceBootstrapTests
             Task<SyncSession> secondSourceTask = SyncSession.ConnectAsync(
                 sourceNode, secondToSource, FullReplaceCapabilities());
             await Task.WhenAll(secondTargetTask, secondSourceTask).WaitAsync(TimeSpan.FromSeconds(30));
+            Trace("second-session-handshake-complete");
             await using SyncSession secondSource = await secondSourceTask;
             await using SyncSession secondTarget = await secondTargetTask;
 
+            Trace("resumed-receiver-start");
             Task<FullReplaceInstalledAck?> receive = resumedReceiver.ReceiveTransferAsync(secondTarget);
+            Trace("resumed-sender-start");
             Task<FullReplaceInstalledAck> send = StorageFullReplaceSender.SendPreparedSnapshotAsync(
                 prepared, secondSource, sourceGcStore, trust, roster, sourceId, sourceSeed);
+            Trace("resumed-transfer-await-start");
             Task firstCompleted = await Task.WhenAny((Task)send, (Task)receive).WaitAsync(TimeSpan.FromSeconds(30));
+            Trace(firstCompleted == receive ? "resumed-receiver-completed-first" : "resumed-sender-completed-first");
             FullReplaceInstalledAck acknowledgement;
             FullReplaceInstalledAck? receiverAck;
             if (firstCompleted == receive)
             {
                 receiverAck = await receive;
+                Trace("resumed-receiver-result-received");
                 acknowledgement = await send.WaitAsync(TimeSpan.FromSeconds(30));
             }
             else
             {
                 acknowledgement = await send;
+                Trace("resumed-sender-ack-received");
                 receiverAck = await receive.WaitAsync(TimeSpan.FromSeconds(30));
             }
 
@@ -272,6 +297,7 @@ public sealed class FldFullReplaceBootstrapTests
 
         PreparedFullReplaceSnapshot CreateSourceSnapshot()
         {
+            Trace("source-db-seed-start");
             // Publish the source's own local feed, stamp immutable Origin values,
             // then ACK that feed so the FULL_REPLACE snapshot contains no drafts.
             FldDatabaseDataProvider provider = sourceProvider;
@@ -296,7 +322,9 @@ public sealed class FldFullReplaceBootstrapTests
                     mutations[i].KeyEpoch,
                     mutations[i].IsTombstone);
             }
+            Trace("source-db-batch-commit-start");
             _ = sourceDatabase.Commit();
+            Trace("source-db-batch-commit-complete");
 
             var changes = new List<ProviderChange>(EntryCount);
             ulong cursor = 0;
@@ -305,6 +333,7 @@ public sealed class FldFullReplaceBootstrapTests
             {
                 ProviderChangePage page = provider.ReadLocalChanges(cursor, 4096);
                 changes.AddRange(page.Changes);
+                Trace($"source-outbox-page scanned={page.ScannedThroughSequence} changes={page.Changes.Count}");
                 if (page.ScannedThroughSequence <= cursor)
                     throw new InvalidDataException("FLD source feed did not advance while preparing the full-replace snapshot.");
                 cursor = page.ScannedThroughSequence;
@@ -316,12 +345,19 @@ public sealed class FldFullReplaceBootstrapTests
                 published[i] = new ProviderPublishedOrigin(
                     changes[i], new OperationOrigin(sourceId, 1, checked((ulong)i + 1)));
             for (int offset = 0; offset < published.Length; offset += 4096)
+            {
+                Trace($"source-origin-commit-start offset={offset}");
                 provider.CommitPublishedOrigins(
                     published.Skip(offset).Take(Math.Min(4096, published.Length - offset)).ToArray());
+                Trace($"source-origin-commit-complete offset={offset}");
+            }
             provider.AcknowledgeLocalChanges(cursor);
+            Trace("source-outbox-ack-complete");
 
-            return StorageFullReplaceSender.PrepareSnapshot(
+            PreparedFullReplaceSnapshot snapshot = StorageFullReplaceSender.PrepareSnapshot(
                 provider, trust, roster, sourceId, Guid.NewGuid(), sourceSeed);
+            Trace($"source-prepared entries={snapshot.ExpectedEntryCount}");
+            return snapshot;
         }
     }
 
@@ -361,6 +397,9 @@ public sealed class FldFullReplaceBootstrapTests
             KeyEpoch = 0,
             Value = value
         };
+
+    private static void Trace(string message) =>
+        Console.WriteLine($"FULL_REPLACE_TRACE {DateTime.UtcNow:O} {message}");
 
     private static byte[] Id(int value)
     {
