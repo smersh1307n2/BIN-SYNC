@@ -34,6 +34,7 @@ public sealed class FldBinSyncGcHostOperations
     private readonly FldBinSyncGcOperatorPolicyCoordinator _policyCoordinator;
     private readonly FldBinSyncGcMaintenanceControl _runtime;
     private readonly FldBinSyncGcOperatorPolicyBinding _binding;
+    private int _nextMaintenanceSlice;
 
     internal FldBinSyncGcHostOperations(
         FldBinSyncAsyncHostAdapter adapter,
