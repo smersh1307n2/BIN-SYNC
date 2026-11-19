@@ -63,6 +63,10 @@ int maintenanceIntervalMs = int.TryParse(
         ? configuredMaintenanceIntervalMs : 1000;
 if (maintenanceIntervalMs is < 100 or > 60000)
     throw new InvalidOperationException("Test Host maintenance interval must be between 100 and 60000 ms.");
+long gcMaintenanceSlices = 0;
+long gcReceiptsReclaimed = 0;
+long gcChangeIdsReclaimed = 0;
+long gcTombstonesReclaimed = 0;
 var scheduler = new TestMaintenanceScheduler(
     async cancellationToken =>
     {
@@ -119,10 +123,6 @@ var scheduler = new TestMaintenanceScheduler(
     TimeSpan.FromMilliseconds(maintenanceIntervalMs));
 WebApplication? app = null;
 bool durableStopCommitted = false;
-long gcMaintenanceSlices = 0;
-long gcReceiptsReclaimed = 0;
-long gcChangeIdsReclaimed = 0;
-long gcTombstonesReclaimed = 0;
 
 try
 {
