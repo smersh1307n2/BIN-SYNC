@@ -8180,11 +8180,11 @@ private static byte[] EncodeChangeLedgerValue(ChangeLedgerValue ledger)
             });
 
     private DiskKeySet<InterestedPeerKey> CreateCompletedPeerBaselineSet(PartitionKey partitionKey)
-        => new(() => EnumerateKeyspace(partitionKey, 19, 22, 0,
+        => new(() => EnumerateKeyspace<InterestedPeerKey, byte>(partitionKey, 19, 22, 0,
                 (key, offset) => new InterestedPeerKey(BinaryPrimitives.ReadUInt16LittleEndian(key.AsSpan(offset)),
                     NodeId.From(key.AsSpan(offset + 2, 16)),
                     BinaryPrimitives.ReadUInt32LittleEndian(key.AsSpan(offset + 18))),
-                _ => default).Select(pair => pair.Key),
+                _ => 0).Select(pair => pair.Key),
             key => ContainsStorageKey(EncodeCompletedPeerBaselineKey(partitionKey, key)));
 
     private bool TryReadStreamWatermark(PartitionKey partitionKey, byte kind,
