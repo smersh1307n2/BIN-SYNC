@@ -1,15 +1,6 @@
 name: ChangeId GC Allocation Breakdown
 
 on:
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
-      - 'samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs'
-      - 'samples/FldBinSyncHost/FldDatabaseIpcAsyncDataProvider.cs'
-      - 'external/Fld1.Storage'
-      - '.github/workflows/changeid-gc-allocation.yml'
   workflow_dispatch:
 
 permissions:
