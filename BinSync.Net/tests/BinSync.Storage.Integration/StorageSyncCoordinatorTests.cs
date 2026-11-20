@@ -533,7 +533,16 @@ public sealed class StorageSyncCoordinatorTests
             LoseNextPublishedOriginResponseAfterCommit = true
         };
         RecordId record = RecordId.From(Guid.Parse("98000000-0000-0000-0000-000000000098").ToByteArray());
+        BatchId supersededChangeId = BatchId.From(Guid.Parse("98000000-0000-0000-0000-000000000097").ToByteArray());
         BatchId changeId = BatchId.From(Guid.Parse("98000000-0000-0000-0000-000000000099").ToByteArray());
+        // The older draft remains in the feed while the coalesced winner is frozen.
+        // On retry, the coordinator must preserve the winner without cloning the
+        // accumulated Node cache map when it encounters that frozen row.
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = record, FieldId = 0x0981, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 9800, Value = "superseded"u8.ToArray(), ChangeId = supersededChangeId
+        });
         provider.AppendLocalChange(new ProviderMutation
         {
             RecordId = record, FieldId = 0x0981, AuthorNodeId = node.NodeId,
