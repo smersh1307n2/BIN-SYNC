@@ -895,11 +895,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             ulong providerHighWatermark = provider.LocalChangeHighWatermark;
             if (!TryCollectProviderChangeIdsForGc(provider, providerHighWatermark, out HashSet<BatchId> liveChangeIds))
                 return 0;
-            foreach (PendingApplyValue pending in current.PendingApplies.Values)
-                if (pending.Batch.NamespaceId == namespaceId)
-                    foreach (MetadataOperation operation in pending.Batch.Operations)
-                        liveChangeIds.Add(operation.ChangeId);
-
+            // PendingApply can contain a large unresolved receive backlog. Keep its
+            // live-identity guard bounded just like stream history; false positives
+            // only retain ledger rows and can never authorize deletion.
+            MetadataStreamChangeIdBloomFilter pendingApplyLiveIds =
+                BuildPendingApplyChangeIdBloomFilter(current, namespaceId);
             MetadataStreamChangeIdBloomFilter streamLiveIds =
                 BuildMetadataStreamChangeIdBloomFilter(partitionKey, current, namespaceId);
             var candidates = new List<(LedgerKey Key, byte[] StorageKey)>(limit);
@@ -913,6 +913,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 if (!IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
                 if (liveChangeIds.Contains(pair.Key.ChangeId) ||
+                    pendingApplyLiveIds.MightContain(pair.Key.ChangeId) ||
                     streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
                     continue;
