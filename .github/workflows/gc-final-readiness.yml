@@ -1,17 +1,6 @@
 name: BIN-SYNC GC Final Readiness (single integrated run)
 
 on:
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - 'BinSync.Net/src/BinSync.Storage/**'
-      - 'samples/FldBinSyncHost/**'
-      - 'samples/FldBinSyncHost.Tests/**'
-      - 'samples/FldBinSyncHost.Runtime/**'
-      - 'external/Fld1.Storage'
-      - 'docs/GC-ENDURANCE-STAGE4.md'
-      - '.github/workflows/gc-final-readiness.yml'
   workflow_dispatch:
 
 permissions:
