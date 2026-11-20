@@ -983,7 +983,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var partitionKey = new PartitionKey(scopeId, localReplica);
         List<ChangeIdGcCandidate> candidates;
         MetadataStreamChangeIdBloomFilter streamLiveIds;
-        HashSet<BatchId> pendingApplyChangeIds;
+        MetadataStreamChangeIdBloomFilter pendingApplyLiveIds;
         ulong initialMetadataRevision;
         Dictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier;
         lock (_gate)
@@ -1011,7 +1011,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             // revision so the post-Host check can revalidate the entire candidate set
             // with one point read instead of one B+ tree lookup per ChangeId.
             initialMetadataRevision = current.MetadataRevision;
-            pendingApplyChangeIds = BuildPendingApplyChangeIdSet(current, namespaceId);
+            pendingApplyLiveIds = BuildPendingApplyChangeIdBloomFilter(current, namespaceId);
             streamLiveIds = BuildMetadataStreamChangeIdBloomFilter(partitionKey, current, namespaceId);
             candidates = new List<ChangeIdGcCandidate>(limit);
             foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
@@ -1019,7 +1019,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 ChangeLedgerValue ledgerValue = pair.Value;
                 OperationOrigin origin = ledgerValue.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
-                    pendingApplyChangeIds.Contains(pair.Key.ChangeId) ||
+                    pendingApplyLiveIds.MightContain(pair.Key.ChangeId) ||
                     streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
@@ -1078,7 +1078,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 LedgerKey key = candidate.Key;
                 ChangeLedgerValue snapshotValue = candidate.Value;
                 if (hostReferenced.Contains(key.ChangeId) ||
-                    pendingApplyChangeIds.Contains(key.ChangeId) ||
+                    pendingApplyLiveIds.MightContain(key.ChangeId) ||
                     streamLiveIds.MightContain(key.ChangeId) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, snapshotValue.Provenance))
                     continue;
@@ -1136,15 +1136,37 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         => frontier.TryGetValue((author, epoch), out ulong safeSequence) &&
            sequence <= safeSequence;
 
-    private HashSet<BatchId> BuildPendingApplyChangeIdSet(
+    private MetadataStreamChangeIdBloomFilter BuildPendingApplyChangeIdBloomFilter(
         PartitionState current, int namespaceId)
     {
-        var live = new HashSet<BatchId>();
+        // Count first, then populate a capped filter. PendingApply rows are disk-primary;
+        // enumerating twice trades bounded CPU/I/O for avoiding an unbounded HashSet.
+        ulong expectedItems = 0;
         foreach (PendingApplyValue pending in current.PendingApplies.Values)
-            if (pending.Batch.NamespaceId == namespaceId)
-                foreach (MetadataOperation operation in pending.Batch.Operations)
-                    live.Add(operation.ChangeId);
-        return live;
+        {
+            if (pending.Batch.NamespaceId != namespaceId)
+                continue;
+            ulong count = (ulong)pending.Batch.Operations.Count;
+            expectedItems = ulong.MaxValue - expectedItems < count
+                ? ulong.MaxValue
+                : expectedItems + count;
+        }
+
+        const int minBytes = 64 * 1024;
+        const int maxBytes = 8 * 1024 * 1024;
+        const ulong maxItemsAtCap = (ulong)maxBytes * 8 / 10;
+        int byteCount = expectedItems >= maxItemsAtCap
+            ? maxBytes
+            : (int)Math.Max((ulong)minBytes, (expectedItems * 10 + 7) / 8);
+        var filter = new MetadataStreamChangeIdBloomFilter(byteCount);
+        foreach (PendingApplyValue pending in current.PendingApplies.Values)
+        {
+            if (pending.Batch.NamespaceId != namespaceId)
+                continue;
+            foreach (MetadataOperation operation in pending.Batch.Operations)
+                filter.Add(operation.ChangeId);
+        }
+        return filter;
     }
 
     private MetadataStreamChangeIdBloomFilter BuildMetadataStreamChangeIdBloomFilter(
