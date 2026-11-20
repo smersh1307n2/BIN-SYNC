@@ -1479,14 +1479,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
             var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
 
-            var pendingReceiptKeys = new HashSet<ReceiptKey>();
-            foreach (PendingApplyValue pending in current.PendingApplies.Values)
-            {
-                MetadataIncomingBatch batch = pending.Batch;
-                pendingReceiptKeys.Add(new ReceiptKey(
-                    batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId));
-            }
-
             var candidates = new List<ReceiptKey>(limit);
             foreach (var pair in EnumerateReceipts(partitionKey, current, namespaceId))
             {
@@ -1506,8 +1498,6 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     receive.CursorEnd < receipt.CursorEnd ||
                     !HasReceiveChainForAuthor(current, receiveKey))
                     continue;
-                if (pendingReceiptKeys.Contains(key))
-                    continue;
                 if (externalScan.HasExternalReceiptReference(
                     key.Sender, key.Epoch, receipt.TransportPeerEpoch, key.BatchId))
                     continue;
@@ -1521,6 +1511,21 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
 
             if (candidates.Count == 0)
                 return 0;
+
+            // PendingApply history is disk-primary and may be arbitrarily large.
+            // Intersect it with this bounded candidate page instead of building a
+            // HashSet containing every pending receipt in the namespace.
+            var eligibleCandidates = new HashSet<ReceiptKey>(candidates);
+            foreach (PendingApplyValue pending in current.PendingApplies.Values)
+            {
+                MetadataIncomingBatch batch = pending.Batch;
+                eligibleCandidates.Remove(new ReceiptKey(
+                    batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId));
+                if (eligibleCandidates.Count == 0)
+                    return 0;
+            }
+            candidates.RemoveAll(key => !eligibleCandidates.Contains(key));
+
             byte[][] deletes = candidates
                 .Select(key => EncodeReceiptKey(partitionKey, key))
                 .ToArray();
