@@ -3215,11 +3215,10 @@ public sealed class StorageSyncCoordinatorTests
             });
 
         Assert.True(StorageMetadataStore.TryCollectProviderChangeIdsForGc(
-            provider, provider.LocalChangeHighWatermark, out HashSet<BatchId> liveChangeIds));
+            provider, provider.LocalChangeHighWatermark, out StorageMetadataStore.MetadataStreamChangeIdBloomFilter liveChangeIds));
         Assert.Equal(new ulong[] { 0, 1 }, scannedCursors);
-        Assert.Single(liveChangeIds);
-        Assert.Equal(innerProvider.ReadLocalChanges(1, 10).Changes[0].ChangeId,
-            Assert.Single(liveChangeIds));
+        BatchId expectedChangeId = Assert.Single(innerProvider.ReadLocalChanges(1, 10).Changes).ChangeId;
+        Assert.True(liveChangeIds.MightContain(expectedChangeId));
     }
 
     [Fact]
@@ -3242,8 +3241,8 @@ public sealed class StorageSyncCoordinatorTests
                 new[] { page.Changes[0] with { ChangeId = default } }, page.ScannedThroughSequence));
 
         Assert.False(StorageMetadataStore.TryCollectProviderChangeIdsForGc(
-            provider, provider.LocalChangeHighWatermark, out HashSet<BatchId> liveChangeIds));
-        Assert.Empty(liveChangeIds);
+            provider, provider.LocalChangeHighWatermark, out StorageMetadataStore.MetadataStreamChangeIdBloomFilter liveChangeIds));
+        Assert.False(liveChangeIds.MightContain(default));
     }
 
     [Fact]
