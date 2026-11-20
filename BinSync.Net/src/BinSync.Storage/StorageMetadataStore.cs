@@ -2974,14 +2974,18 @@ private bool ValidateIncomingBatchForStaging(
                 operation.AuthorNodeId == localAuthor && operation.RelayEligible)))
             throw new InvalidOperationException(
                 "Outbound publication is fenced while an incoming relay apply for the same author stream is unresolved.");
-        var existingByChangeId = new Dictionary<BatchId, MetadataOutboundItem>();
+        // Existing retries are required to form a prefix, so keep their resolved
+        // items directly in the result slots instead of building two ChangeId maps.
+        var result = new MetadataOutboundItem[operations.Count];
         var newOperations = new List<MetadataFrozenOperation>(operations.Count);
         var indexedRetryPayloads = new List<(ulong Sequence, MetadataFrozenOperation Operation)>(operations.Count);
         using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
         bool sawNewOperation = false;
+        int existingCount = 0;
         ulong previousExistingSequence = 0;
-        foreach (var operation in operations)
+        for (int operationIndex = 0; operationIndex < operations.Count; operationIndex++)
         {
+            MetadataFrozenOperation operation = operations[operationIndex];
             var ledgerKey = new LedgerKey(namespaceId, operation.ChangeId);
             bool alreadyFrozen = TryGetChangeLedger(payloadSnapshot, partitionRoot, current, ledgerKey, out var priorLedger)
                 && priorLedger.IsLocalOutbound;
@@ -3043,7 +3047,8 @@ private bool ValidateIncomingBatchForStaging(
             if (prior.Sequence <= previousExistingSequence)
                 throw new InvalidDataException("Previously frozen outbound operations are not in author-sequence order.");
             previousExistingSequence = prior.Sequence;
-            existingByChangeId.Add(operation.ChangeId, prior);
+            result[operationIndex] = prior;
+            existingCount++;
         }
 
         ValidateIndexedOutboundRetryPayloads(
@@ -3052,9 +3057,6 @@ private bool ValidateIncomingBatchForStaging(
         // Each ChangeId is an independent immutable operation. A replay may contain
         // already-frozen feed entries plus newer entries appended before the provider
         // ACK completed; preserve the old sequences and allocate only the new ones.
-        var frozenByChangeId = new Dictionary<BatchId, MetadataOutboundItem>(operations.Count);
-        foreach (var existing in existingByChangeId)
-            frozenByChangeId.Add(existing.Key, existing.Value);
 
         if (newOperations.Count > 0)
         {
@@ -3116,16 +3118,16 @@ private bool ValidateIncomingBatchForStaging(
                     Provenance = new OperationOrigin(localAuthor, operation.OriginAuthorEpoch, originSequence)
                 };
                 frozen.Add(item);
-                frozenByChangeId.Add(operation.ChangeId, item);
+                result[existingCount + frozen.Count - 1] = item;
             }
 
             PersistFrozenOutboundDelta(partitionKey, current, key, namespaceId, localAuthor,
                 newOperations, frozen, highWatermark, originHighWatermarks);
         }
 
-        var result = new MetadataOutboundItem[operations.Count];
-        for (int i = 0; i < operations.Count; i++)
-            result[i] = CloneOutboundItem(frozenByChangeId[operations[i].ChangeId]);
+        for (int i = 0; i < result.Length; i++)
+            result[i] = CloneOutboundItem(result[i]
+                ?? throw new InvalidDataException("Outbound freeze did not resolve every input operation."));
         return result;
         }
     }
