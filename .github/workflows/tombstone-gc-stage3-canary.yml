@@ -1,31 +1,6 @@
 name: Tombstone GC Stage 3 Canary
 
 on:
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
-      - 'samples/FldBinSyncHost/**'
-      - 'samples/FldBinSyncHost.Tests/**'
-      - 'samples/FldBinSyncHost.Runtime/**'
-      - 'external/Fld1.Storage'
-      - 'docs/METADATA-STORE-GC-DESIGN.md'
-      - 'docs/BIN-SYNC-ROADMAP-v3.md'
-      - '.github/workflows/tombstone-gc-stage3-canary.yml'
-  pull_request:
-    types: [opened, synchronize, reopened, edited]
-    branches:
-      - main
-    paths:
-      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
-      - 'samples/FldBinSyncHost/**'
-      - 'samples/FldBinSyncHost.Tests/**'
-      - 'samples/FldBinSyncHost.Runtime/**'
-      - 'external/Fld1.Storage'
-      - 'docs/METADATA-STORE-GC-DESIGN.md'
-      - 'docs/BIN-SYNC-ROADMAP-v3.md'
-      - '.github/workflows/tombstone-gc-stage3-canary.yml'
   workflow_dispatch:
 
 permissions:
