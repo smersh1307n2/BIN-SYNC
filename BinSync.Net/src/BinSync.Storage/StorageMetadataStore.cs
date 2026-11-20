@@ -3086,7 +3086,6 @@ private bool ValidateIncomingBatchForStaging(
             for (int newOperationIndex = 0; newOperationIndex < newOperationCount; newOperationIndex++)
             {
                 MetadataFrozenOperation operation = newOperations[newOperationIndex];
-            {
                 ulong sequence = checked(++highWatermark);
                 var originKey = new OriginStreamKey(namespaceId, localAuthor, operation.OriginAuthorEpoch);
                 if (!originHighWatermarks.TryGetValue(originKey, out OriginIssuedState issuedState))
