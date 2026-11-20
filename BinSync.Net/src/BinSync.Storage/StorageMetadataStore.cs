@@ -2977,8 +2977,10 @@ private bool ValidateIncomingBatchForStaging(
         // Existing retries are required to form a prefix, so keep their resolved
         // items directly in the result slots instead of building two ChangeId maps.
         var result = new MetadataOutboundItem[operations.Count];
-        var newOperations = new List<MetadataFrozenOperation>(operations.Count);
-        var indexedRetryPayloads = new List<(ulong Sequence, MetadataFrozenOperation Operation)>(operations.Count);
+        var newOperations = new MetadataFrozenOperation[operations.Count];
+        int newOperationCount = 0;
+        var indexedRetryPayloads = new (ulong Sequence, MetadataFrozenOperation Operation)[operations.Count];
+        int indexedRetryPayloadCount = 0;
         using StorageSnapshot payloadSnapshot = _storage.OpenSnapshot();
         bool sawNewOperation = false;
         int existingCount = 0;
@@ -3003,7 +3005,7 @@ private bool ValidateIncomingBatchForStaging(
             if (!alreadyFrozen)
             {
                 sawNewOperation = true;
-                newOperations.Add(operation);
+                newOperations[newOperationCount++] = operation;
                 continue;
             }
             if (sawNewOperation)
@@ -3024,7 +3026,7 @@ private bool ValidateIncomingBatchForStaging(
                 {
                     Provenance = frozenLedger.Provenance
                 };
-                indexedRetryPayloads.Add((sequence, operation));
+                indexedRetryPayloads[indexedRetryPayloadCount++] = (sequence, operation);
             }
             else
             {
@@ -3052,19 +3054,21 @@ private bool ValidateIncomingBatchForStaging(
         }
 
         ValidateIndexedOutboundRetryPayloads(
-            payloadSnapshot, partitionRoot, namespaceId, localAuthor, indexedRetryPayloads);
+            payloadSnapshot, partitionRoot, namespaceId, localAuthor,
+            new ArraySegment<(ulong Sequence, MetadataFrozenOperation Operation)>(
+                indexedRetryPayloads, 0, indexedRetryPayloadCount));
 
         // Each ChangeId is an independent immutable operation. A replay may contain
         // already-frozen feed entries plus newer entries appended before the provider
         // ACK completed; preserve the old sequences and allocate only the new ones.
 
-        if (newOperations.Count > 0)
+        if (newOperationCount > 0)
         {
             ulong highWatermark = current.OutboundHighWatermarks.TryGetValue(key, out var priorHighWatermark)
                 ? priorHighWatermark
                 : 0;
             var originHighWatermarks = new Dictionary<OriginStreamKey, OriginIssuedState>();
-            var frozen = new List<MetadataOutboundItem>(newOperations.Count);
+            int frozenStart = existingCount;
             ulong authorMaxHlcWall = 0;
             uint authorMaxHlcLogical = 0;
             foreach (var issued in current.OriginHighWatermarks)
@@ -3079,7 +3083,9 @@ private bool ValidateIncomingBatchForStaging(
                     authorMaxHlcLogical = issued.Value.MaxHlcLogical;
                 }
             }
-            foreach (var operation in newOperations)
+            for (int newOperationIndex = 0; newOperationIndex < newOperationCount; newOperationIndex++)
+            {
+                MetadataFrozenOperation operation = newOperations[newOperationIndex];
             {
                 ulong sequence = checked(++highWatermark);
                 var originKey = new OriginStreamKey(namespaceId, localAuthor, operation.OriginAuthorEpoch);
@@ -3117,12 +3123,13 @@ private bool ValidateIncomingBatchForStaging(
                 {
                     Provenance = new OperationOrigin(localAuthor, operation.OriginAuthorEpoch, originSequence)
                 };
-                frozen.Add(item);
-                result[existingCount + frozen.Count - 1] = item;
+                result[frozenStart + newOperationIndex] = item;
             }
 
             PersistFrozenOutboundDelta(partitionKey, current, key, namespaceId, localAuthor,
-                newOperations, frozen, highWatermark, originHighWatermarks);
+                new ArraySegment<MetadataFrozenOperation>(newOperations, 0, newOperationCount),
+                new ArraySegment<MetadataOutboundItem>(result, frozenStart, newOperationCount),
+                highWatermark, originHighWatermarks);
         }
 
         for (int i = 0; i < result.Length; i++)
