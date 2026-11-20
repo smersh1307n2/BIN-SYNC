@@ -14,12 +14,12 @@ using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Diagnosers;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
-using BenchmarkDotNet.Toolchains.InProcess.Emit;
 
 var config = DefaultConfig.Instance
     .AddDiagnoser(MemoryDiagnoser.Default)
     .AddJob(Job.Default
-        .WithToolchain(InProcessEmitToolchain.Instance) // no secondary process; simpler CI
+        // Use the normal out-of-process toolchain: long stateful lifecycle fixtures
+        // can exceed the in-process runner timeout during iteration setup/measurement.
         .WithWarmupCount(3)
         .WithIterationCount(10));
 
