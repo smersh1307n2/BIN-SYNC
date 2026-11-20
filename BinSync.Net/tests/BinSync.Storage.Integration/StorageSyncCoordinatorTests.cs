@@ -83,6 +83,7 @@ public sealed class StorageSyncCoordinatorTests
         public bool LoseNextAppendResponseAfterCommit { get; set; }
         public bool LoseNextOutboxAckResponseAfterCommit { get; set; }
         public bool LoseNextPublishedOriginResponseAfterCommit { get; set; }
+        public bool FailNextPublishedOriginBeforeCommit { get; set; }
         public List<int> PublishedOriginBatchSizes { get; } = new();
         public Action? AfterNextRead { get; set; }
         public TaskCompletionSource<bool>? HighWatermarkEntered { get; set; }
@@ -176,6 +177,11 @@ public sealed class StorageSyncCoordinatorTests
         {
             ct.ThrowIfCancellationRequested();
             PublishedOriginBatchSizes.Add(published.Count);
+            if (FailNextPublishedOriginBeforeCommit)
+            {
+                FailNextPublishedOriginBeforeCommit = false;
+                throw new IOException("simulated failure before durable published-origin stamping");
+            }
             _provider.CommitPublishedOrigins(published);
             if (LoseNextPublishedOriginResponseAfterCommit)
             {
@@ -515,6 +521,56 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
         Assert.False(node.HasPendingProviderOperationReceipts);
     }
+    [Fact]
+    public async Task Async_local_publication_streams_recovered_published_origins_in_bounded_pages()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-origin-recovered-pages"), 502);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(102);
+        const string scope = "async-origin-recovered-pages";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+        using var wal = Wal.Open(Path.Combine(_root, "async-origin-recovered-pages.wal"));
+        node.AttachWal(wal);
+        var asyncProvider = new RecordingAsyncLocalProvider(provider)
+        {
+            FailNextPublishedOriginBeforeCommit = true
+        };
+        const int count = 4097;
+        for (int i = 0; i < count; i++)
+        {
+            RecordId record = RecordId.From(Guid.NewGuid().ToByteArray());
+            BatchId changeId = BatchId.From(Guid.NewGuid().ToByteArray());
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = record, FieldId = 0x0B02, AuthorNodeId = node.NodeId,
+                OriginAuthorEpoch = 1, HlcWall = checked((ulong)(30_000 + i)),
+                Value = new byte[] { (byte)i }, ChangeId = changeId
+            });
+        }
+
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+        await Assert.ThrowsAsync<IOException>(async () =>
+            await coordinator.PublishLocalChangesAsync(
+                asyncProvider, current => StorageNodePersistence.Save(storage, current), limit: 1024));
+
+        Assert.Equal((ulong)count, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Equal(0UL, asyncProvider.LastOutboxAck);
+        Assert.Equal(count, provider.ReadLocalChanges(0, count + 1).Changes.Count);
+
+        int recovered = await coordinator.PublishLocalChangesAsync(
+            asyncProvider, current => StorageNodePersistence.Save(storage, current), limit: 1024);
+
+        Assert.Equal(count, recovered);
+        Assert.Equal(new[] { 4096, 4096, 1 }, asyncProvider.PublishedOriginBatchSizes);
+        Assert.Equal((ulong)count, asyncProvider.LastOutboxAck);
+        Assert.Equal((ulong)count, asyncProvider.LastReceiptAck);
+        Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
+        Assert.False(node.HasPendingProviderOperationReceipts);
+    }
+
     [Fact]
     public async Task Async_local_publication_recovers_after_published_origin_commit_response_loss()
     {
