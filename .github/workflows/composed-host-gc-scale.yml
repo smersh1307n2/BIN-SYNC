@@ -1,16 +1,6 @@
 name: Composed Host Metadata GC Smoke and Scale
 
 on:
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - 'BinSync.Net/src/BinSync.Storage/AsyncStorageSyncCoordinator.cs'
-      - 'BinSync.Net/src/BinSync.Storage/AssemblyInfo.cs'
-      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
-      - 'samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs'
-      - 'external/Fld1.Storage'
-      - '.github/workflows/composed-host-gc-scale.yml'
   workflow_dispatch:
   schedule:
     # Weekly scale evidence; not part of every functional CI run (UTC)
