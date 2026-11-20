@@ -49,11 +49,27 @@ jobs:
         run: dotnet restore BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj
       - name: Build
         run: dotnet build BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-restore
-      - name: Test
-        run: dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-build --no-restore --blame-hang-timeout 8m --blame-hang-dump-type mini --logger "console;verbosity=detailed" --logger "trx;LogFileName=storage-integration.trx"
+      - name: Test focused ChangeId GC coverage on pushes; full suite on demand
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj"
+          common=(--configuration Release --no-build --no-restore --blame-hang-timeout 8m --blame-hang-dump-type mini)
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            dotnet test "$project" "${common[@]}" \
+              --filter "FullyQualifiedName~Change_id_gc_" \
+              --logger "console;verbosity=detailed" \
+              --logger "trx;LogFileName=changeid-gc-focused.trx"
+          else
+            dotnet test "$project" "${common[@]}" \
+              --logger "console;verbosity=detailed" \
+              --logger "trx;LogFileName=storage-integration-full.trx"
+          fi
       - name: Run durable array synchronization sample
+        if: github.event_name != 'push'
         run: dotnet run --project samples/StorageArraySync/StorageArraySync.csproj --configuration Release
       - name: Run Storage-backed TCP array synchronization sample
+        if: github.event_name != 'push'
         run: dotnet run --project samples/StorageArrayTcpSync/StorageArrayTcpSync.csproj --configuration Release
       - name: Upload test results
         if: always()
