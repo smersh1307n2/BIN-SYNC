@@ -1212,6 +1212,54 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     }
 
     // Conservative prefilter only: positives retain metadata; false positives never delete data.
+    // A conservative, capped prefilter for pending receipt identities. False
+    // positives only retain receipts; this filter never proves that a receipt is dead.
+    private sealed class PendingReceiptBloomFilter
+    {
+        private const int HashCount = 7;
+        private readonly byte[] _bits;
+        private readonly ulong _bitCount;
+
+        public PendingReceiptBloomFilter(int byteCount)
+        {
+            _bits = new byte[byteCount];
+            _bitCount = checked((ulong)byteCount * 8);
+        }
+
+        public void Add(ReceiptKey key) => VisitBits(key, add: true);
+        public bool MightContain(ReceiptKey key) => VisitBits(key, add: false);
+
+        private bool VisitBits(ReceiptKey key, bool add)
+        {
+            ulong seed = unchecked((uint)key.GetHashCode());
+            ulong first = Mix(seed);
+            ulong step = Mix(seed ^ 0x9E3779B97F4A7C15UL) | 1UL;
+            for (ulong i = 0; i < HashCount; i++)
+            {
+                ulong bit = unchecked(first + i * step) % _bitCount;
+                int byteIndex = (int)(bit >> 3);
+                byte mask = (byte)(1 << (int)(bit & 7));
+                if (add)
+                    _bits[byteIndex] |= mask;
+                else if ((_bits[byteIndex] & mask) == 0)
+                    return false;
+            }
+            return true;
+        }
+
+        private static ulong Mix(ulong value)
+        {
+            unchecked
+            {
+                value ^= value >> 30;
+                value *= 0xBF58476D1CE4E5B9UL;
+                value ^= value >> 27;
+                value *= 0x94D049BB133111EBUL;
+                return value ^ (value >> 31);
+            }
+        }
+    }
+
     private sealed class MetadataStreamChangeIdBloomFilter
     {
         private const int HashCount = 7;
@@ -1336,7 +1384,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 return 0;
             using StorageSnapshot revalidationSnapshot = _storage.OpenSnapshot();
             List<(ReceiptKey Key, byte[] StorageKey)> approved = new(Math.Min(limit, hostUnreferenced.Count));
-            var pendingReceiptKeys = BuildPendingReceiptKeySet(current);
+            PendingReceiptBloomFilter pendingReceiptFilter = BuildPendingReceiptBloomFilter(current);
             var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
             foreach ((ReceiptKey key, ReceiptValue observed) in candidates)
             {
@@ -1345,7 +1393,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     !ReceiptValuesEqual(receipt!, observed) ||
                     key.NamespaceId != namespaceId || receipt.DurableAuthor.IsZero ||
                     key.Epoch == 0 || receipt.OriginSequence == 0 ||
-                    pendingReceiptKeys.Contains(key) ||
+                    pendingReceiptFilter.MightContain(key) ||
                     !rosterMembers.TryGetValue(key.Sender, out NamespaceRosterMember? senderMember) ||
                     !current.RetiredPeerEpochs.TryGetValue(
                         (namespaceId, key.Sender), out uint retiredThrough) ||
@@ -1380,7 +1428,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         IReadOnlyDictionary<(NodeId Author, uint Epoch), ulong> safeOriginFrontier, int limit)
     {
         var rosterMembers = roster.Members.ToDictionary(member => member.NodeId);
-        HashSet<ReceiptKey> pendingReceiptKeys = BuildPendingReceiptKeySet(current);
+        PendingReceiptBloomFilter pendingReceiptFilter = BuildPendingReceiptBloomFilter(current);
         var candidates = new List<(ReceiptKey, ReceiptValue)>(limit);
         foreach (var pair in EnumerateReceipts(partitionKey, current, namespaceId))
         {
@@ -1398,7 +1446,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             if (!current.Receives.TryGetValue(receiveKey, out ReceiveState receive) ||
                 receive.CursorEnd < receipt.CursorEnd ||
                 !HasReceiveChainForAuthor(current, receiveKey) ||
-                pendingReceiptKeys.Contains(key) ||
+                pendingReceiptFilter.MightContain(key) ||
                 !IsOriginCoveredBySafeFrontier(
                     safeOriginFrontier, receipt.DurableAuthor, key.Epoch, receipt.OriginSequence))
                 continue;
@@ -1409,16 +1457,27 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         return candidates;
     }
 
-    private static HashSet<ReceiptKey> BuildPendingReceiptKeySet(PartitionState current)
+    private static PendingReceiptBloomFilter BuildPendingReceiptBloomFilter(PartitionState current)
     {
-        var pending = new HashSet<ReceiptKey>();
+        ulong expectedItems = 0;
+        foreach (PendingApplyValue intent in current.PendingApplies.Values)
+            if (expectedItems != ulong.MaxValue)
+                expectedItems++;
+
+        const int minBytes = 64 * 1024;
+        const int maxBytes = 8 * 1024 * 1024;
+        ulong maxItemsAtCap = (ulong)maxBytes * 8 / 10;
+        int byteCount = expectedItems >= maxItemsAtCap
+            ? maxBytes
+            : (int)Math.Max((ulong)minBytes, (expectedItems * 10 + 7) / 8);
+        var filter = new PendingReceiptBloomFilter(byteCount);
         foreach (PendingApplyValue intent in current.PendingApplies.Values)
         {
             MetadataIncomingBatch batch = intent.Batch;
-            pending.Add(new ReceiptKey(
+            filter.Add(new ReceiptKey(
                 batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId));
         }
-        return pending;
+        return filter;
     }
 
     internal static bool IsReceiptTransportEpochFenced(
