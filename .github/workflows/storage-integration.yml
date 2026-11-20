@@ -57,7 +57,7 @@ jobs:
           common=(--configuration Release --no-build --no-restore --blame-hang-timeout 8m --blame-hang-dump-type mini)
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             dotnet test "$project" "${common[@]}" \
-              --filter "FullyQualifiedName~Change_id_gc_|FullyQualifiedName~Async_local_publication_recovers_after_published_origin_commit_response_loss" \
+              --filter "FullyQualifiedName~Change_id_gc_|FullyQualifiedName~Async_local_publication" \
               --logger "console;verbosity=detailed" \
               --logger "trx;LogFileName=changeid-gc-focused.trx"
           else
