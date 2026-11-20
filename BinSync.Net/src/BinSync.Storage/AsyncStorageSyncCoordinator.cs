@@ -695,10 +695,20 @@ public sealed class AsyncStorageSyncCoordinator
             // set. Sort/materialize it once and share the array instead of allocating
             // a second full-size cache-winner array.
             bool sharedWinnerSet = nodeWinners is null || ReferenceEquals(nodeWinners, winners);
-            ProviderChange[] orderedWinners = winners.Values.OrderBy(change => change.Sequence).ToArray();
-            ProviderChange[] nodeChanges = sharedWinnerSet
-                ? orderedWinners
-                : nodeWinners!.Values.OrderBy(change => change.Sequence).ToArray();
+            ProviderChange[] orderedWinners = winners.Values.ToArray();
+            Array.Sort(orderedWinners, static (left, right) =>
+                left.Sequence.CompareTo(right.Sequence));
+            ProviderChange[] nodeChanges;
+            if (sharedWinnerSet)
+            {
+                nodeChanges = orderedWinners;
+            }
+            else
+            {
+                nodeChanges = nodeWinners!.Values.ToArray();
+                Array.Sort(nodeChanges, static (left, right) =>
+                    left.Sequence.CompareTo(right.Sequence));
+            }
             if (nodeChanges.Length > totalChanges ||
                 (nodeChanges.Length != 0 && nodeChanges[^1].Sequence > scannedThroughSequence))
                 throw new InvalidDataException(
