@@ -556,7 +556,7 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Equal(0UL, asyncProvider.LastOutboxAck);
         Assert.Equal(0UL, asyncProvider.LastReceiptAck);
         Assert.Equal(1UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
-        Assert.Single(provider.ReadLocalChanges(0, 10).Changes);
+        Assert.Equal(2, provider.ReadLocalChanges(0, 10).Changes.Count);
 
         int retried = await coordinator.PublishLocalChangesAsync(
             asyncProvider, current => StorageNodePersistence.Save(storage, current));
