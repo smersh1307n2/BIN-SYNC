@@ -1,18 +1,6 @@
 name: Receipt GC Stage 2 Canary
 
 on:
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - 'BinSync.Net/src/BinSync.Storage/StorageMetadataStore.cs'
-      - 'BinSync.Net/src/BinSync.Core/AsyncProviderCapabilities.cs'
-      - 'samples/FldBinSyncHost/**'
-      - 'samples/FldBinSyncHost.Tests/**'
-      - 'samples/FldBinSyncHost.Runtime/**'
-      - 'external/Fld1.Storage'
-      - 'docs/METADATA-STORE-GC-DESIGN.md'
-      - '.github/workflows/receipt-gc-stage2-canary.yml'
   workflow_dispatch:
 
 permissions:
