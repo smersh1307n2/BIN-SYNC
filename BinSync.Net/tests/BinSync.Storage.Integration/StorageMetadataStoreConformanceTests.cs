@@ -2722,6 +2722,11 @@ public sealed class StorageMetadataStoreConformanceTests : MetadataStoreConforma
                 var intent = Assert.Single(reopened.ReadPendingApplyIntents("durable-scope", Node(1)));
                 Assert.Equal(token, intent.ApplyToken);
                 Assert.Equal(pending.BatchDigest, intent.Batch.BatchDigest);
+                var streamedIntent = Assert.Single(
+                    reopened.EnumeratePendingApplyIntents("durable-scope", Node(1)));
+                Assert.Equal(intent.ApplyToken, streamedIntent.ApplyToken);
+                Assert.Equal(intent.Batch.BatchDigest, streamedIntent.Batch.BatchDigest);
+                Assert.Equal(intent.ApplyOperations, streamedIntent.ApplyOperations);
 
                 var finalized = reopened.FinalizePendingApply("durable-scope", Node(1),
                     new MetadataProviderApplyReceipt(token, pending.BatchDigest.ToArray()));
