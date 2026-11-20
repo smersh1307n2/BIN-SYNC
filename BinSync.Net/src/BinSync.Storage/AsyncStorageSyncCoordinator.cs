@@ -529,7 +529,16 @@ public sealed class AsyncStorageSyncCoordinator
                 await asyncProvider.GetLocalChangeHighWatermarkAsync(ct).ConfigureAwait(false);
             var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
             Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>? nodeWinners = null;
-            var recoveredPublishedOrigins = new List<ProviderPublishedOrigin>();
+            const int maxPublishedOriginBatch = 4096;
+            var originBatch = new List<ProviderPublishedOrigin>(maxPublishedOriginBatch);
+            async ValueTask FlushPublishedOriginBatchAsync()
+            {
+                if (originBatch.Count == 0) return;
+                ProviderPublishedOrigin[] batch = originBatch.ToArray();
+                await originStore.CommitPublishedOriginsAsync(batch, ct).ConfigureAwait(false);
+                originBatch.Clear();
+            }
+
             var seenChangeIds = new HashSet<BatchId>();
             ulong afterSequence = 0;
             ulong scannedThroughSequence = 0;
@@ -626,7 +635,9 @@ public sealed class AsyncStorageSyncCoordinator
                             Digest16.From(frozenFingerprint.Span) != actualFingerprint)
                             throw new InvalidDataException(
                                 "Async provider ChangeId conflicts with its previously frozen outbound operation.");
-                        recoveredPublishedOrigins.Add(new ProviderPublishedOrigin(change, frozenOrigin));
+                        originBatch.Add(new ProviderPublishedOrigin(change, frozenOrigin));
+                        if (originBatch.Count == maxPublishedOriginBatch)
+                            await FlushPublishedOriginBatchAsync().ConfigureAwait(false);
                         previouslyFrozen = true;
                     }
 
@@ -657,6 +668,11 @@ public sealed class AsyncStorageSyncCoordinator
                 scannedThroughSequence = Math.Min(page.ScannedThroughSequence, providerHighWatermark);
                 afterSequence = scannedThroughSequence;
             }
+
+            // These origins already exist in Metadata Freeze. Stamp the provider
+            // feed in bounded, idempotent pages before freezing any new suffix; a lost
+            // response is recovered by replaying the same immutable origin stamps.
+            await FlushPublishedOriginBatchAsync().ConfigureAwait(false);
 
             ulong currentMetadataHigh = _metadataStore.GetOutboundHighWatermark(
                 _scopeId, _node.NodeId, _namespaceId, _node.NodeId);
@@ -699,21 +715,15 @@ public sealed class AsyncStorageSyncCoordinator
                         "Metadata Store returned an unexpected or unordered async outbound identity.");
             }
 
-            var publishedOrigins = new List<ProviderPublishedOrigin>(
-                checked(recoveredPublishedOrigins.Count + published.Count));
-            publishedOrigins.AddRange(recoveredPublishedOrigins);
+            // New origins are committed only after Metadata Freeze. Reuse the same
+            // bounded buffer; recovered frozen origins were flushed before this point.
             for (int i = 0; i < published.Count; i++)
-                publishedOrigins.Add(new ProviderPublishedOrigin(orderedWinners[i], published[i].Provenance));
-            // FLD's versioned published-origin IPC frame is capped at 4096 entries.
-            // Chunking is crash-safe because each stamp is immutable and idempotent;
-            // a retry may safely repeat any prefix whose response was lost.
-            const int maxPublishedOriginBatch = 4096;
-            for (int offset = 0; offset < publishedOrigins.Count; offset += maxPublishedOriginBatch)
             {
-                int count = Math.Min(maxPublishedOriginBatch, publishedOrigins.Count - offset);
-                ProviderPublishedOrigin[] page = publishedOrigins.GetRange(offset, count).ToArray();
-                await originStore.CommitPublishedOriginsAsync(page, ct).ConfigureAwait(false);
+                originBatch.Add(new ProviderPublishedOrigin(orderedWinners[i], published[i].Provenance));
+                if (originBatch.Count == maxPublishedOriginBatch)
+                    await FlushPublishedOriginBatchAsync().ConfigureAwait(false);
             }
+            await FlushPublishedOriginBatchAsync().ConfigureAwait(false);
 
             // Node remains an application-data cache. Persist it before marking the
             // receipt mappings terminal or acknowledging either provider retention domain.
