@@ -1,16 +1,6 @@
 name: BIN-SYNC GC live-peer pause and recovery
 
 on:
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - 'samples/FldBinSyncHost.Tests/FldBinSyncRuntimeHostTests.cs'
-      - 'samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj'
-      - 'samples/FldBinSyncHost.Runtime/**'
-      - 'samples/FldBinSyncHost/**'
-      - 'external/Fld1.Storage'
-      - '.github/workflows/gc-live-peer-pause-resume.yml'
   workflow_dispatch:
 
 permissions:
