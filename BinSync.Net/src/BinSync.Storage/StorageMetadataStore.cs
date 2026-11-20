@@ -803,10 +803,21 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         => hasPendingBatch || pushedCursor != ackedCursor;
 
     internal static bool TryCollectProviderChangeIdsForGc(
-        IDataProvider provider, ulong providerHighWatermark, out HashSet<BatchId> liveChangeIds)
+        IDataProvider provider, ulong providerHighWatermark, out MetadataStreamChangeIdBloomFilter liveChangeIds)
     {
         ArgumentNullException.ThrowIfNull(provider);
-        liveChangeIds = new HashSet<BatchId>();
+
+        // The feed sequence high-watermark is an upper bound on retained identities.
+        // Size from that bound in one pass; the filter is capped independently of feed
+        // history. A positive is only a conservative retain decision, never delete proof.
+        const int minBytes = 256;
+        const int maxBytes = 8 * 1024 * 1024;
+        ulong maxItemsAtCap = (ulong)maxBytes * 8 / 10;
+        int byteCount = providerHighWatermark >= maxItemsAtCap
+            ? maxBytes
+            : (int)Math.Max((ulong)minBytes, (providerHighWatermark * 10 + 7) / 8);
+        liveChangeIds = new MetadataStreamChangeIdBloomFilter(byteCount);
+
         ulong providerCursor = 0;
         const int providerPageSize = 1024;
         while (providerCursor < providerHighWatermark)
@@ -826,7 +837,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 previousProviderSequence = change.Sequence;
                 if (change.ChangeId.IsZero)
                 {
-                    liveChangeIds.Clear();
+                    liveChangeIds = new MetadataStreamChangeIdBloomFilter(minBytes);
                     return false; // Legacy/unknown feed identity blocks ChangeId reclamation.
                 }
                 liveChangeIds.Add(change.ChangeId);
@@ -883,8 +894,9 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             using IApplicationGcReferenceScan externalScan =
                 externalReferences.OpenScan(scopeId, localReplica, namespaceId);
 
-            // Provider and pending identities stay exact; durable stream history is
-            // represented by a bounded Bloom prefilter instead of a history-sized HashSet.
+            // Provider, PendingApply and durable stream identities use bounded Bloom
+            // prefilters. A positive only retains a ledger row; exact Host references,
+            // signed frontiers and writer/GC leases remain the deletion proof.
             if (current.PeerStreams.Any(pair =>
                 pair.Key.NamespaceId == namespaceId &&
                 IsPeerStreamGcReservationOutstanding(
@@ -893,7 +905,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     pair.Value.AckedCursor)))
                 return 0;
             ulong providerHighWatermark = provider.LocalChangeHighWatermark;
-            if (!TryCollectProviderChangeIdsForGc(provider, providerHighWatermark, out HashSet<BatchId> liveChangeIds))
+            if (!TryCollectProviderChangeIdsForGc(provider, providerHighWatermark, out MetadataStreamChangeIdBloomFilter liveChangeIds))
                 return 0;
             // PendingApply can contain a large unresolved receive backlog. Keep its
             // live-identity guard bounded just like stream history; false positives
@@ -912,7 +924,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                     continue;
                 if (!IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
-                if (liveChangeIds.Contains(pair.Key.ChangeId) ||
+                if (liveChangeIds.MightContain(pair.Key.ChangeId) ||
                     pendingApplyLiveIds.MightContain(pair.Key.ChangeId) ||
                     streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
@@ -1260,7 +1272,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         }
     }
 
-    private sealed class MetadataStreamChangeIdBloomFilter
+    internal sealed class MetadataStreamChangeIdBloomFilter
     {
         private const int HashCount = 7;
         private readonly byte[] _bits;
