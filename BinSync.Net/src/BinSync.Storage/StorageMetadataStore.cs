@@ -2440,22 +2440,25 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         if (TryGetReceipt(partitionKey, state, receiptKey, out _))
             return Array.AsReadOnly(decisions);
 
+        // Index only the incoming batch (bounded by the transport batch limit),
+        // then stream pending intents once. Do not allocate by retained history size.
+        var incomingIdentities = new Dictionary<LedgerKey, MetadataOperation>(batch.Operations.Count);
+        foreach (MetadataOperation operation in batch.Operations)
+            incomingIdentities.TryAdd(new LedgerKey(batch.NamespaceId, operation.ChangeId), operation);
+
         foreach (var otherPending in state.PendingApplies)
         {
             if (otherPending.Key == applyToken ||
                 otherPending.Value.Batch.NamespaceId != batch.NamespaceId)
                 continue;
-            foreach (var pendingOperation in otherPending.Value.Batch.Operations)
+            foreach (MetadataOperation pendingOperation in otherPending.Value.Batch.Operations)
             {
-                for (int i = 0; i < batch.Operations.Count; i++)
-                {
-                    var operation = batch.Operations[i];
-                    if (operation.ChangeId != pendingOperation.ChangeId)
-                        continue;
-                    if (!SameOperationIdentity(operation, pendingOperation))
-                        throw new InvalidDataException("Pending ChangeId was reused with different fingerprint or Origin provenance.");
-                    throw new InvalidOperationException("ChangeId is reserved by another pending apply and must be retried after it finalizes.");
-                }
+                var key = new LedgerKey(batch.NamespaceId, pendingOperation.ChangeId);
+                if (!incomingIdentities.TryGetValue(key, out MetadataOperation? operation))
+                    continue;
+                if (!SameOperationIdentity(operation, pendingOperation))
+                    throw new InvalidDataException("Pending ChangeId was reused with different fingerprint or Origin provenance.");
+                throw new InvalidOperationException("ChangeId is reserved by another pending apply and must be retried after it finalizes.");
             }
         }
 
@@ -2513,30 +2516,21 @@ private bool ValidateIncomingBatchForStaging(
             !chain.LastBatchDigest.AsSpan().SequenceEqual(batch.PreviousBatchDigest))
             throw new InvalidDataException("Incoming batch does not continue its author cursor and author-stream digest chain.");
 
-        // Index pending identities once. The durable identity key is
-        // (namespace, ChangeId), not ChangeId alone; scanning every pending batch
-        // for every incoming operation made staging O(pending × incoming).
-        var pendingIdentities = new Dictionary<LedgerKey, MetadataOperation>();
-        foreach (var otherPending in state.PendingApplies.Values)
-        {
-            foreach (var pendingOperation in otherPending.Batch.Operations)
-            {
-                var pendingKey = new LedgerKey(otherPending.Batch.NamespaceId, pendingOperation.ChangeId);
-                if (pendingIdentities.TryGetValue(pendingKey, out var knownOperation) &&
-                    !SameOperationIdentity(knownOperation, pendingOperation))
-                    throw new InvalidDataException("Pending ChangeId was reused with different fingerprint or Origin provenance.");
-                pendingIdentities[pendingKey] = pendingOperation;
-            }
-        }
-
-        var batchIdentities = new Dictionary<LedgerKey, MetadataOperation>();
+        // Index the bounded incoming batch, then stream retained pending operations.
+        // The previous pendingIdentities map grew with the complete unresolved history.
+        var batchIdentities = new Dictionary<LedgerKey, MetadataOperation>(batch.Operations.Count);
         foreach (var operation in batch.Operations)
         {
             var key = new LedgerKey(batch.NamespaceId, operation.ChangeId);
-            if (batchIdentities.TryGetValue(key, out var inBatchOperation) &&
-                !SameOperationIdentity(inBatchOperation, operation))
-                throw new InvalidDataException("ChangeId was reused with different fingerprint or Origin provenance within one incoming batch.");
-            batchIdentities[key] = operation;
+            if (batchIdentities.TryGetValue(key, out var inBatchOperation))
+            {
+                if (!SameOperationIdentity(inBatchOperation, operation))
+                    throw new InvalidDataException("ChangeId was reused with different fingerprint or Origin provenance within one incoming batch.");
+            }
+            else
+            {
+                batchIdentities.Add(key, operation);
+            }
 
             bool hasLedgerIdentity = TryGetChangeLedger(partitionKey, state, key, out var priorLedger);
             if (hasLedgerIdentity && !LedgerMatches(priorLedger!, operation))
@@ -2544,10 +2538,19 @@ private bool ValidateIncomingBatchForStaging(
             if (!hasLedgerIdentity &&
                 state.OutboundHighWatermarks.ContainsKey(new OutboundKey(batch.NamespaceId, operation.AuthorNodeId)))
                 throw new InvalidDataException("An author stream cannot be populated by both local outbound and incoming relay operations.");
+        }
 
-            if (pendingIdentities.TryGetValue(key, out var pendingOperation))
+        // Keep exact conflict checks, but allocate only for the incoming batch.
+        foreach (PendingApplyValue otherPending in state.PendingApplies.Values)
+        {
+            if (otherPending.Batch.NamespaceId != batch.NamespaceId)
+                continue;
+            foreach (MetadataOperation pendingOperation in otherPending.Batch.Operations)
             {
-                if (!SameOperationIdentity(pendingOperation, operation))
+                var key = new LedgerKey(batch.NamespaceId, pendingOperation.ChangeId);
+                if (!batchIdentities.TryGetValue(key, out MetadataOperation? operation))
+                    continue;
+                if (!SameOperationIdentity(operation, pendingOperation))
                     throw new InvalidDataException("Pending ChangeId was reused with different fingerprint or Origin provenance.");
                 throw new InvalidOperationException("ChangeId is reserved by another pending apply and must be retried after it finalizes.");
             }
