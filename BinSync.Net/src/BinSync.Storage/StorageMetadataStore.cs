@@ -2058,27 +2058,42 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
     public IReadOnlyList<MetadataPendingApplyIntent> ReadPendingApplyIntents(
         string scopeId,
         NodeId localReplica)
+        => EnumeratePendingApplyIntents(scopeId, localReplica).ToArray();
+
+    /// <summary>
+    /// Stream durable PendingApply recovery intents one at a time. The storage cursor
+    /// pages the underlying rows; only one decoded batch and its operation mask are
+    /// materialized for the caller at a time.
+    /// </summary>
+    public IEnumerable<MetadataPendingApplyIntent> EnumeratePendingApplyIntents(
+        string scopeId,
+        NodeId localReplica)
     {
-        lock (_gate)
-        {
-            ThrowIfDisposed();
-        if (string.IsNullOrWhiteSpace(scopeId))
-            throw new ArgumentException("ScopeId is required.", nameof(scopeId));
+        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
         if (localReplica.IsZero)
             throw new ArgumentException("Local replica identity must be non-zero.", nameof(localReplica));
-        if (!TryGetPartition(new PartitionKey(scopeId, localReplica), out var state))
-            return Array.Empty<MetadataPendingApplyIntent>();
 
-        return state.PendingApplies
-            .Select(pair => new MetadataPendingApplyIntent(pair.Key, CloneBatch(pair.Value.Batch))
+        var partitionKey = new PartitionKey(scopeId, localReplica);
+        foreach (KeyValuePair<Guid, PendingApplyValue> row in EnumeratePendingApplies(partitionKey))
+        {
+            MetadataPendingApplyIntent? intent = null;
+            lock (_gate)
             {
-                IsDuplicate = TryGetReceipt(new PartitionKey(scopeId, localReplica), state, new ReceiptKey(
-                    pair.Value.Batch.SenderPeer, pair.Value.Batch.SenderEpoch,
-                    pair.Value.Batch.NamespaceId, pair.Value.Batch.BatchId), out _),
-                ApplyOperations = BuildPendingApplyDecisions(new PartitionKey(scopeId, localReplica), state, pair.Value.Batch, pair.Key)
-            })
-            .ToArray();
-    
+                ThrowIfDisposed();
+                if (!TryGetPartition(partitionKey, out PartitionState? state) ||
+                    !state.PendingApplies.TryGetValue(row.Key, out PendingApplyValue pending))
+                    continue;
+
+                MetadataIncomingBatch batch = pending.Batch;
+                intent = new MetadataPendingApplyIntent(row.Key, CloneBatch(batch))
+                {
+                    IsDuplicate = TryGetReceipt(partitionKey, state, new ReceiptKey(
+                        batch.SenderPeer, batch.SenderEpoch, batch.NamespaceId, batch.BatchId), out _),
+                    ApplyOperations = BuildPendingApplyDecisions(
+                        partitionKey, state, batch, row.Key)
+                };
+            }
+            yield return intent;
         }
     }
 
