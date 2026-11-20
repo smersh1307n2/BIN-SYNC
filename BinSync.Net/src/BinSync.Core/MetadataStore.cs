@@ -9,6 +9,8 @@ public interface IMetadataStore : IDisposable
     MetadataBatchReceipt AcceptIncomingBatch(MetadataIncomingBatch batch);
     MetadataPendingApplyIntent BeginPendingApply(MetadataIncomingBatch batch, Guid applyToken);
     IReadOnlyList<MetadataPendingApplyIntent> ReadPendingApplyIntents(string scopeId, NodeId localReplica);
+    IEnumerable<MetadataPendingApplyIntent> EnumeratePendingApplyIntents(string scopeId, NodeId localReplica)
+        => ReadPendingApplyIntents(scopeId, localReplica);
     MetadataBatchReceipt FinalizePendingApply(string scopeId, NodeId localReplica, MetadataProviderApplyReceipt providerReceipt);
     IMetadataStoreSnapshot OpenSnapshot(string scopeId, NodeId localReplica);
 
