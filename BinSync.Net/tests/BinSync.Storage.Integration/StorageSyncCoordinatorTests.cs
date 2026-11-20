@@ -84,6 +84,7 @@ public sealed class StorageSyncCoordinatorTests
         public bool LoseNextOutboxAckResponseAfterCommit { get; set; }
         public bool LoseNextPublishedOriginResponseAfterCommit { get; set; }
         public bool FailNextPublishedOriginBeforeCommit { get; set; }
+        public bool DuplicateChangeIdOnNextRead { get; set; }
         public List<int> PublishedOriginBatchSizes { get; } = new();
         public Action? AfterNextRead { get; set; }
         public TaskCompletionSource<bool>? HighWatermarkEntered { get; set; }
@@ -103,13 +104,25 @@ public sealed class StorageSyncCoordinatorTests
             => _adapter.ResolveFieldIdAsync(key, ct);
         public ValueTask AppendLocalChangeAsync(ProviderMutation mutation, CancellationToken ct = default)
             => _adapter.AppendLocalChangeAsync(mutation, ct);
-        public ValueTask<ProviderChangePage> ReadLocalChangesAsync(ulong after, int limit, CancellationToken ct = default)
+        public async ValueTask<ProviderChangePage> ReadLocalChangesAsync(ulong after, int limit, CancellationToken ct = default)
         {
-            ValueTask<ProviderChangePage> pending = _adapter.ReadLocalChangesAsync(after, limit, ct);
+            ProviderChangePage page = await _adapter.ReadLocalChangesAsync(after, limit, ct).ConfigureAwait(false);
+            if (DuplicateChangeIdOnNextRead && page.Changes.Count > 1)
+            {
+                DuplicateChangeIdOnNextRead = false;
+                ProviderChange[] changes = page.Changes.ToArray();
+                changes[1] = changes[1] with
+                {
+                    ChangeId = changes[0].ChangeId,
+                    Mutation = changes[0].Mutation
+                };
+                page = new ProviderChangePage(changes, page.ScannedThroughSequence);
+            }
+
             Action? afterRead = AfterNextRead;
             AfterNextRead = null;
             afterRead?.Invoke();
-            return pending;
+            return page;
         }
         public ValueTask AcknowledgeLocalChangesAsync(ulong through, CancellationToken ct = default)
         {
@@ -521,6 +534,52 @@ public sealed class StorageSyncCoordinatorTests
         Assert.Empty(provider.ReadLocalChanges(0, 16).Changes);
         Assert.False(node.HasPendingProviderOperationReceipts);
     }
+    [Fact]
+    public async Task Async_local_publication_rejects_duplicate_feed_change_ids_by_receipt_order()
+    {
+        Directory.CreateDirectory(_root);
+        using var storage = StorageDatabase.Open(Path.Combine(_root, "async-duplicate-feed-change-id"), 503);
+        using var provider = new StorageDataProvider(storage);
+        using var metadata = new StorageMetadataStore(storage);
+        using var node = NewNode(103);
+        const string scope = "async-duplicate-feed-change-id";
+        var legacyCoordinator = new StorageSyncCoordinator(node, provider, 1, metadata, scope);
+        legacyCoordinator.EnableMetadataStoreOwnedPublication(_ => StorageNodePersistence.Save(storage, node));
+        using var wal = Wal.Open(Path.Combine(_root, "async-duplicate-feed-change-id.wal"));
+        node.AttachWal(wal);
+
+        BatchId changeId = BatchId.From(Guid.Parse("a3000000-0000-0000-0000-000000000001").ToByteArray());
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = RecordId.From(Guid.Parse("a3000000-0000-0000-0000-000000000002").ToByteArray()),
+            FieldId = 0x0B03, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 40_001,
+            Value = "first"u8.ToArray(), ChangeId = changeId
+        });
+        provider.AppendLocalChange(new ProviderMutation
+        {
+            RecordId = RecordId.From(Guid.Parse("a3000000-0000-0000-0000-000000000003").ToByteArray()),
+            FieldId = 0x0B03, AuthorNodeId = node.NodeId,
+            OriginAuthorEpoch = 1, HlcWall = 40_002,
+            Value = "second"u8.ToArray(), ChangeId = BatchId.From(Guid.Parse("a3000000-0000-0000-0000-000000000004").ToByteArray())
+        });
+
+        var asyncProvider = new RecordingAsyncLocalProvider(provider)
+        {
+            DuplicateChangeIdOnNextRead = true
+        };
+        var coordinator = new AsyncStorageSyncCoordinator(node, metadata, scope, 1);
+
+        await Assert.ThrowsAsync<InvalidDataException>(async () =>
+            await coordinator.PublishLocalChangesAsync(
+                asyncProvider, current => StorageNodePersistence.Save(storage, current)));
+
+        Assert.Equal(0UL, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
+        Assert.Equal(0UL, asyncProvider.LastOutboxAck);
+        Assert.True(node.HasPendingProviderOperationReceipts);
+        Assert.Equal(2, provider.ReadLocalChanges(0, 16).Changes.Count);
+    }
+
     [Fact]
     public async Task Async_local_publication_streams_recovered_published_origins_in_bounded_pages()
     {
