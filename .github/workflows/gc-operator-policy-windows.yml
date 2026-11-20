@@ -1,23 +1,6 @@
 name: GC Operator Policy Windows
 
 on:
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - 'samples/FldBinSyncHost/FldBinSyncGcOperatorPolicy.cs'
-      - 'samples/FldBinSyncHost/FldBinSyncAsyncHostComposition.cs'
-      - 'samples/FldBinSyncHost/FldBinSyncGcHostOperations.cs'
-      - 'samples/FldBinSyncHost/README.md'
-      - 'samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs'
-      - 'samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs'
-      - 'samples/FldBinSyncHost.Tests/FldBinSyncAsyncGcReadinessTests.cs'
-      - 'samples/FldBinSyncHost.Tests/FldBinSyncGcHostOperationsTests.cs'
-      - 'samples/FldBinSyncHost.Tests/FldDatabaseIpcAsyncDataProviderTests.cs'
-      - 'samples/FldBinSyncHost.Tests/StorageFldBinSyncGcOperatorPolicyStoreTests.cs'
-      - 'samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj'
-      - 'samples/FldBinSyncHost.LeaseLockProbe/**'
-      - '.github/workflows/gc-operator-policy-windows.yml'
   workflow_dispatch:
 
 permissions:
