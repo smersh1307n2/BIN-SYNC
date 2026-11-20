@@ -944,9 +944,10 @@ public sealed class AsyncStorageSyncCoordinator
         await _asyncAdmissionGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            IReadOnlyList<MetadataPendingApplyIntent> intents;
-            lock (_metadataGate)
-                intents = _metadataStore.ReadPendingApplyIntents(_scopeId, _node.NodeId);
+            // Storage-backed implementations stream the durable cursor page by page.
+            // The interface fallback preserves compatibility for in-memory/custom stores.
+            IEnumerable<MetadataPendingApplyIntent> intents =
+                _metadataStore.EnumeratePendingApplyIntents(_scopeId, _node.NodeId);
 
             int recovered = 0;
             foreach (MetadataPendingApplyIntent intent in intents)
