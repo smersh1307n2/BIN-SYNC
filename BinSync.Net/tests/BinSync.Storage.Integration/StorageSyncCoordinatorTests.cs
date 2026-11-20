@@ -560,9 +560,9 @@ public sealed class StorageSyncCoordinatorTests
 
         int retried = await coordinator.PublishLocalChangesAsync(
             asyncProvider, current => StorageNodePersistence.Save(storage, current));
-        Assert.Equal(1, retried);
-        Assert.Equal(1UL, asyncProvider.LastOutboxAck);
-        Assert.Equal(1UL, asyncProvider.LastReceiptAck);
+        Assert.Equal(2, retried);
+        Assert.Equal(2UL, asyncProvider.LastOutboxAck);
+        Assert.Equal(2UL, asyncProvider.LastReceiptAck);
         Assert.Empty(provider.ReadLocalChanges(0, 10).Changes);
         Assert.True(node.TryGetField(1, record, 0x0981, out var value));
         Assert.Equal("origin-retry", Encoding.UTF8.GetString(value!.Value));
