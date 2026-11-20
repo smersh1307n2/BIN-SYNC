@@ -558,7 +558,8 @@ public sealed class StorageSyncCoordinatorTests
 
         Assert.Equal((ulong)count, metadata.GetOutboundHighWatermark(scope, node.NodeId, 1, node.NodeId));
         Assert.Equal(0UL, asyncProvider.LastOutboxAck);
-        Assert.Equal(count, provider.ReadLocalChanges(0, count + 1).Changes.Count);
+        Assert.Equal(4096, provider.ReadLocalChanges(0, 4096).Changes.Count);
+        Assert.Single(provider.ReadLocalChanges(4096, 16).Changes);
 
         int recovered = await coordinator.PublishLocalChangesAsync(
             asyncProvider, current => StorageNodePersistence.Save(storage, current), limit: 1024);
