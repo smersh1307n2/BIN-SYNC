@@ -1284,6 +1284,8 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             _bitCount = checked((ulong)byteCount * 8);
         }
 
+        internal int StorageBytes => _bits.Length;
+
         public void Add(BatchId changeId) => VisitBits(changeId, add: true);
 
         public bool MightContain(BatchId changeId) => VisitBits(changeId, add: false);
