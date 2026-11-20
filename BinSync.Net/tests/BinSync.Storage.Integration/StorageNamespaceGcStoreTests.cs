@@ -1824,6 +1824,100 @@ public sealed class StorageNamespaceGcStoreTests
 
 
     [Fact]
+    public void Change_id_gc_keeps_identity_referenced_by_pending_apply()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "binsync-changeid-pending-apply-" + Guid.NewGuid().ToString("N"));
+        var keys = new[] { BatchSignature.GenerateKeyPair(), BatchSignature.GenerateKeyPair() };
+        var trust = new TrustStore();
+        trust.Allow(NodeId.From(Id(1)), keys[0].PublicKey, TrustMode.PreShared);
+        const string scope = "changeid-pending-apply";
+        const int namespaceId = 19;
+        NodeId local = NodeId.From(Id(0x7F));
+        NodeId sender = NodeId.From(Id(2));
+        BatchId changeId = BatchId.From(Id(0x74));
+
+        IApplicationGcReferenceScanner Scanner()
+            => new DelegateApplicationGcReferenceScanner((_, _, _) =>
+                new DelegateApplicationGcReferenceScan(
+                    new MemoryStream(),
+                    new ApplicationDraftHorizon(0, 0, 0),
+                    (_, _, _, _) => false,
+                    _ => false,
+                    (_, _) => false));
+
+        try
+        {
+            using var storage = StorageDatabase.Open(directory, 913);
+            using var metadata = new StorageMetadataStore(storage);
+            using var provider = new StorageDataProvider(storage);
+            var gc = new StorageNamespaceGcStore(
+                storage, scope, local,
+                new StorageNamespaceGcFeatureOptions(EnableChangeIdGc: true));
+            NamespaceRosterCertificate roster = gc.AcceptNamespaceRoster(
+                NamespaceRosterProtocol.Sign(Roster(1, new byte[32], keys), keys[0].Seed), trust);
+            metadata.AttachNamespaceGcGuard(gc, trust, scope, local);
+
+            metadata.RegisterInterestedPeer(scope, local, sender, 1, namespaceId);
+            var incoming = new MetadataIncomingBatch
+            {
+                ScopeId = scope,
+                LocalReplica = local,
+                SenderPeer = sender,
+                SenderEpoch = 3,
+                TransportPeerEpoch = 1,
+                AuthorStreamNodeId = sender,
+                NamespaceId = namespaceId,
+                BatchId = BatchId.From(Id(0x78)),
+                CursorStart = 1,
+                CursorEnd = 1,
+                PreviousBatchDigest = new byte[16],
+                BatchDigest = Enumerable.Repeat((byte)0x79, 16).ToArray(),
+                HeaderFingerprint = Enumerable.Repeat((byte)0x7A, 16).ToArray(),
+                Operations = new[]
+                {
+                    new MetadataOperation
+                    {
+                        AuthorNodeId = sender,
+                        ChangeId = changeId,
+                        OriginAuthorEpoch = 3,
+                        OriginSequence = 50,
+                        Fingerprint = Enumerable.Repeat((byte)0x7B, 16).ToArray(),
+                        Payload = new byte[] { 0x7C },
+                        RelayEligible = false
+                    }
+                }
+            };
+            Assert.False(metadata.AcceptIncomingBatch(incoming).IsDuplicate);
+
+            // Keep the same durable identity in an unresolved apply intent. The
+            // ordinary receipt/ledger entry exists too, so this specifically
+            // exercises PendingApply's ChangeId GC veto.
+            MetadataPendingApplyIntent pending = metadata.BeginPendingApply(
+                incoming, Guid.Parse("78000000-0000-0000-0000-000000000001"));
+            Assert.Single(pending.Batch.Operations);
+
+            var report0 = gc.AcceptOriginFrontier(SignedReport(roster, 0, keys, 1, 100), roster);
+            var report1 = gc.AcceptOriginFrontier(SignedReport(roster, 1, keys, 1, 90), roster);
+            var checkpoint = NamespaceRetentionCheckpointProtocol.CreateFromReports(
+                roster, 1, new byte[32], new[] { report0, report1 });
+            gc.AcceptRetentionCheckpoint(
+                NamespaceRetentionCheckpointProtocol.Sign(checkpoint, keys[0].Seed), roster, trust);
+
+            Assert.True(gc.IsOriginCoveredByRetentionCheckpoint(roster, trust, sender, 3, 50));
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, changeId, out _, out _, out _));
+            Assert.Equal(0, metadata.CompactChangeLedger(
+                scope, local, namespaceId, provider, 16, () => new MemoryStream(), Scanner()));
+            Assert.True(metadata.TryGetChangeIdentity(
+                scope, local, namespaceId, changeId, out _, out _, out _));
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void Change_id_gc_keeps_pushed_peer_reservation_across_reopen_until_acknowledged()
     {
         string directory = Path.Combine(Path.GetTempPath(), "binsync-changeid-reservation-reopen-" + Guid.NewGuid().ToString("N"));
