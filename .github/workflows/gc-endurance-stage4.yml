@@ -1,17 +1,6 @@
 name: BIN-SYNC GC Stage 4 Endurance
 
 on:
-  push:
-    branches:
-      - feature/fld-external-storage
-    paths:
-      - 'BinSync.Net/src/BinSync.Storage/**'
-      - 'samples/FldBinSyncHost/**'
-      - 'samples/FldBinSyncHost.Tests/**'
-      - 'samples/FldBinSyncHost.Runtime/**'
-      - 'external/Fld1.Storage'
-      - 'docs/GC-ENDURANCE-STAGE4.md'
-      - '.github/workflows/gc-endurance-stage4.yml'
   workflow_dispatch:
 
 permissions:
