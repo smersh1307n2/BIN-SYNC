@@ -680,14 +680,18 @@ public sealed class AsyncStorageSyncCoordinator
                 throw new InvalidDataException(
                     "Metadata Store outbound watermark regressed below the provider cutover fence.");
 
-            ProviderChange[] nodeChanges = (nodeWinners ?? winners).Values
-                .OrderBy(change => change.Sequence).ToArray();
+            // In the common no-recovery path both consumers use the same winner
+            // set. Sort/materialize it once and share the array instead of allocating
+            // a second full-size cache-winner array.
+            bool sharedWinnerSet = nodeWinners is null || ReferenceEquals(nodeWinners, winners);
+            ProviderChange[] orderedWinners = winners.Values.OrderBy(change => change.Sequence).ToArray();
+            ProviderChange[] nodeChanges = sharedWinnerSet
+                ? orderedWinners
+                : nodeWinners!.Values.OrderBy(change => change.Sequence).ToArray();
             if (nodeChanges.Length > totalChanges ||
                 (nodeChanges.Length != 0 && nodeChanges[^1].Sequence > scannedThroughSequence))
                 throw new InvalidDataException(
                     "Async provider cache winners exceed the captured local-feed prefix.");
-
-            ProviderChange[] orderedWinners = winners.Values.OrderBy(change => change.Sequence).ToArray();
             var frozenOperations = new List<MetadataFrozenOperation>(orderedWinners.Length);
             foreach (ProviderChange change in orderedWinners)
                 frozenOperations.Add(CreateAsyncMetadataFrozenOperation(change));
