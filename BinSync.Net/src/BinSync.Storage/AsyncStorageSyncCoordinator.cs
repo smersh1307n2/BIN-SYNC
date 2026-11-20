@@ -530,13 +530,18 @@ public sealed class AsyncStorageSyncCoordinator
             var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
             Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>? nodeWinners = null;
             const int maxPublishedOriginBatch = 4096;
-            var originBatch = new List<ProviderPublishedOrigin>(maxPublishedOriginBatch);
+            // Reuse one bounded page buffer. ArraySegment exposes only the populated
+            // prefix, avoiding a second 4096-entry allocation on every flush.
+            var originBatch = new ProviderPublishedOrigin[maxPublishedOriginBatch];
+            int originBatchCount = 0;
             async ValueTask FlushPublishedOriginBatchAsync()
             {
-                if (originBatch.Count == 0) return;
-                ProviderPublishedOrigin[] batch = originBatch.ToArray();
-                await originStore.CommitPublishedOriginsAsync(batch, ct).ConfigureAwait(false);
-                originBatch.Clear();
+                if (originBatchCount == 0) return;
+                await originStore.CommitPublishedOriginsAsync(
+                    new ArraySegment<ProviderPublishedOrigin>(originBatch, 0, originBatchCount), ct)
+                    .ConfigureAwait(false);
+                Array.Clear(originBatch, 0, originBatchCount);
+                originBatchCount = 0;
             }
 
             // The dedicated FLD receipt stream assigns a strictly increasing
@@ -641,8 +646,8 @@ public sealed class AsyncStorageSyncCoordinator
                             Digest16.From(frozenFingerprint.Span) != actualFingerprint)
                             throw new InvalidDataException(
                                 "Async provider ChangeId conflicts with its previously frozen outbound operation.");
-                        originBatch.Add(new ProviderPublishedOrigin(change, frozenOrigin));
-                        if (originBatch.Count == maxPublishedOriginBatch)
+                        originBatch[originBatchCount++] = new ProviderPublishedOrigin(change, frozenOrigin);
+                        if (originBatchCount == maxPublishedOriginBatch)
                             await FlushPublishedOriginBatchAsync().ConfigureAwait(false);
                         previouslyFrozen = true;
                     }
@@ -698,9 +703,9 @@ public sealed class AsyncStorageSyncCoordinator
                 (nodeChanges.Length != 0 && nodeChanges[^1].Sequence > scannedThroughSequence))
                 throw new InvalidDataException(
                     "Async provider cache winners exceed the captured local-feed prefix.");
-            var frozenOperations = new List<MetadataFrozenOperation>(orderedWinners.Length);
-            foreach (ProviderChange change in orderedWinners)
-                frozenOperations.Add(CreateAsyncMetadataFrozenOperation(change));
+            var frozenOperations = new MetadataFrozenOperation[orderedWinners.Length];
+            for (int i = 0; i < orderedWinners.Length; i++)
+                frozenOperations[i] = CreateAsyncMetadataFrozenOperation(orderedWinners[i]);
 
             IReadOnlyList<MetadataOutboundItem> published;
             lock (_metadataGate)
@@ -710,12 +715,12 @@ public sealed class AsyncStorageSyncCoordinator
                     _scopeId, _node.NodeId, _namespaceId, _node.NodeId);
                 if (metadataHigh < cutover.NodeOutboxHighWatermark)
                     throw new InvalidDataException("Metadata Store outbound watermark regressed during async publication.");
-                published = frozenOperations.Count == 0
+                published = frozenOperations.Length == 0
                     ? Array.Empty<MetadataOutboundItem>()
                     : _metadataStore.FreezeOutbound(
                         _scopeId, _node.NodeId, _namespaceId, _node.NodeId, frozenOperations);
             }
-            if (published.Count != frozenOperations.Count)
+            if (published.Count != frozenOperations.Length)
                 throw new InvalidDataException("Metadata Store freeze returned an unexpected operation count.");
             for (int i = 0; i < published.Count; i++)
             {
@@ -729,8 +734,9 @@ public sealed class AsyncStorageSyncCoordinator
             // bounded buffer; recovered frozen origins were flushed before this point.
             for (int i = 0; i < published.Count; i++)
             {
-                originBatch.Add(new ProviderPublishedOrigin(orderedWinners[i], published[i].Provenance));
-                if (originBatch.Count == maxPublishedOriginBatch)
+                originBatch[originBatchCount++] =
+                    new ProviderPublishedOrigin(orderedWinners[i], published[i].Provenance);
+                if (originBatchCount == maxPublishedOriginBatch)
                     await FlushPublishedOriginBatchAsync().ConfigureAwait(false);
             }
             await FlushPublishedOriginBatchAsync().ConfigureAwait(false);
