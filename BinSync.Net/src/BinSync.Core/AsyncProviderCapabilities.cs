@@ -25,10 +25,14 @@ public interface IAsyncProviderPublicationMode
 /// The caller must persist the returned sequence in its own durable commit before
 /// acknowledging that receipt prefix. This ACK is independent of source-feed/Outbox ACK.
 /// ClientSequence is contiguous per stable provider ClientId/receipt stream, not per
-/// ChangeId. A receipt stream must be dedicated to one BIN-SYNC namespace/coordinator;
-/// do not share one FLD ClientId across namespace coordinators because the Node WAL
-/// currently scopes its compact receipt mapping by namespace. Reconnects reuse the
-/// same ClientId so ChangeId-derived append retries recover the original sequence.
+/// ChangeId. First-time appends must allocate strictly increasing ClientSequence values
+/// in the order calls are accepted; an idempotent retry for the same ChangeId-derived
+/// operation identity must return its original sequence without allocating a new one.
+/// The coordinator relies on this ordering to detect duplicate feed ChangeIds exactly
+/// without retaining an unbounded identity set. A receipt stream must be dedicated to
+/// one BIN-SYNC namespace/coordinator; do not share one FLD ClientId across namespace
+/// coordinators because the Node WAL currently scopes its compact receipt mapping by
+/// namespace. Reconnects reuse the same ClientId so retries recover the original sequence.
 /// </summary>
 public interface IAsyncProviderOperationReceiptStore
 {
