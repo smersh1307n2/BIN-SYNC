@@ -636,8 +636,14 @@ public sealed class AsyncStorageSyncCoordinator
                     {
                         lastFrozenFeedSequence = change.Sequence;
                         if (sharedNodeAndOutboundWinners)
-                            nodeWinners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>(winners);
-                        winners.Clear();
+                        {
+                            // Transfer ownership of the accumulated cache winners instead
+                            // of cloning the entire dictionary at the first frozen-feed row.
+                            // Subsequent rows are tracked separately for Node cache and the
+                            // still-unpublished outbound suffix.
+                            nodeWinners = winners;
+                            winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
+                        }
                         continue;
                     }
                     if (change.Sequence <= lastFrozenFeedSequence)
