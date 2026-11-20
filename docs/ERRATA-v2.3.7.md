@@ -1,4 +1,6 @@
-# BIN-SYNC CORE — Normative Errata v2.3.7
+# BIN-SYNC CORE — Historical Normative Errata v2.3.7
+
+**Historical status:** E-1…E-13 are incorporated into the current BIN-SYNC CORE v2.4.19 FINAL specification. This file is retained for requirement provenance; do not apply it as an independent overlay to the current specification.
 
 **Status:** Normative for implementors of **BYN-SYNC-SPECIFICATION.txt v2.3.6**.  
 **Date:** 2026-10-22  

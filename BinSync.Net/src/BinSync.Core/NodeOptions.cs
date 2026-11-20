@@ -3,8 +3,8 @@ namespace BinSync;
 /// <summary>Construction options for <see cref="Node"/>.</summary>
 public sealed class NodeOptions
 {
-    /// <summary>16-byte node identity; random when null.</summary>
-    public byte[]? NodeId { get; init; }
+    /// <summary>Typed 16-byte node identity; random when null.</summary>
+    public NodeId? NodeId { get; init; }
 
     /// <summary>Session/epoch counter (default 1).</summary>
     public int Epoch { get; init; } = 1;

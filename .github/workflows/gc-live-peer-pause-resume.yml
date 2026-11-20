@@ -1,0 +1,79 @@
+name: BIN-SYNC GC live-peer pause and recovery
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binsync-gc-live-peer-pause-resume-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gc-live-peer:
+    name: GC lease pause and TCP peer recovery (.NET 10, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - name: Checkout BIN-SYNC
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "BIN-SYNC pins FLD Storage at $sha"
+
+      - name: Checkout exact FLD-DB revision used by the Storage submodule
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build executable Host and integration tests
+        shell: bash
+        run: |
+          dotnet build samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Test live TCP peer pause and recovery around the real FLD GC lease
+        shell: bash
+        run: |
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Active_tcp_peer_survives_host_gc_reference_lease_and_provider_write_resumes_after_release" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=gc-live-peer-pause-resume.trx" \
+            --results-directory "${{ runner.temp }}/gc-live-peer-results" \
+            --blame-hang-timeout 5m \
+            --blame-hang-dump-type mini
+
+      - name: Upload GC/live-peer diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gc-live-peer-pause-resume-${{ matrix.os }}
+          path: ${{ runner.temp }}/gc-live-peer-results
+          retention-days: 14
+          if-no-files-found: ignore

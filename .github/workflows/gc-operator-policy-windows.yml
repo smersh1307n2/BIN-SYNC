@@ -1,0 +1,79 @@
+name: GC Operator Policy Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: binsync-gc-operator-policy-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  policy:
+    name: durable GC operator policy (.NET 10, Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout BIN-SYNC
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        shell: bash
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "BIN-SYNC pins FLD Storage at $sha"
+
+      - name: Checkout exact FLD-DB revision used by the Storage submodule
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build durable Host policy tests
+        shell: bash
+        run: |
+          dotnet build samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Test policy, cross-process lease, startup ordering and ChangeId GC
+        shell: bash
+        run: |
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~FldBinSyncGcHostOperationsTests|FullyQualifiedName~Async_host_adapter_signed_changeid_gc_scale" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=gc-operator-policy-windows.trx" \
+            --results-directory "$RUNNER_TEMP/gc-operator-policy-test-results" \
+            --blame-hang-timeout 5m \
+            --blame-hang-dump-type mini
+
+      - name: Upload Windows policy diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gc-operator-policy-windows-diagnostics
+          path: ${{ runner.temp }}/gc-operator-policy-test-results
+          retention-days: 14
+          if-no-files-found: ignore

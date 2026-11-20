@@ -72,7 +72,7 @@ public class ScenariosA
         for (long i = 1; i <= 3; i++)
             a.WriteField(NS, Rid(i), 0x0100, System.Text.Encoding.ASCII.GetBytes($"v{i}"), new Hlc((ulong)(100 + i), 0));
         foreach (var batch in a.BuildSnapshot(NS))
-            b.ApplySnapshot(batch, a.NodeId);
+            b.ApplySnapshot(batch);
         a.WriteField(NS, Rid(4), 0x0100, System.Text.Encoding.ASCII.GetBytes("v4"), new Hlc(110, 0));
         Transport.DeliverBatch(a, b, NS);
         Assert.Equal(new HashSet<string> { "1", "2", "3", "4" },
@@ -263,7 +263,7 @@ public class ScenariosA
         var a = Fix.MakeNode(1); var b = Fix.MakeNode(2);
         Transport.MakeSession(a, b);
         var op = new OpFieldWrite { FieldId = 0x0100, KeyEpoch = 2, Wall = 10, Logical = 0, Origin = 1, Value = System.Text.Encoding.ASCII.GetBytes("reencrypted") };
-        var entry = a.PushOutbox(NS, Rid(1), op, a.NodeId);
+        var entry = a.PushOutbox(NS, Rid(1), op);
         Assert.NotNull(entry);
         Assert.Equal(Ops.EncodeOp(op), entry!.Payload);
         var (dec, _) = Ops.DecodeOp(entry.Payload);

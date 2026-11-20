@@ -3,6 +3,7 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("BinSync.Tests")]
+[assembly: InternalsVisibleTo("BinSync.Storage.Integration")]
 [assembly: InternalsVisibleTo("ScenarioHarness")]
 [assembly: InternalsVisibleTo("TwoNodeLoopback")]
 [assembly: InternalsVisibleTo("TwoNodeTcp")]
@@ -18,6 +19,9 @@ public sealed partial class Node
     /// </summary>
     internal IReadOnlyDictionary<(NodeId, int), long> OutboxSeqRef => _outboxSeq;
 
+    /// <summary>Test-only observation that Metadata-Store-owned receive does not mirror global ChangeIds into Node.</summary>
+    internal int GlobalChangeLedgerCount => GlobalChangeLedger.Count;
+
     /// <summary>
     /// Atomic multi-entry write (production hardening): the whole batch of field writes
     /// takes the node gate ONCE, so every entry gets a distinct HLC stamp
@@ -26,7 +30,7 @@ public sealed partial class Node
     /// observe equal (wall, logical) pairs because SendTick and PushOutbox are separate
     /// critical sections.
     /// </summary>
-    public void WriteFields(int namespaceId, IEnumerable<(byte[] RecordId, int FieldId, byte[] Value)> writes)
+    public void WriteFields(int namespaceId, IEnumerable<(RecordId RecordId, int FieldId, byte[] Value)> writes)
     {
         lock (_lockStorage) lock (_lockOutbox)
         {
@@ -39,7 +43,7 @@ public sealed partial class Node
     /// Apply a remote field state (snapshot path): LWW merge with original author/HLC.
     /// Does not push outbox — peer already holds the op; local anti-entropy republishes separately.
     /// </summary>
-    public bool ApplyRemoteField(int namespaceId, RecordId recordId, ushort fieldId,
+    internal bool ApplyRemoteField(int namespaceId, RecordId recordId, ushort fieldId,
         byte[] value, Hlc hlc, NodeId authorNodeId, ushort keyEpoch = 0)
     {
         lock (_lockStorage)
@@ -47,14 +51,76 @@ public sealed partial class Node
             var store = NsInternal(namespaceId);
             if (!store.TryGetValue(recordId, out var rec))
                 store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+            if (fieldId == Model.LifecycleFieldId)
+                return Merge.ApplyLifecycle(rec, hlc, authorNodeId, value.Length > 0 ? value[0] : Model.Alive);
             var fs = new FieldState(value, hlc, authorNodeId, keyEpoch);
             return Merge.ApplyFieldWrite(rec, fieldId, fs);
+        }
+    }
+
+    /// <summary>Apply a remote field tombstone from a snapshot without creating an Outbox entry.</summary>
+    internal bool ApplyRemoteFieldTombstone(int namespaceId, RecordId recordId, ushort fieldId,
+        Hlc hlc, NodeId authorNodeId, ushort keyEpoch = 0)
+    {
+        lock (_lockStorage)
+        {
+            var store = NsInternal(namespaceId);
+            if (!store.TryGetValue(recordId, out var rec))
+                store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+            return Merge.ApplyFieldTomb(rec, fieldId, new FieldState(Array.Empty<byte>(), hlc, authorNodeId, keyEpoch));
+        }
+    }
+
+    /// <summary>Apply a remote record lifecycle from a snapshot without creating an Outbox entry.</summary>
+    internal bool ApplyRemoteLifecycle(int namespaceId, RecordId recordId, Hlc hlc,
+        NodeId authorNodeId, byte lifecycleValue)
+    {
+        lock (_lockStorage)
+        {
+            var store = NsInternal(namespaceId);
+            if (!store.TryGetValue(recordId, out var rec))
+                store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
+            return Merge.ApplyLifecycle(rec, hlc, authorNodeId, lifecycleValue);
+        }
+    }
+
+    /// <summary>Record that the peer has applied our complete snapshot baseline for this namespace.</summary>
+    internal void MarkInitialSyncComplete(NodeId peer, int namespaceId)
+    {
+        lock (_lockMeta)
+        {
+            var key = (peer, namespaceId);
+            if (!PeerStates.TryGetValue(key, out var state))
+                PeerStates[key] = state = new PeerState(peer, namespaceId);
+            state.InitialSyncComplete = true;
+        }
+    }
+
+    public bool IsInitialSyncComplete(NodeId peer, int namespaceId)
+    {
+        if (peer.IsZero) throw new ArgumentException("Peer identity must be non-zero.", nameof(peer));
+        if ((uint)namespaceId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(namespaceId));
+        lock (_lockMeta)
+            return PeerStates.TryGetValue((peer, namespaceId), out var state) && state.InitialSyncComplete;
+    }
+
+    /// <summary>True when this Node has no materialized data or durable protocol cache to preserve.</summary>
+    public bool IsPristine
+    {
+        get
+        {
+            lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+            {
+                ThrowIfDisposed();
+                return _storage.Count == 0 && Outbox.Count == 0 &&
+                    PeerStates.Count == 0 && GlobalChangeLedger.Count == 0;
+            }
         }
     }
 }
 
 /// <summary>Per-peer session cursors and stream ACK watermarks for one namespace.</summary>
-public sealed partial class PeerState
+internal sealed partial class PeerState
 {
     /// <summary>Read-only view of cached (batchId, prevDigest) triples (tests).</summary>
     internal IReadOnlyDictionary<(NodeId Author, long Start, long End), (BatchId Id, Digest16 Prev)> IdsRef => Ids;

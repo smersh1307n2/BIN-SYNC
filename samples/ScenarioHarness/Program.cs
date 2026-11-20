@@ -1,4 +1,4 @@
-// Scenario harness — multi-step flows with logging (BinSync.Core 2.6+ public API).
+// Scenario harness — multi-step flows with logging (BinSync.Core 3.0.0+ public API).
 // Exit 0 only if all scenarios pass.
 //
 //   dotnet run --project samples/ScenarioHarness -c Release
@@ -220,7 +220,7 @@ static async Task<bool> S9_Tcp_PushReceive(Log log)
     b.WriteField(Ns, Rid(1200), 0x101, Val("tcp-b"));
     await using var listener = TcpSyncListener.Start();
     var accept = listener.AcceptAsync(a);
-    await using var client = await TcpSyncSession.ConnectAsync(b, "127.0.0.1", listener.Port);
+    await using var client = await TcpSync.ConnectAsync(b, "127.0.0.1", listener.Port);
     await using var server = await accept;
 
     var recvA = server.ReceiveBatchAsync(a);

@@ -1,0 +1,94 @@
+name: Receipt GC Stage 2 Canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: receipt-gc-stage2-canary-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  receipt-canary:
+    name: Receipt-only disposable canary (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout BIN-SYNC
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        shell: bash
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact FLD-DB revision used by the Storage submodule
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build executable Host and integration tests
+        shell: bash
+        run: |
+          dotnet build samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Verify Receipt-only Host scan, retired-epoch reclaim and replay fence
+        shell: bash
+        run: |
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release --no-build --no-restore \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "FullyQualifiedName~Async_host_adapter_receipt_only_canary_reclaims_retired_receipt_and_preserves_replay_fence" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 3m
+
+      - name: Verify FLD Host Receipt scan seals WAL with Tombstone GC disabled
+        shell: bash
+        run: |
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release \
+            --filter "FullyQualifiedName~Host_gc_reference_scan_exposes_one_immutable_reference_index_and_is_session_owned" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 3m
+
+      - name: Verify Receipt WAL seal cannot authorize physical Tombstone deletion
+        shell: bash
+        run: |
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release \
+            --filter "FullyQualifiedName~Host_revalidates_exact_tombstone_candidates_and_blocks_relay_references_and_snapshot_pins" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 3m
+
+      - name: Verify bounded Receipt pages and replay fence survive restart
+        shell: bash
+        run: |
+          dotnet test BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release \
+            --filter "FullyQualifiedName~Receipt_gc_retires_old_epoch_rejoins_new_epoch_and_keeps_replay_fence_after_restart" \
+            --logger "console;verbosity=normal" \
+            --blame-hang-timeout 3m

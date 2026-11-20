@@ -18,7 +18,14 @@ public sealed partial class Node
     /// When set, <see cref="ApplyBatchCausal(Batch, NodeId)"/> evaluates <see cref="OutboxEntry.CausalDeps"/>
     /// before applying (KЗ5 all-or-nothing). Plain <see cref="ApplyBatch"/> ignores this.
     /// </summary>
-    public CausalTracker? Causal { get; set; }
+    private CausalTracker? _causal;
+
+    /// <summary>Optional causal tracker. Access is serialized with causal apply operations.</summary>
+    public CausalTracker? Causal
+    {
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _causal; } }
+        set { lock (_lockMeta) { ThrowIfDisposed(); _causal = value; } }
+    }
 
     /// <summary>
     /// Apply a batch only when every entry's causal deps are Ready (or no <see cref="Causal"/>).
@@ -26,48 +33,111 @@ public sealed partial class Node
     /// then throw <c>CAUSAL_DEP_MISSING</c>. On Cycle / LostDep / TimedOut: throw same code
     /// without enqueuing. On Ready: apply, then NoteApplied each changeId.
     /// </summary>
-    public BatchResult ApplyBatchCausal(Batch batch, byte[] senderPeer) =>
-        ApplyBatchCausal(batch, NodeId.From(senderPeer));
-
     /// <summary>Apply with typed sender peer.</summary>
     public BatchResult ApplyBatchCausal(Batch batch, NodeId senderPeer)
     {
-        lock (_lockMeta)
+        ArgumentNullException.ThrowIfNull(batch);
+
+        // Preserve the normal ApplyBatch idempotency fast path: an already accepted
+        // batch must be ACKed before evaluating optional causal metadata on a replay.
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
-            var tracker = Causal;
-            if (tracker is not null && batch.Entries.Count > 0)
-            {
-                var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(batch.Entries.Count);
-                foreach (var e in batch.Entries)
-                    members.Add((e.ChangeId, e.CausalDeps.Count > 0 ? e.CausalDeps : null));
-
-                var outcome = tracker.EvaluateBatch(members, out _);
-                if (outcome != CausalOutcome.Ready)
-                {
-                    if (outcome == CausalOutcome.Pending)
-                    {
-                        // KЗ4: hold full batch for later DrainAndRetryCausal
-                        var held = new HeldCausalBatch { Batch = batch, SenderPeer = senderPeer };
-                        foreach (var e in batch.Entries)
-                            tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
-                    }
-                    throw new SyncException("CAUSAL_DEP_MISSING", batch.BatchId);
-                }
-            }
-
-            var result = ApplyBatchInternal(batch, senderPeer);
-
-            if (tracker is not null && !result.Duplicate)
-            {
-                foreach (var e in batch.Entries)
-                {
-                    if (!e.ChangeId.IsZero)
-                        tracker.NoteApplied(e.ChangeId);
-                }
-            }
-
-            return result;
+            if (TryGetDuplicateBatchResult(batch, senderPeer, out var duplicate))
+                return duplicate;
         }
+
+        // Causal evaluation, quarantine and apply operate on one detached object graph.
+        return ApplyBatchCausalCore(CloneBatchForPublicRead(batch), senderPeer, expectedTracker: null);
+    }
+
+    private BatchResult ApplyBatchCausalCore(
+        Batch ownedBatch, NodeId senderPeer, CausalTracker? expectedTracker)
+    {
+        BatchResult result;
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            var tracker = _causal;
+            if (expectedTracker is not null && !ReferenceEquals(tracker, expectedTracker))
+                throw new InvalidOperationException("Causal tracker changed while pending batches were being drained.");
+
+            // A concurrent ApplyBatch/ApplyBatchCausal may have committed this batch
+            // after the public fast-path probe. Recheck under the same node gates and
+            // do not infer causal ChangeIds from an idempotent replay payload: the
+            // accepted batch may predate this tracker and duplicate contents are not
+            // authenticated by the inbox key.
+            if (TryGetDuplicateBatchResult(ownedBatch, senderPeer, out var duplicate))
+            {
+                result = duplicate;
+            }
+            else if (tracker is null)
+            {
+                result = ApplyBatchInternal(ownedBatch, senderPeer);
+            }
+            else
+            {
+                // ApplyBatchInternal performs this check after its stream gates. The
+                // causal gate runs earlier, so validate identities here before a zero
+                // or repeated ChangeId can enter the process-local pending graph.
+                var uniqueChangeIds = new HashSet<BatchId>();
+                foreach (var entry in ownedBatch.Entries)
+                    if (entry.ChangeId.IsZero || !uniqueChangeIds.Add(entry.ChangeId))
+                        throw new SyncException("BATCH_TRANSACTION_FAILED", ownedBatch.BatchId);
+
+                // Serialize gate evaluation, durable apply and NoteApplied against
+                // external MarkLost/NoteCausalApplied calls on this tracker.
+                lock (tracker.SyncRoot)
+                {
+                    if (ownedBatch.Entries.Count > 0)
+                    {
+                        var members = new List<(BatchId ChangeId, IReadOnlyList<BatchId>? Deps)>(ownedBatch.Entries.Count);
+                        foreach (var e in ownedBatch.Entries)
+                            members.Add((e.ChangeId, e.CausalDeps.Count > 0 ? e.CausalDeps : null));
+
+                        var outcome = tracker.EvaluateBatch(members, out _);
+                        if (outcome != CausalOutcome.Ready)
+                        {
+                            if (outcome == CausalOutcome.Pending)
+                            {
+                                // KЗ4: hold full batch for later DrainAndRetryCausal.
+                                // Keep a detached graph; no caller-owned buffers cross this boundary.
+                                var held = new HeldCausalBatch
+                                {
+                                    Batch = ownedBatch,
+                                    SenderPeer = senderPeer,
+                                };
+                                foreach (var e in ownedBatch.Entries)
+                                    tracker.EnqueuePending(e.ChangeId, (IReadOnlyList<BatchId>)e.CausalDeps, payload: held);
+                            }
+                            else
+                            {
+                                // A rejected batch can never become applicable later.
+                                // Mark every not-yet-known ChangeId lost for descendants.
+                                foreach (var e in ownedBatch.Entries)
+                                    if (!e.ChangeId.IsZero)
+                                        tracker.MarkLost(e.ChangeId);
+                            }
+                            throw new SyncException("CAUSAL_DEP_MISSING", ownedBatch.BatchId);
+                        }
+                    }
+
+                    result = ApplyBatchInternal(ownedBatch, senderPeer);
+
+                    // Duplicate batches are already durable; keep causal state aligned.
+                    foreach (var e in ownedBatch.Entries)
+                    {
+                        if (!e.ChangeId.IsZero)
+                            tracker.NoteApplied(e.ChangeId);
+                    }
+                }
+            }
+        }
+
+        // Match ApplyBatch: application callbacks run only after Storage → Outbox → Meta
+        // have all been released.
+        if (!result.Duplicate || result.Applied > 0)
+            RaiseBatchApplied(result, senderPeer);
+        return result;
     }
 
     /// <summary>
@@ -77,6 +147,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             return Causal?.Drain() ?? new List<(PendingCausalOp, CausalOutcome)>();
         }
     }
@@ -87,40 +158,75 @@ public sealed partial class Node
     /// </summary>
     public int DrainAndRetryCausal()
     {
-        lock (_lockMeta)
+        // Never hold Meta while entering the normal Storage → Outbox → Meta apply order.
+        CausalTracker? tracker;
+        lock (_lockMeta) { ThrowIfDisposed(); tracker = _causal; }
+        if (tracker is null) return 0;
+
+        int applied = 0;
+        while (true)
         {
-            if (Causal is null) return 0;
-            int applied = 0;
-            var released = Causal.Drain();
-            // Deduplicate by batch id (one held batch may be enqueued under several changeIds)
-            var seen = new HashSet<BatchId>();
+            var released = tracker.Drain();
+            // One batch is enqueued once per entry. Keep the complete group so a failed
+            // retry can restore every pending ChangeId, not just the first one.
+            // BatchId is only one part of the protocol inbox key; different issuers
+            // may legitimately reuse it. Each pending entry shares its HeldCausalBatch
+            // instance, so reference identity groups exactly one original batch.
+            var batches = new Dictionary<HeldCausalBatch, List<PendingCausalOp>>();
             foreach (var (op, outcome) in released)
             {
-                if (outcome != CausalOutcome.Ready) continue;
-                if (op.Payload is not HeldCausalBatch held) continue;
-                if (!seen.Add(held.Batch.BatchId)) continue;
+                if (outcome != CausalOutcome.Ready || op.Payload is not HeldCausalBatch held)
+                    continue;
+                if (!batches.TryGetValue(held, out var ops))
+                    batches[held] = ops = new List<PendingCausalOp>();
+                ops.Add(op);
+            }
+            if (batches.Count == 0) break;
+
+            bool madeProgress = false;
+            foreach (var (held, ops) in batches)
+            {
                 try
                 {
-                    // Re-enter causal gate; should be Ready now that parents are known
-                    ApplyBatchCausal(held.Batch, held.SenderPeer);
+                    ApplyBatchCausalCore(CloneBatchForPublicRead(held.Batch), held.SenderPeer, tracker);
                     applied++;
+                    madeProgress = true;
+                }
+                catch (InvalidOperationException) when (!ReferenceEquals(Causal, tracker))
+                {
+                    // The host replaced the causal tracker while this drain was in progress.
+                    return applied;
                 }
                 catch (SyncException)
                 {
-                    // Still blocked or SEQ issues — leave for next drain
+                    // A batch may still have another unresolved dependency or stream gap.
+                    // Restore the released members; if another batch in this pass makes
+                    // progress, the next pass can retry it against the newly advanced state.
+                    foreach (var op in ops) tracker.RequeuePending(op);
+                }
+                catch
+                {
+                    foreach (var op in ops) tracker.RequeuePending(op);
+                    throw;
                 }
             }
-            return applied;
+
+            // NoteApplied from a successful batch can unlock another held batch. Drain
+            // again until the dependency chain is exhausted. If no batch committed, stop
+            // rather than spinning on a ready causal entry whose normal stream gate failed.
+            if (!madeProgress) break;
         }
+        return applied;
     }
 
     /// <summary>
     /// Mark a locally authored changeId as known (call after WriteField when using causal).
     /// </summary>
-    public void NoteCausalApplied(byte[] changeId)
+    public void NoteCausalApplied(BatchId changeId)
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             Causal?.NoteApplied(changeId);
         }
     }
@@ -131,12 +237,26 @@ public sealed partial class Node
     /// </summary>
     public byte[] EncodeBatchPayloadCausal(Batch batch)
     {
+        ArgumentNullException.ThrowIfNull(batch);
         lock (_lockMeta)
         {
-            if (CausalWire.HasDeps(batch.Entries))
-                batch.Flags |= CausalWire.FlagHasCausalTrailer;
-            var body = EncodeBatchPayloadInternal(batch);
-            return CausalWire.EncodeWithTrailer(body, batch.Entries);
+            ThrowIfDisposed();
+            bool hasDeps = CausalWire.HasDeps(batch.Entries);
+            int flags = hasDeps
+                ? batch.Flags | CausalWire.FlagHasCausalTrailer
+                : batch.Flags & ~CausalWire.FlagHasCausalTrailer;
+            // Encode a shallow header copy so adding/clearing the trailer bit never
+            // mutates the caller's Batch. Entry buffers are read-only during encoding.
+            var wireBatch = new Batch(
+                batch.NamespaceId, batch.SchemaId, batch.SchemaVersion, batch.MergePolicy, flags,
+                batch.IssuerNodeId, batch.IssuerEpoch, batch.CursorStart, batch.CursorEnd,
+                batch.BatchId, batch.PrevBatchDigest, batch.RecordsRoot, batch.BatchDigest,
+                batch.Entries)
+            {
+                AuthorStreamNodeId = batch.AuthorStreamNodeId,
+            };
+            var body = EncodeBatchPayloadInternal(wireBatch);
+            return CausalWire.EncodeWithTrailer(body, wireBatch.Entries);
         }
     }
 
@@ -145,21 +265,24 @@ public sealed partial class Node
     /// </summary>
     public Batch DecodeBatchPayloadCausal(byte[] data)
     {
+        ArgumentNullException.ThrowIfNull(data);
         lock (_lockMeta)
         {
-            // First decode as standard (Reader stops at records end via known lengths).
-            // Standard decoder reads exactly the declared structure — trailing bytes may confuse it.
-            // Strategy: find trailer magic, decode body prefix only.
-            int bodyLen = data.Length;
-            for (int i = 0; i + 4 <= data.Length; i++)
+            ThrowIfDisposed();
+            if (data.Length < 8)
+                throw new EndOfStreamException("Truncated DELTA_BATCH header.");
+
+            bool hasTrailer = (data[7] & CausalWire.FlagHasCausalTrailer) != 0;
+            if (!hasTrailer)
             {
-                uint m = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(i));
-                if (m == CausalWire.Magic) { bodyLen = i; break; }
+                var standard = DecodeBatchPayloadInternal(data);
+                standard.MaterializeEntries();
+                return standard;
             }
-            var body = bodyLen == data.Length ? data : data.AsSpan(0, bodyLen).ToArray();
-            var batch = DecodeBatchPayloadInternal(body);
-            if (bodyLen < data.Length)
-                CausalWire.TryApplyTrailer(data, batch.Entries);
+
+            int bodyLength = CausalWire.GetBodyLength(data);
+            var batch = DecodeBatchPayloadInternal(data.AsMemory(0, bodyLength));
+            CausalWire.ApplyTrailerStrict(data, bodyLength, batch.Entries);
             batch.MaterializeEntries(); // public API — owned buffers
             return batch;
         }

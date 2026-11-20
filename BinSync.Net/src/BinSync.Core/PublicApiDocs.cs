@@ -15,7 +15,7 @@ public sealed partial class Batch
 
 /// <summary>
 /// Sync node: storage, outbox, alias maps, apply/create delta batch.
-/// Identity (<see cref="NodeId"/>, <see cref="Clock"/>) is fixed at construction.
+/// Identity (<see cref="NodeId"/>) is fixed at construction; clock state is observed through <see cref="ClockState"/>.
 /// </summary>
 public sealed partial class Node
 {

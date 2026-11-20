@@ -18,7 +18,7 @@ public class ReconcileFulfillTests
 
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b);
-        await using var client = await TcpSyncSession.ConnectAsync(a, "127.0.0.1", listener.Port);
+        await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
         // Discover divergence
@@ -56,26 +56,32 @@ public class ReconcileFulfillTests
 
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b);
-        await using var client = await TcpSyncSession.ConnectAsync(a, "127.0.0.1", listener.Port);
+        await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
         var key = BucketAccumulator.BucketKey(rid);
         var prefix = key[..1];
 
-        var reply = Task.Run(async () =>
+        var clientExchange = client.RunReconciliationAsync(async (ops, ct) =>
         {
-            var need = await server.ReceiveNeedRangeAsync();
+            await ops.SendNeedRangeAsync(1, prefix, ct);
+            return await ops.ReceiveNeedKeysAsync(ct);
+        });
+
+        var serverExchange = server.RunReconciliationAsync(async (ops, ct) =>
+        {
+            var need = await ops.ReceiveNeedRangeAsync(ct);
             var ids = Reconcile.LocalKeysUnderPrefix(b, need.NamespaceId, need.Prefix);
-            await server.SendNeedKeysAsync(new NeedKeysMessage
+            await ops.SendNeedKeysAsync(new NeedKeysMessage
             {
                 NamespaceId = need.NamespaceId,
                 RecordIds = ids,
-            });
+            }, ct);
             return ids;
         });
-        await client.SendNeedRangeAsync(1, prefix);
-        var keys = await client.ReceiveNeedKeysAsync();
-        var listed = await reply;
+
+        var keys = await clientExchange;
+        var listed = await serverExchange;
         Assert.Contains(keys.RecordIds, id => Fix.Eq(id, rid));
         Assert.NotEmpty(listed);
     }

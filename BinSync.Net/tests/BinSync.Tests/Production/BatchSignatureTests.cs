@@ -57,16 +57,16 @@ public class BatchSignatureTests
         var (seed, pub) = BatchSignature.GenerateKeyPair();
         var batch = new Batch(
             ns: 7, schemaId: 0, schemaVer: 1, policy: 0x02, flags: 0,
-            issuer: Id(1), issuerEpoch: 3,
+            issuer: NodeId.From(Id(1)), issuerEpoch: 3,
             cstart: 1, cend: 1,
-            batchId: Id(0xAA), prev: Node.Zero128,
-            root: Node.Zero128, digest: Id(0xDD),
+            batchId: BatchId.From(Id(0xAA)), prev: Digest16.From(Node.Zero128),
+            root: Digest16.From(Node.Zero128), digest: Digest16.From(Id(0xDD)),
             entries: new List<OutboxEntry>());
         var sig = BatchSignature.SignBatch(seed, batch);
         Assert.True(BatchSignature.VerifyBatch(pub, batch, sig));
 
         // Mutate digest → must fail
-        batch.BatchDigest = Id(0xEE);
+        batch.BatchDigest = Digest16.From(Id(0xEE));
         Assert.False(BatchSignature.VerifyBatch(pub, batch, sig));
     }
 
@@ -76,13 +76,13 @@ public class BatchSignatureTests
         var (seed, pub) = BatchSignature.GenerateKeyPair();
         var notice = KeyRotation.Create(
             namespaceId: 1, oldKeyEpoch: 2, newKeyEpoch: 3,
-            nodeId: Id(0x42), identitySeed: seed);
+            nodeId: NodeId.From(Id(0x42)), identitySeed: seed);
         var bytes = KeyRotation.Encode(notice);
         var decoded = KeyRotation.Decode(bytes);
         Assert.Equal(1, decoded.NamespaceId);
         Assert.Equal(2, decoded.OldKeyEpoch);
         Assert.Equal(3, decoded.NewKeyEpoch);
-        Assert.Equal(Id(0x42), decoded.NodeId);
+        Assert.Equal(NodeId.From(Id(0x42)), decoded.NodeId);
         Assert.True(KeyRotation.VerifyProof(decoded, pub));
     }
 
@@ -90,7 +90,7 @@ public class BatchSignatureTests
     public void KeyRotation_bad_proof_fails()
     {
         var (seed, pub) = BatchSignature.GenerateKeyPair();
-        var notice = KeyRotation.Create(1, 0, 1, Id(1), seed);
+        var notice = KeyRotation.Create(1, 0, 1, NodeId.From(Id(1)), seed);
         notice.Proof[0] ^= 0xFF;
         Assert.False(KeyRotation.VerifyProof(notice, pub));
     }
@@ -104,7 +104,7 @@ public class BatchSignatureTests
                 NamespaceId = 1,
                 OldKeyEpoch = 5,
                 NewKeyEpoch = 5,
-                NodeId = Id(1),
+                NodeId = NodeId.From(Id(1)),
                 Proof = new byte[64],
             }));
     }

@@ -5,101 +5,253 @@ namespace BinSync;
 public sealed class SnapshotField
 {
     /// <summary>Field identifier within a record.</summary>
-    public ushort FieldId;
+    public ushort FieldId { get; set; }
+    /// <summary>True when this row is a field tombstone rather than a live value.</summary>
+    public bool IsTombstone { get; set; }
     /// <summary>HLC wall-clock component in microseconds.</summary>
-    public ulong Wall;
+    public ulong Wall { get; set; }
     /// <summary>HLC logical counter component.</summary>
-    public uint Logical;
+    public uint Logical { get; set; }
     /// <summary>Durable author of the field or lifecycle entry in a snapshot record.</summary>
-    public byte[] AuthorNodeId = Array.Empty<byte>();
+    public NodeId AuthorNodeId { get; set; }
     /// <summary>Key epoch associated with the field write.</summary>
-    public ushort KeyEpoch;
+    public ushort KeyEpoch { get; set; }
     /// <summary>Return a copy of the written buffer as a new byte array.</summary>
-    public byte[] Value = Array.Empty<byte>();
+    public byte[] Value { get; set; } = Array.Empty<byte>();
 }
 
 /// <summary>One record in a SNAPSHOT_CHUNK.</summary>
 public sealed class SnapshotRecord
 {
     /// <summary>128-bit record identity with value equality.</summary>
-    public byte[] RecordId = Array.Empty<byte>();
+    public RecordId RecordId { get; set; }
     /// <summary>Field snapshots included for this record.</summary>
-    public List<SnapshotField> Fields = new();
+    public List<SnapshotField> Fields { get; set; } = new();
+    /// <summary>Whether the record has an explicit lifecycle HLC.</summary>
+    public bool HasLifecycle { get; set; }
     /// <summary>Lifecycle byte: alive or tombstoned.</summary>
-    public byte LifecycleValue = Model.Alive;
+    public byte LifecycleValue { get; set; } = Model.Alive;
     /// <summary>Wall component of the record lifecycle HLC.</summary>
-    public ulong LifecycleWall;
+    public ulong LifecycleWall { get; set; }
     /// <summary>Logical component of the record lifecycle HLC.</summary>
-    public uint LifecycleLogical;
+    public uint LifecycleLogical { get; set; }
     /// <summary>Author of the last record-level lifecycle change.</summary>
-    public byte[] LifecycleAuthor = Array.Empty<byte>();
+    public NodeId LifecycleAuthor { get; set; }
 }
 
 /// <summary>Decoded SNAPSHOT_CHUNK payload.</summary>
 public sealed class SnapshotChunkMessage
 {
     /// <summary>Namespace identifier this message or entry applies to.</summary>
-    public int NamespaceId;
+    public int NamespaceId { get; set; }
     /// <summary>Zero-based index of this snapshot chunk.</summary>
-    public uint ChunkIndex;
+    public uint ChunkIndex { get; set; }
     /// <summary>Total number of chunks in the snapshot.</summary>
-    public uint ChunkCount = 1;
+    public uint ChunkCount { get; set; } = 1;
     /// <summary>Records carried in this snapshot chunk.</summary>
-    public List<SnapshotRecord> Records = new();
+    public List<SnapshotRecord> Records { get; set; } = new();
 }
 
 /// <summary>State-digest / NEED_RANGE / NEED_KEYS anti-entropy helpers.</summary>
 public static partial class Reconcile
 {
-    /// <summary>Build a single-chunk snapshot of records under <paramref name="prefix"/>.</summary>
+    // Hard parser bounds apply even when a host does not configure optional ResourceLimits.
+    internal const uint MaxSnapshotChunks = 4096;
+    internal const int MaxSnapshotRecordsPerChunk = 100_000;
+    internal const int MaxSnapshotFieldsPerChunk = 250_000;
+    // A complete receive transfer is buffered until every chunk validates. Bound
+    // aggregate wire bytes as well as per-frame bytes to prevent multi-gigabyte
+    // allocations from a peer advertising thousands of individually valid chunks.
+    internal const long MaxSnapshotTransferBytes = 64L * 1024 * 1024;
+
+    internal static long AddSnapshotTransferBytes(long totalBytes, int nextChunkBytes,
+        long maxBytes = MaxSnapshotTransferBytes)
+    {
+        if (totalBytes < 0 || nextChunkBytes < 0 || maxBytes < 0 ||
+            totalBytes > maxBytes - nextChunkBytes)
+            throw new SyncException("PAYLOAD_TOO_LARGE");
+        return totalBytes + nextChunkBytes;
+    }
+
+    // Public ApplySnapshotChunks accepts caller-owned DTO graphs. Estimate their
+    // canonical wire footprint before cloning so an oversized in-process transfer
+    // cannot double its memory use before the aggregate limit is checked.
+    internal static long EstimateSnapshotTransferBytes(
+        IReadOnlyList<SnapshotChunkMessage> chunks, long maxBytes = MaxSnapshotTransferBytes)
+    {
+        ArgumentNullException.ThrowIfNull(chunks);
+        if (chunks.Count == 0 || chunks.Count > MaxSnapshotChunks)
+            throw new FormatException("Snapshot transfer has an invalid chunk count");
+
+        long totalBytes = 0;
+        foreach (var chunk in chunks)
+        {
+            if (chunk is null || chunk.Records is null ||
+                chunk.Records.Count > MaxSnapshotRecordsPerChunk)
+                throw new FormatException("Invalid snapshot chunk");
+
+            int totalFields = 0;
+            long chunkBytes = 10 + Codec.VarintLength((ulong)chunk.Records.Count);
+            foreach (var record in chunk.Records)
+            {
+                if (record is null || record.Fields is null ||
+                    record.Fields.Count > MaxSnapshotFieldsPerChunk - totalFields)
+                    throw new FormatException("Invalid snapshot record");
+                totalFields += record.Fields.Count;
+                foreach (var field in record.Fields)
+                    if (field is null || field.Value is null)
+                        throw new FormatException("Invalid snapshot field");
+                chunkBytes += SnapshotRecordEncodedSize(record);
+            }
+
+            if (chunkBytes > Frames.MAX_PAYLOAD_SIZE || chunkBytes > int.MaxValue)
+                throw new SyncException("PAYLOAD_TOO_LARGE");
+            totalBytes = AddSnapshotTransferBytes(totalBytes, (int)chunkBytes, maxBytes);
+        }
+        return totalBytes;
+    }
+    /// <summary>Build the first bounded chunk of a consistent snapshot under <paramref name="prefix"/>.</summary>
     public static SnapshotChunkMessage BuildSnapshot(
+        Node node, int namespaceId, byte[]? prefix = null, int maxRecords = 10_000) =>
+        BuildSnapshotChunks(node, namespaceId, prefix, maxRecords)[0];
+
+    /// <summary>
+    /// Capture one consistent record view and partition it into bounded chunks.
+    /// The ordered node gates are held only while copying state, never while sending over the network.
+    /// </summary>
+    public static IReadOnlyList<SnapshotChunkMessage> BuildSnapshotChunks(
         Node node, int namespaceId, byte[]? prefix = null, int maxRecords = 10_000)
     {
-        var msg = new SnapshotChunkMessage
+        if (maxRecords <= 0 || maxRecords > MaxSnapshotRecordsPerChunk)
+            throw new ArgumentOutOfRangeException(nameof(maxRecords));
+        var ownedPrefix = prefix is { Length: > 0 } ? prefix.ToArray() : null;
+        var records = new List<SnapshotRecord>();
+        // Copy the complete record graph under the ordered node gates. Chunk packing
+        // and size accounting are CPU-only work and must not extend the lock window.
+        using (node.EnterAllGates())
         {
-            NamespaceId = namespaceId,
-            ChunkIndex = 0,
-            ChunkCount = 1,
-        };
-        if (!node.Storage.TryGetValue(namespaceId, out var map)) return msg;
-
-        foreach (var (rid, rec) in map)
-        {
-            if (prefix is { Length: > 0 })
+            if (node.Storage.TryGetValue(namespaceId, out var map))
             {
-                var key = BucketAccumulator.BucketKey(rid);
-                if (prefix.Length > key.Length || !key.AsSpan(0, prefix.Length).SequenceEqual(prefix))
-                    continue;
-            }
-            var sr = new SnapshotRecord
-            {
-                RecordId = rid.ToArray(),
-                LifecycleValue = rec.LifecycleValue,
-                LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
-                LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,
-                LifecycleAuthor = rec.LifecycleAuthor ?? Node.Zero128,
-            };
-            foreach (var (fid, fs) in rec.State)
-            {
-                sr.Fields.Add(new SnapshotField
+                foreach (var (rid, rec) in map)
                 {
-                    FieldId = fid,
-                    Wall = fs.Timestamp.Wall,
-                    Logical = fs.Timestamp.Logical,
-                    AuthorNodeId = fs.AuthorNodeId,
-                    KeyEpoch = fs.KeyEpoch,
-                    Value = fs.Value,
-                });
+                    if (ownedPrefix is not null)
+                    {
+                        var key = BucketAccumulator.BucketKey(rid);
+                        if (ownedPrefix.Length > key.Length ||
+                            !key.AsSpan(0, ownedPrefix.Length).SequenceEqual(ownedPrefix))
+                            continue;
+                    }
+                    var sr = new SnapshotRecord
+                    {
+                        RecordId = rid,
+                        HasLifecycle = rec.LifecycleHlc is not null,
+                        LifecycleValue = rec.LifecycleValue,
+                        LifecycleWall = rec.LifecycleHlc?.Wall ?? 0,
+                        LifecycleLogical = rec.LifecycleHlc?.Logical ?? 0,
+                        LifecycleAuthor = rec.LifecycleAuthor ?? default,
+                    };
+                    foreach (var (fid, fs) in rec.State)
+                    {
+                        sr.Fields.Add(new SnapshotField
+                        {
+                            FieldId = fid, Wall = fs.Timestamp.Wall, Logical = fs.Timestamp.Logical,
+                            AuthorNodeId = fs.AuthorNodeId, KeyEpoch = fs.KeyEpoch, Value = fs.Value.ToArray(),
+                        });
+                    }
+                    if (rec.HasFieldTombs)
+                    {
+                        foreach (var (fid, fs) in rec.FieldTombs)
+                        {
+                            sr.Fields.Add(new SnapshotField
+                            {
+                                FieldId = fid, IsTombstone = true, Wall = fs.Timestamp.Wall,
+                                Logical = fs.Timestamp.Logical, AuthorNodeId = fs.AuthorNodeId,
+                                KeyEpoch = fs.KeyEpoch, Value = Array.Empty<byte>(),
+                            });
+                        }
+                    }
+                    records.Add(sr);
+                }
             }
-            msg.Records.Add(sr);
-            if (msg.Records.Count >= maxRecords) break;
         }
-        return msg;
+
+        // Pack by all parser/frame bounds, not just record count. A single dense
+        // record or large field value must never create a chunk the receiver rejects.
+        var partitions = new List<List<SnapshotRecord>>();
+        var current = new List<SnapshotRecord>();
+        int currentFields = 0;
+        long currentRecordBytes = 0;
+        foreach (var record in records)
+        {
+            int recordFields = record.Fields.Count;
+            long recordBytes = SnapshotRecordEncodedSize(record);
+            if (recordFields > MaxSnapshotFieldsPerChunk ||
+                recordBytes + 10 + Codec.VarintLength(1) > Frames.MAX_PAYLOAD_SIZE)
+                throw new SyncException("PAYLOAD_TOO_LARGE");
+
+            bool mustFlush = current.Count > 0 &&
+                (current.Count >= maxRecords ||
+                 currentFields + recordFields > MaxSnapshotFieldsPerChunk ||
+                 10L + Codec.VarintLength((ulong)(current.Count + 1)) +
+                    currentRecordBytes + recordBytes > Frames.MAX_PAYLOAD_SIZE);
+            if (mustFlush)
+            {
+                partitions.Add(current);
+                current = new List<SnapshotRecord>();
+                currentFields = 0;
+                currentRecordBytes = 0;
+            }
+
+            current.Add(record);
+            currentFields += recordFields;
+            currentRecordBytes += recordBytes;
+        }
+        if (current.Count > 0 || partitions.Count == 0)
+            partitions.Add(current);
+        if (partitions.Count > MaxSnapshotChunks)
+            throw new SyncException("PAYLOAD_TOO_LARGE");
+
+        // The receiver buffers the complete transfer to preserve atomic apply.
+        // Keep the sender under the same aggregate wire budget, not merely the
+        // per-frame limit enforced above.
+        long transferBytes = 0;
+        foreach (var partition in partitions)
+        {
+            long chunkBytes = 10 + Codec.VarintLength((ulong)partition.Count);
+            foreach (var record in partition)
+                chunkBytes += SnapshotRecordEncodedSize(record);
+            transferBytes = AddSnapshotTransferBytes(transferBytes, checked((int)chunkBytes));
+        }
+
+        uint chunkCount = (uint)partitions.Count;
+        var chunks = new List<SnapshotChunkMessage>(partitions.Count);
+        for (int i = 0; i < partitions.Count; i++)
+        {
+            chunks.Add(new SnapshotChunkMessage
+            {
+                NamespaceId = namespaceId,
+                ChunkIndex = (uint)i,
+                ChunkCount = chunkCount,
+                Records = partitions[i],
+            });
+        }
+        return chunks;
+    }
+
+    private static long SnapshotRecordEncodedSize(SnapshotRecord record)
+    {
+        long size = 16 + Codec.VarintLength((ulong)record.Fields.Count) + 30;
+        foreach (var field in record.Fields)
+            size += 33 + Codec.VarintLength((ulong)field.Value.Length) + field.Value.Length;
+        return size;
     }
 
     /// <summary>Encode snapshot chunk into canonical wire bytes.</summary>
     public static byte[] EncodeSnapshotChunk(SnapshotChunkMessage m)
     {
+        ArgumentNullException.ThrowIfNull(m);
+        Node.ValidateNamespaceId(m.NamespaceId);
+        ArgumentNullException.ThrowIfNull(m.Records);
         var w = new Writer();
         w.U16((ushort)m.NamespaceId);
         w.U32(m.ChunkIndex);
@@ -107,21 +259,23 @@ public static partial class Reconcile
         w.Varint((ulong)m.Records.Count);
         foreach (var r in m.Records)
         {
-            w.B128(Codec.CanonicalB128(r.RecordId));
+            w.B128(r.RecordId);
             w.Varint((ulong)r.Fields.Count);
             foreach (var f in r.Fields)
             {
                 w.U16(f.FieldId);
+                w.U8(f.IsTombstone ? (byte)1 : (byte)0);
                 w.U64(f.Wall);
                 w.U32(f.Logical);
-                w.B128(Codec.CanonicalB128(f.AuthorNodeId));
+                w.B128(f.AuthorNodeId);
                 w.U16(f.KeyEpoch);
                 w.Bytes(f.Value);
             }
+            w.U8(r.HasLifecycle ? (byte)1 : (byte)0);
             w.U8(r.LifecycleValue);
             w.U64(r.LifecycleWall);
             w.U32(r.LifecycleLogical);
-            w.B128(Codec.CanonicalB128(r.LifecycleAuthor));
+            w.B128(r.LifecycleAuthor);
         }
         return w.Value();
     }
@@ -136,29 +290,53 @@ public static partial class Reconcile
             ChunkIndex = r.U32(),
             ChunkCount = r.U32(),
         };
-        int n = (int)r.Varint();
+        if (m.ChunkCount == 0 || m.ChunkCount > MaxSnapshotChunks || m.ChunkIndex >= m.ChunkCount)
+            throw new FormatException("Snapshot chunk index/count is outside protocol limits");
+
+        ulong recordCount = r.Varint();
+        if (recordCount > MaxSnapshotRecordsPerChunk)
+            throw new FormatException("Snapshot chunk has too many records");
+        int n = (int)recordCount;
+        int totalFields = 0;
         for (int i = 0; i < n; i++)
         {
-            var sr = new SnapshotRecord { RecordId = r.B128() };
-            int fc = (int)r.Varint();
+            var sr = new SnapshotRecord { RecordId = r.ReadRecordId() };
+            ulong fieldCount = r.Varint();
+            if (fieldCount > (ulong)(MaxSnapshotFieldsPerChunk - totalFields))
+                throw new FormatException("Snapshot chunk has too many fields");
+            int fc = (int)fieldCount;
+            totalFields += fc;
             for (int j = 0; j < fc; j++)
             {
+                ushort fieldId = r.U16();
+                bool tombstone = r.U8() switch { 0 => false, 1 => true, _ => throw new FormatException("Invalid snapshot field flags") };
+                ulong wall = r.U64();
+                uint logical = r.U32();
+                NodeId author = r.ReadNodeId();
+                ushort keyEpoch = r.U16();
+                ulong valueLength = r.Varint();
+                if (valueLength > int.MaxValue || valueLength > (ulong)r.Remaining)
+                    throw new FormatException("Invalid snapshot field value length");
                 sr.Fields.Add(new SnapshotField
                 {
-                    FieldId = r.U16(),
-                    Wall = r.U64(),
-                    Logical = r.U32(),
-                    AuthorNodeId = r.B128(),
-                    KeyEpoch = r.U16(),
-                    Value = r.Bytes(),
+                    FieldId = fieldId,
+                    IsTombstone = tombstone,
+                    Wall = wall,
+                    Logical = logical,
+                    AuthorNodeId = author,
+                    KeyEpoch = keyEpoch,
+                    Value = r.Raw((int)valueLength),
                 });
             }
+            sr.HasLifecycle = r.U8() switch { 0 => false, 1 => true, _ => throw new FormatException("Invalid snapshot lifecycle flags") };
             sr.LifecycleValue = r.U8();
             sr.LifecycleWall = r.U64();
             sr.LifecycleLogical = r.U32();
-            sr.LifecycleAuthor = r.B128();
+            sr.LifecycleAuthor = r.ReadNodeId();
             m.Records.Add(sr);
         }
+        if (!r.Eof())
+            throw new FormatException("Trailing bytes in snapshot chunk");
         return m;
     }
 
@@ -168,18 +346,205 @@ public static partial class Reconcile
     /// </summary>
     public static int ApplySnapshot(Node node, SnapshotChunkMessage chunk)
     {
-        int applied = 0;
-        foreach (var rec in chunk.Records)
+        if (chunk.ChunkCount != 1 || chunk.ChunkIndex != 0)
+            throw new InvalidOperationException("MULTI_CHUNK_SNAPSHOT_REQUIRES_COMPLETE_TRANSFER");
+        return ApplySnapshotChunks(node, new[] { chunk });
+    }
+
+    private static SnapshotChunkMessage CloneSnapshotChunk(SnapshotChunkMessage? source)
+    {
+        if (source is null) return null!;
+        return new SnapshotChunkMessage
         {
-            foreach (var f in rec.Fields)
+            NamespaceId = source.NamespaceId,
+            ChunkIndex = source.ChunkIndex,
+            ChunkCount = source.ChunkCount,
+            Records = source.Records is null ? null! : source.Records.Select(record =>
+                record is null ? null! : new SnapshotRecord
+                {
+                    RecordId = record.RecordId,
+                    Fields = record.Fields is null ? null! : record.Fields.Select(field =>
+                        field is null ? null! : new SnapshotField
+                        {
+                            FieldId = field.FieldId,
+                            IsTombstone = field.IsTombstone,
+                            Wall = field.Wall,
+                            Logical = field.Logical,
+                            AuthorNodeId = field.AuthorNodeId,
+                            KeyEpoch = field.KeyEpoch,
+                            Value = field.Value is null ? null! : field.Value.ToArray(),
+                        }).ToList(),
+                    HasLifecycle = record.HasLifecycle,
+                    LifecycleValue = record.LifecycleValue,
+                    LifecycleWall = record.LifecycleWall,
+                    LifecycleLogical = record.LifecycleLogical,
+                    LifecycleAuthor = record.LifecycleAuthor,
+                }).ToList(),
+        };
+    }
+
+    /// <summary>Validate and atomically publish a complete ordered snapshot transfer.</summary>
+    public static int ApplySnapshotChunks(Node node, IReadOnlyList<SnapshotChunkMessage> chunks) =>
+        ApplySnapshotChunksCore(node, chunks, cloneInput: true);
+
+    // The transport decoder already created an owned graph. Avoid cloning every
+    // record/list/value a second time on the network receive path.
+    internal static int ApplySnapshotChunksOwned(Node node, IReadOnlyList<SnapshotChunkMessage> chunks) =>
+        ApplySnapshotChunksCore(node, chunks, cloneInput: false);
+
+    private static int ApplySnapshotChunksCore(
+        Node node, IReadOnlyList<SnapshotChunkMessage> chunks, bool cloneInput)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+        ArgumentNullException.ThrowIfNull(chunks);
+        int chunkCount = chunks.Count;
+        if (chunkCount == 0) throw new FormatException("Snapshot transfer is empty");
+        // Reject an oversized public transfer before allocating its detached copy.
+        if (chunkCount > MaxSnapshotChunks)
+            throw new FormatException("Snapshot transfer exceeds the chunk-count limit");
+        if (cloneInput)
+            _ = EstimateSnapshotTransferBytes(chunks);
+        // Public DTOs are detached before validation. Decoder-owned transfer graphs
+        // are already private to this method and can be validated without deep copies.
+        var ownedChunks = new SnapshotChunkMessage[chunkCount];
+        for (int i = 0; i < chunkCount; i++)
+            ownedChunks[i] = cloneInput ? CloneSnapshotChunk(chunks[i]) : chunks[i];
+        var first = ownedChunks[0] ?? throw new FormatException("Snapshot chunk is null");
+        Node.ValidateNamespaceId(first.NamespaceId);
+        if (first.ChunkCount == 0 || first.ChunkCount > MaxSnapshotChunks || ownedChunks.Length != first.ChunkCount)
+            throw new FormatException("Snapshot transfer is incomplete or exceeds protocol limits");
+
+        // Validate the complete object graph before taking locks or touching live state.
+        // The builder emits each record and field exactly once; accepting duplicates
+        // would make conflicting equal-version rows depend on their wire order.
+        var seenRecordIds = new HashSet<RecordId>();
+        for (int i = 0; i < ownedChunks.Length; i++)
+        {
+            var chunk = ownedChunks[i] ?? throw new FormatException("Snapshot chunk is null");
+            if (chunk.NamespaceId != first.NamespaceId ||
+                chunk.ChunkCount != first.ChunkCount || chunk.ChunkIndex != (uint)i)
+                throw new FormatException("Snapshot chunk sequence mismatch");
+            if (chunk.Records is null || chunk.Records.Count > MaxSnapshotRecordsPerChunk)
+                throw new FormatException("Snapshot chunk has too many or missing records");
+
+            int totalFields = 0;
+            foreach (var rec in chunk.Records)
             {
-                var hlc = new Hlc(f.Wall, f.Logical);
-                if (node.ApplyRemoteField(
-                        chunk.NamespaceId, rec.RecordId, f.FieldId,
-                        f.Value, hlc, f.AuthorNodeId, f.KeyEpoch))
+                if (rec is null || rec.Fields is null)
+                    throw new FormatException("Invalid snapshot record");
+                if (!seenRecordIds.Add(rec.RecordId))
+                    throw new FormatException("Duplicate snapshot record id");
+                if (rec.Fields.Count > MaxSnapshotFieldsPerChunk - totalFields)
+                    throw new FormatException("Snapshot chunk has too many fields");
+                totalFields += rec.Fields.Count;
+
+                HashSet<ushort>? seenFieldIds = rec.Fields.Count > 1 ? new HashSet<ushort>() : null;
+                foreach (var field in rec.Fields)
+                {
+                    if (field is null || field.Value is null ||
+                        (seenFieldIds is not null && !seenFieldIds.Add(field.FieldId)))
+                        throw new FormatException("Invalid or duplicate snapshot field");
+                    if (field.IsTombstone &&
+                        (field.Value.Length != 0 || field.FieldId == Model.LifecycleFieldId))
+                        throw new FormatException("Invalid snapshot field tombstone");
+                    if (!field.IsTombstone && field.FieldId == Model.LifecycleFieldId &&
+                        (field.KeyEpoch != 0 || field.Value.Length != 1 ||
+                         field.Value[0] is not Model.Alive and not Model.Dead))
+                        throw new FormatException("Invalid snapshot lifecycle field");
+                }
+
+                if (rec.HasLifecycle &&
+                    (rec.LifecycleValue is not Model.Alive and not Model.Dead))
+                    throw new FormatException("Invalid snapshot lifecycle");
+            }
+        }
+
+        // Stage a copy-on-write view of every touched record. No live dictionary or
+        // Record instance is mutated until all merges have completed successfully.
+        using var gates = node.EnterAllGates();
+        var staged = new Dictionary<RecordId, Record>();
+        int applied = 0;
+        foreach (var chunk in ownedChunks)
+        {
+            foreach (var rec in chunk.Records)
+            {
+                var recordId = rec.RecordId;
+                if (!staged.TryGetValue(recordId, out var target))
+                {
+                    target = node.Storage.TryGetValue(chunk.NamespaceId, out var liveStore) &&
+                             liveStore.TryGetValue(recordId, out var existing)
+                        ? Node.Clone(existing)
+                        : new Record(recordId, (ushort)chunk.NamespaceId);
+                    staged.Add(recordId, target);
+                }
+
+                foreach (var field in rec.Fields)
+                {
+                    var hlc = new Hlc(field.Wall, field.Logical);
+                    var author = field.AuthorNodeId;
+                    bool changed;
+                    if (field.IsTombstone)
+                    {
+                        changed = Merge.ApplyFieldTomb(target, field.FieldId,
+                            new FieldState(Array.Empty<byte>(), hlc, author, field.KeyEpoch));
+                    }
+                    else if (field.FieldId == Model.LifecycleFieldId)
+                    {
+                        changed = Merge.ApplyLifecycle(target, hlc, author,
+                            field.Value.Length > 0 ? field.Value[0] : Model.Alive);
+                    }
+                    else
+                    {
+                        changed = Merge.ApplyFieldWrite(target, field.FieldId,
+                            new FieldState(field.Value, hlc, author, field.KeyEpoch));
+                    }
+                    if (changed) applied++;
+                }
+
+                if (rec.HasLifecycle && Merge.ApplyLifecycle(target,
+                    new Hlc(rec.LifecycleWall, rec.LifecycleLogical),
+                    rec.LifecycleAuthor, rec.LifecycleValue))
                     applied++;
             }
         }
+
+        // Snapshot apply obeys the same configured storage cap as DELTA_BATCH.
+        // Count only record identities not already present in the target namespace;
+        // reject before publishing any staged record.
+        var limits = node.Limits;
+        if (limits is not null && staged.Count > 0)
+        {
+            int newRecords = 0;
+            bool hasNamespace = node.Storage.TryGetValue(first.NamespaceId, out var existingStore);
+            foreach (var recordId in staged.Keys)
+                if (!hasNamespace || !existingStore!.ContainsKey(recordId))
+                    newRecords++;
+            limits.EnsureCanApplySnapshot(node, newRecords);
+        }
+
+        // Reserve capacity before publication. A new namespace is assembled off-node
+        // and becomes visible through one dictionary insertion.
+        if (staged.Count > 0)
+        {
+            if (node.Storage.TryGetValue(first.NamespaceId, out var store))
+            {
+                store.EnsureCapacity(store.Count + staged.Count);
+                foreach (var (recordId, record) in staged)
+                    store[recordId] = record;
+            }
+            else
+            {
+                var newStore = new Dictionary<RecordId, Record>(staged.Count);
+                foreach (var (recordId, record) in staged)
+                    newStore.Add(recordId, record);
+                node.Storage.EnsureCapacity(node.Storage.Count + 1);
+                node.Storage.Add(first.NamespaceId, newStore);
+            }
+        }
+        // Release all node gates before notifying observers. Snapshot application is
+        // a control-plane transfer, so event dispatch never runs under engine locks.
+        gates.Dispose();
+        node.RaiseSnapshotApplied(first.NamespaceId, applied);
         return applied;
     }
 }

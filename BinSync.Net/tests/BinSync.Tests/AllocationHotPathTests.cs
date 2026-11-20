@@ -23,7 +23,7 @@ public class AllocationHotPathTests
         var a = new Node();
         var b = new Node();
         Transport.MakeSession(a, b);
-        a.WriteField(1, Rid(1), 1, new byte[] { 1, 2, 3 });
+        a.WriteField(1, Rid(1), 0x100, new byte[] { 1, 2, 3 });
         var batch = a.CreateDeltaBatch(b.NodeId, 1)!;
         Assert.NotNull(batch);
         // First apply
@@ -52,12 +52,12 @@ public class AllocationHotPathTests
         var n = new Node();
         // Warm
         for (int i = 0; i < 50; i++)
-            n.WriteField(1, Rid(i), 1, new byte[] { 9 });
+            n.WriteField(1, Rid(i), 0x100, new byte[] { 9 });
 
         long before = GC.GetAllocatedBytesForCurrentThread();
         const int N = 200;
         for (int i = 0; i < N; i++)
-            n.WriteField(1, Rid(10_000 + i), 1, new byte[] { 1, 2, 3, 4 });
+            n.WriteField(1, Rid(10_000 + i), 0x100, new byte[] { 1, 2, 3, 4 });
         long after = GC.GetAllocatedBytesForCurrentThread();
         long per = (after - before) / N;
         // New record + outbox entry + op encode: allow up to 4 KB average.

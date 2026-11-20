@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Deterministic>true</Deterministic>
+    <RootNamespace>BinSync.FldHost.Runtime</RootNamespace>
+    <AssemblyName>FldBinSyncHost.Runtime</AssemblyName>
+    <Description>Production-shaped integration-test Host for the BIN-SYNC/FLD lifecycle; not a production service.</Description>
+  </PropertyGroup>
+  <PropertyGroup>
+    <Fld1RepositoryRoot Condition="'$(Fld1RepositoryRoot)' == ''">$(MSBuildThisFileDirectory)../../../FLD-DB</Fld1RepositoryRoot>
+    <Fld1DatabaseProject Condition="'$(Fld1DatabaseProject)' == ''">$(Fld1RepositoryRoot)/src/Fld1.Database/Fld1.Database.csproj</Fld1DatabaseProject>
+    <Fld1StorageProject Condition="'$(Fld1StorageProject)' == ''">$(Fld1RepositoryRoot)/src/Fld1.Storage/Fld1.Storage.csproj</Fld1StorageProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FldBinSyncHost/FldBinSyncHost.csproj" />
+  </ItemGroup>
+</Project>

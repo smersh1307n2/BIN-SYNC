@@ -1,0 +1,82 @@
+name: FLD Storage Integration
+
+on:
+  push:
+    branches: ["main", "feature/fld-external-storage"]
+    paths:
+      - ".gitmodules"
+      - ".github/workflows/storage-integration.yml"
+      - "external/Fld1.Storage"
+      - "eng/verify-fld-storage-submodule.py"
+      - "BinSync.Net/tests/BinSync.Storage.Integration/**"
+      - "BinSync.Net/tests/BinSync.MetadataStore.Conformance/**"
+      - "BinSync.Net/src/BinSync.Core/**"
+      - "BinSync.Net/src/BinSync.Storage/**"
+      - "samples/StorageArraySync/**"
+      - "samples/StorageArrayTcpSync/**"
+  workflow_dispatch:
+  schedule:
+    - cron: "47 3 * * *"
+
+concurrency:
+  group: storage-integration-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: durable provider integration (.NET 10) (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["ubuntu-latest","windows-latest","macos-15"]') || fromJSON('["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Verify FLD Storage submodule pin
+        run: python eng/verify-fld-storage-submodule.py
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Restore
+        run: dotnet restore BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj
+      - name: Build
+        run: dotnet build BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj --configuration Release --no-restore
+      - name: Test focused ChangeId GC coverage on pushes; full suite on demand
+        shell: bash
+        run: |
+          set -euo pipefail
+          project="BinSync.Net/tests/BinSync.Storage.Integration/BinSync.Storage.Integration.csproj"
+          common=(--configuration Release --no-build --no-restore --blame-hang-timeout 8m --blame-hang-dump-type mini)
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            dotnet test "$project" "${common[@]}" \
+              --filter "FullyQualifiedName~Change_id_gc_|FullyQualifiedName~Async_local_publication|FullyQualifiedName~Outbound_" \
+              --logger "console;verbosity=detailed" \
+              --logger "trx;LogFileName=changeid-gc-focused.trx"
+          else
+            dotnet test "$project" "${common[@]}" \
+              --logger "console;verbosity=detailed" \
+              --logger "trx;LogFileName=storage-integration-full.trx"
+          fi
+      - name: Run durable array synchronization sample
+        if: github.event_name != 'push'
+        run: dotnet run --project samples/StorageArraySync/StorageArraySync.csproj --configuration Release
+      - name: Run Storage-backed TCP array synchronization sample
+        if: github.event_name != 'push'
+        run: dotnet run --project samples/StorageArrayTcpSync/StorageArrayTcpSync.csproj --configuration Release
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binsync-fld-storage-integration-${{ matrix.os }}
+          path: "**/TestResults/*.trx"
+          if-no-files-found: ignore
+
+# Re-run validation against the currently pinned FLD Storage revision.
