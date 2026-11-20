@@ -8,6 +8,7 @@ on:
       - feature/fld-external-storage
     paths:
       - '.github/workflows/metadata-bench.yml'
+      - 'BinSync.Net/bench/BinSync.Bench/Program.cs'
   workflow_dispatch:
 
 permissions:
