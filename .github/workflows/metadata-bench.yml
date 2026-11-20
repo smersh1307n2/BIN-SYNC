@@ -1,8 +1,13 @@
 name: Durable Metadata Bench
 
 on:
-  # This is a multi-suite performance run (peer lifecycle, retry, cardinality,
-  # ChangeId GC and 1M rows). Start it explicitly at a benchmark milestone.
+  # Run automatically only when this benchmark workflow itself changes on the
+  # working branch; keep the expensive multi-suite benchmark opt-in otherwise.
+  push:
+    branches:
+      - feature/fld-external-storage
+    paths:
+      - '.github/workflows/metadata-bench.yml'
   workflow_dispatch:
 
 permissions:
