@@ -539,7 +539,11 @@ public sealed class AsyncStorageSyncCoordinator
                 originBatch.Clear();
             }
 
-            var seenChangeIds = new HashSet<BatchId>();
+            // The dedicated FLD receipt stream assigns a strictly increasing
+            // ClientSequence on first append and reuses it for ChangeId retries.
+            // Feed-order monotonicity therefore detects duplicate ChangeIds exactly
+            // without retaining a HashSet proportional to the full feed history.
+            ulong previousClientSequence = 0;
             ulong afterSequence = 0;
             ulong scannedThroughSequence = 0;
             ulong lastFrozenFeedSequence = 0;
@@ -592,6 +596,10 @@ public sealed class AsyncStorageSyncCoordinator
                         _node.RecordProviderOperationReceipt(
                             _namespaceId, change.ChangeId, clientSequence);
                     }
+                    if (clientSequence == 0 || clientSequence <= previousClientSequence)
+                        throw new InvalidDataException(
+                            "Async provider feed repeated a ChangeId or returned non-increasing durable receipt sequences.");
+                    previousClientSequence = clientSequence;
 
                     bool sharedNodeAndOutboundWinners = false;
                     nodeWinners ??= winners;
