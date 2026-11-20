@@ -2076,7 +2076,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
         var partitionKey = new PartitionKey(scopeId, localReplica);
         foreach (KeyValuePair<Guid, PendingApplyValue> row in EnumeratePendingApplies(partitionKey))
         {
-            MetadataPendingApplyIntent? intent = null;
+            MetadataPendingApplyIntent intent;
             lock (_gate)
             {
                 ThrowIfDisposed();
