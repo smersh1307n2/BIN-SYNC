@@ -530,7 +530,6 @@ public sealed class AsyncStorageSyncCoordinator
             var winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
             Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>? nodeWinners = null;
             var recoveredPublishedOrigins = new List<ProviderPublishedOrigin>();
-            var receiptMappings = new List<(BatchId ChangeId, ulong ClientSequence)>();
             var seenChangeIds = new HashSet<BatchId>();
             ulong afterSequence = 0;
             ulong scannedThroughSequence = 0;
@@ -584,7 +583,6 @@ public sealed class AsyncStorageSyncCoordinator
                         _node.RecordProviderOperationReceipt(
                             _namespaceId, change.ChangeId, clientSequence);
                     }
-                    receiptMappings.Add((change.ChangeId, clientSequence));
 
                     bool sharedNodeAndOutboundWinners = false;
                     nodeWinners ??= winners;
@@ -724,8 +722,44 @@ public sealed class AsyncStorageSyncCoordinator
                 _node.ApplyProviderChanges(_namespaceId, nodeChanges);
                 persistNode(_node);
             }
-            foreach ((BatchId changeId, ulong clientSequence) in receiptMappings)
-                _node.MarkProviderOperationReceiptPublished(_namespaceId, changeId, clientSequence);
+            // Re-read the captured feed prefix in bounded pages instead of retaining
+            // one receipt tuple per source row throughout coalescing and freeze. Each
+            // page is marked under one Node gate acquisition; WAL records remain
+            // per-receipt and idempotent if a page is interrupted part-way through.
+            ulong receiptScanAfter = 0;
+            while (receiptScanAfter < scannedThroughSequence)
+            {
+                ProviderChangePage receiptPage = await asyncProvider.ReadLocalChangesAsync(
+                    receiptScanAfter, limit, ct).ConfigureAwait(false);
+                if (receiptPage.Changes.Count > limit ||
+                    receiptPage.ScannedThroughSequence < receiptScanAfter ||
+                    receiptPage.ScannedThroughSequence == receiptScanAfter)
+                    throw new InvalidDataException("Async provider returned an invalid or non-advancing receipt-publication page.");
+
+                var receiptIds = new BatchId[receiptPage.Changes.Count];
+                int receiptCount = 0;
+                ulong previousReceiptSequence = receiptScanAfter;
+                foreach (ProviderChange change in receiptPage.Changes)
+                {
+                    if (change.Sequence <= previousReceiptSequence ||
+                        change.Sequence > receiptPage.ScannedThroughSequence)
+                        throw new InvalidDataException("Async provider receipt-publication rows are not ordered within the scanned prefix.");
+                    previousReceiptSequence = change.Sequence;
+                    if (change.Sequence > scannedThroughSequence)
+                        continue;
+                    if (change.ChangeId.IsZero)
+                        throw new InvalidDataException("Async provider receipt-publication row has a zero ChangeId.");
+                    receiptIds[receiptCount++] = change.ChangeId;
+                }
+
+                if (receiptCount != 0)
+                    _node.MarkProviderOperationReceiptsPublished(
+                        _namespaceId, new ArraySegment<BatchId>(receiptIds, 0, receiptCount));
+
+                receiptScanAfter = Math.Min(
+                    receiptPage.ScannedThroughSequence, scannedThroughSequence);
+            }
+
 
             // Source Outbox ACK must precede receipt ACK. If this call fails, the
             // Published WAL mappings remain and the same feed prefix is replayed.
