@@ -579,8 +579,6 @@ public sealed class AsyncStorageSyncCoordinator
                     // OriginSequence zero denotes an unpublished draft. A non-zero
                     // value is the durable receipt stamped only after Metadata Freeze;
                     // it is valid on replay and must not be rejected as a new draft.
-                    if (!seenChangeIds.Add(change.ChangeId))
-                        throw new InvalidDataException("Async provider local feed repeated a ChangeId within one captured prefix.");
                     _node.ValidateProviderMutation(change.Mutation);
                     if (change.Mutation.KeyEpoch != 0)
                         throw new NotSupportedException("The current Node field-write API accepts key epoch zero only.");
