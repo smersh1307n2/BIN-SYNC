@@ -1796,8 +1796,10 @@ public sealed class StorageNamespaceGcStoreTests
                 });
 
                 Assert.True(StorageMetadataStore.TryCollectProviderChangeIdsForGc(
-                    provider, provider.LocalChangeHighWatermark, out HashSet<BatchId> live));
-                Assert.Equal(new HashSet<BatchId> { first, second }, live);
+                    provider, provider.LocalChangeHighWatermark, out StorageMetadataStore.MetadataStreamChangeIdBloomFilter live));
+                Assert.True(live.MightContain(first));
+                Assert.True(live.MightContain(second));
+                Assert.InRange(live.StorageBytes, 256, 8 * 1024 * 1024);
             }
 
             using (var storage = StorageDatabase.Open(directory, 911))
@@ -1812,8 +1814,10 @@ public sealed class StorageNamespaceGcStoreTests
                 provider.AcknowledgeLocalChanges(2);
 
                 Assert.True(StorageMetadataStore.TryCollectProviderChangeIdsForGc(
-                    provider, provider.LocalChangeHighWatermark, out HashSet<BatchId> live));
-                Assert.Empty(live);
+                    provider, provider.LocalChangeHighWatermark, out StorageMetadataStore.MetadataStreamChangeIdBloomFilter live));
+                Assert.False(live.MightContain(first));
+                Assert.False(live.MightContain(second));
+                Assert.InRange(live.StorageBytes, 256, 8 * 1024 * 1024);
             }
         }
         finally
