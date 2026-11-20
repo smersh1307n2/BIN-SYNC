@@ -283,6 +283,44 @@ public sealed partial class Node
     }
 
     /// <summary>
+    /// Mark one bounded provider-feed page as Published while acquiring Node WAL gates
+    /// once. Each receipt still gets its own durable WAL record; if an append fails,
+    /// already-marked entries remain idempotent and the source feed can be replayed.
+    /// </summary>
+    internal int MarkProviderOperationReceiptsPublished(
+        int namespaceId, IReadOnlyList<BatchId> changeIds)
+    {
+        ValidateNamespaceId(namespaceId);
+        ArgumentNullException.ThrowIfNull(changeIds);
+        if (changeIds.Count == 0) return 0;
+
+        using (EnterAllGates())
+        {
+            if (_wal is null)
+                throw new InvalidOperationException("A durable Node WAL must be attached before marking provider receipts Published.");
+
+            int marked = 0;
+            for (int i = 0; i < changeIds.Count; i++)
+            {
+                BatchId changeId = changeIds[i];
+                if (changeId.IsZero)
+                    throw new InvalidDataException("Cannot publish a provider receipt with a zero ChangeId.");
+
+                var key = (namespaceId, changeId);
+                if (!ProviderOperationReceipts.TryGetValue(key, out var state))
+                    throw new InvalidDataException("Cannot publish a provider receipt without its exact durable ClientSequence mapping.");
+                if (state.Published) continue;
+
+                _wal.AppendProviderOperationReceipt(
+                    namespaceId, changeId, state.ClientSequence, published: true);
+                ProviderOperationReceipts[key] = state with { Published = true };
+                marked++;
+            }
+            return marked;
+        }
+    }
+
+    /// <summary>
     /// Record a provider receipt ACK only after the provider confirms the same
     /// contiguous Published prefix. This record is what allows WAL checkpoint/truncate.
     /// </summary>
