@@ -3083,6 +3083,27 @@ private bool ValidateIncomingBatchForStaging(
                     authorMaxHlcLogical = issued.Value.MaxHlcLogical;
                 }
             }
+            // Missing allocator rows are checked against the durable ChangeLedger
+            // in one pass, using only the epochs present in this bounded publication
+            // batch. Avoid rescanning the complete ledger once per operation/epoch.
+            var epochsMissingAllocator = new HashSet<uint>();
+            foreach (MetadataFrozenOperation operation in newOperations.AsSpan(0, newOperationCount))
+            {
+                var originKey = new OriginStreamKey(namespaceId, localAuthor, operation.OriginAuthorEpoch);
+                if (!current.OriginHighWatermarks.ContainsKey(originKey))
+                    epochsMissingAllocator.Add(operation.OriginAuthorEpoch);
+            }
+            var epochsWithLedger = new HashSet<uint>();
+            if (epochsMissingAllocator.Count != 0)
+            {
+                foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
+                {
+                    if (pair.Value.AuthorNodeId == localAuthor &&
+                        epochsMissingAllocator.Contains(pair.Value.OriginAuthorEpoch))
+                        epochsWithLedger.Add(pair.Value.OriginAuthorEpoch);
+                }
+            }
+
             for (int newOperationIndex = 0; newOperationIndex < newOperationCount; newOperationIndex++)
             {
                 MetadataFrozenOperation operation = newOperations[newOperationIndex];
@@ -3091,9 +3112,7 @@ private bool ValidateIncomingBatchForStaging(
                 if (!originHighWatermarks.TryGetValue(originKey, out OriginIssuedState issuedState))
                 {
                     if (!current.OriginHighWatermarks.TryGetValue(originKey, out issuedState) &&
-                        EnumerateChangeLedger(partitionKey, current, namespaceId).Any(pair =>
-                            pair.Value.AuthorNodeId == localAuthor &&
-                            pair.Value.OriginAuthorEpoch == operation.OriginAuthorEpoch))
+                        epochsWithLedger.Contains(operation.OriginAuthorEpoch))
                         throw new InvalidDataException("Durable origin-sequence allocator row is missing for an existing local author epoch.");
                 }
                 ulong originSequence = checked(issuedState.Sequence + 1);
