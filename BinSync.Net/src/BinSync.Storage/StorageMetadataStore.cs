@@ -6489,22 +6489,22 @@ private bool ValidateIncomingBatchForStaging(
         PartitionKey partitionKey, PartitionState state, int namespaceId)
     {
         byte[] root = PartitionRoot(partitionKey);
-        byte[] prefix = StorageKey(root, 3, ReadOnlySpan<byte>.Empty);
+        Span<byte> namespaceSuffix = stackalloc byte[2];
+        BinaryPrimitives.WriteUInt16LittleEndian(namespaceSuffix, checked((ushort)namespaceId));
+        byte[] prefix = StorageKey(root, 3, namespaceSuffix);
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
         using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
-        const int pageSize = 64;
+        const int pageSize = 256;
         while (true)
         {
             IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
             foreach (StorageEntry row in page)
             {
                 byte[] keyBytes = row.Key;
-                int offset = root.Length + 1;
-                if (keyBytes.Length - offset != 18)
+                int offset = prefix.Length;
+                if (keyBytes.Length - offset != 16)
                     throw new InvalidDataException("ChangeLedger storage key is malformed.");
-                int rowNamespace = BinaryPrimitives.ReadUInt16LittleEndian(keyBytes.AsSpan(offset));
-                if (rowNamespace != namespaceId) continue;
-                var ledgerKey = new LedgerKey(rowNamespace, BatchId.From(keyBytes.AsSpan(offset + 2, 16)));
+                var ledgerKey = new LedgerKey(namespaceId, BatchId.From(keyBytes.AsSpan(offset, 16)));
                 yield return (ledgerKey, DecodeChangeLedgerValue(row.Value));
             }
             if (page.Count < pageSize) yield break;
