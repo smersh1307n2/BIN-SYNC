@@ -348,13 +348,16 @@ public sealed partial class Node
 
     private static bool WouldChangeProviderMutation(Record record, ProviderMutation mutation)
     {
-        var timestamp = new Hlc(mutation.HlcWall, mutation.HlcLogical);
         if (mutation.IsRecordTombstone)
+        {
+            var timestamp = new Hlc(mutation.HlcWall, mutation.HlcLogical);
             return Merge.MergeLifecycle(record.LifecycleHlc, record.LifecycleAuthor,
                 record.LifecycleValue, timestamp, mutation.AuthorNodeId, Model.Dead).Changed;
+        }
 
         if (mutation.IsTombstone)
         {
+            var timestamp = new Hlc(mutation.HlcWall, mutation.HlcLogical);
             FieldState? previousTomb = null;
             if (record.HasFieldTombs &&
                 record.FieldTombs.TryGetValue(mutation.FieldId, out var existingTomb))
@@ -382,20 +385,32 @@ public sealed partial class Node
 
         if (record.HasFieldTombs &&
             record.FieldTombs.TryGetValue(mutation.FieldId, out var tomb))
-            return HlcOps.CompareHlc(timestamp, mutation.AuthorNodeId,
-                tomb.Timestamp, tomb.AuthorNodeId) > 0;
+            return CompareProviderHlc(mutation, tomb.Timestamp, tomb.AuthorNodeId) > 0;
 
         if (!record.State.TryGetValue(mutation.FieldId, out var current))
             return true;
 
-        if (current.Timestamp.Wall == timestamp.Wall &&
-            current.Timestamp.Logical == timestamp.Logical &&
+        if (current.Timestamp.Wall == mutation.HlcWall &&
+            current.Timestamp.Logical == mutation.HlcLogical &&
             current.AuthorNodeId == mutation.AuthorNodeId &&
             current.Value.AsSpan().SequenceEqual(mutation.Value))
             return false;
 
-        return HlcOps.CompareHlc(timestamp, mutation.AuthorNodeId,
-            current.Timestamp, current.AuthorNodeId) > 0;
+        return CompareProviderHlc(mutation, current.Timestamp, current.AuthorNodeId) > 0;
+    }
+
+    private static int CompareProviderHlc(
+        ProviderMutation mutation, Hlc existingTimestamp, NodeId existingAuthor)
+    {
+        if (mutation.HlcWall != existingTimestamp.Wall)
+            return mutation.HlcWall < existingTimestamp.Wall ? -1 : 1;
+        if (mutation.HlcLogical != existingTimestamp.Logical)
+            return mutation.HlcLogical < existingTimestamp.Logical ? -1 : 1;
+        if (mutation.AuthorNodeId.Lo != existingAuthor.Lo)
+            return mutation.AuthorNodeId.Lo < existingAuthor.Lo ? -1 : 1;
+        if (mutation.AuthorNodeId.Hi != existingAuthor.Hi)
+            return mutation.AuthorNodeId.Hi < existingAuthor.Hi ? -1 : 1;
+        return 0;
     }
 
     /// <summary>
