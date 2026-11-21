@@ -1630,6 +1630,7 @@ public sealed class StorageSyncCoordinator
         ulong providerHighWatermark = _provider.LocalChangeHighWatermark;
         ulong scannedThroughSequence = 0;
         ulong lastFrozenFeedSequence = 0;
+        bool sawPreviouslyFrozen = false;
         ulong cutoverNodeOutboxHigh = 0;
         int totalChanges = 0;
         bool sawStableChangeId = false;
@@ -1681,17 +1682,12 @@ public sealed class StorageSyncCoordinator
                     if (change.ChangeId.IsZero)
                         throw new InvalidDataException("Metadata-Store-owned publication requires stable provider ChangeIds.");
 
-                    // The Node cache only needs the HLC winner per record/field. Keep
-                    // the same compact winner map for both purposes until a previously
-                    // frozen ChangeId is encountered; then fork it once so the Node
-                    // cache retains the full scanned prefix while outbound coalescing
-                    // starts at the unfrozen suffix.
+                    // Share one coalesced map while the feed is entirely new or
+                    // entirely frozen. If a new suffix follows a frozen prefix, fork
+                    // only at that boundary so an all-frozen ACK retry avoids copying
+                    // the complete Node winner map just to clear the outbound map.
                     nodeWinners ??= winners;
                     sharedNodeAndOutboundWinners = ReferenceEquals(nodeWinners, winners);
-                    if (sharedNodeAndOutboundWinners)
-                        AddCoalescedPendingLocalChange(winners, change);
-                    else
-                        AddCoalescedPendingLocalChange(nodeWinners, change);
 
                     bool previouslyFrozen = false;
                     if (change.Mutation.OriginSequence != 0)
@@ -1728,18 +1724,27 @@ public sealed class StorageSyncCoordinator
 
                     if (previouslyFrozen)
                     {
-                        lastFrozenFeedSequence = change.Sequence;
-                        // Preserve all scanned winners for Node recovery, but discard
-                        // the outbound suffix because it was frozen by an earlier pass.
                         if (sharedNodeAndOutboundWinners)
-                            nodeWinners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>(winners);
-                        winners.Clear();
+                            AddCoalescedPendingLocalChange(winners, change);
+                        else
+                            AddCoalescedPendingLocalChange(nodeWinners, change);
+                        lastFrozenFeedSequence = change.Sequence;
+                        sawPreviouslyFrozen = true;
                         continue;
                     }
                     if (change.Sequence <= lastFrozenFeedSequence)
                         throw new InvalidDataException("Provider local feed is not in strictly increasing source-sequence order.");
+
+                    if (sawPreviouslyFrozen && sharedNodeAndOutboundWinners)
+                    {
+                        nodeWinners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>(winners);
+                        winners.Clear();
+                        sharedNodeAndOutboundWinners = false;
+                    }
+
                     if (!sharedNodeAndOutboundWinners)
-                        AddCoalescedPendingLocalChange(winners, change);
+                        AddCoalescedPendingLocalChange(nodeWinners, change);
+                    AddCoalescedPendingLocalChange(winners, change);
                 }
                 else
                 {
@@ -1789,6 +1794,9 @@ public sealed class StorageSyncCoordinator
 
         if (metadataStoreOwnsOutbound)
         {
+            if (sawPreviouslyFrozen && ReferenceEquals(nodeWinners, winners))
+                winners = new Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange>();
+
             if (_metadataStore is null || !sawStableChangeId || sawLegacyChangeId)
                 throw new InvalidDataException("Metadata-Store-owned publication requires non-zero stable ChangeIds for every provider feed entry.");
             var nodeChanges = ToSequenceOrderedArray(nodeWinners ?? winners);
