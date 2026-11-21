@@ -224,6 +224,9 @@ public sealed partial class Node
             HashSet<RecordId>? changedRecords = null;
             ulong previousSequence = 0;
             int applied = 0;
+            ulong maxObservedWall = 0;
+            uint maxObservedLogical = 0;
+            bool hasObservedTimestamp = false;
 
             for (int i = 0; i < changes.Count; i++)
             {
@@ -236,6 +239,14 @@ public sealed partial class Node
 
                 ProviderMutation mutation = change.Mutation;
                 ValidateProviderMutation(mutation);
+                if (!hasObservedTimestamp ||
+                    mutation.HlcWall > maxObservedWall ||
+                    (mutation.HlcWall == maxObservedWall && mutation.HlcLogical > maxObservedLogical))
+                {
+                    maxObservedWall = mutation.HlcWall;
+                    maxObservedLogical = mutation.HlcLogical;
+                    hasObservedTimestamp = true;
+                }
 
                 Record record;
                 if (working is not null && working.TryGetValue(mutation.RecordId, out var staged))
@@ -325,8 +336,11 @@ public sealed partial class Node
                     namespaceStore[recordId] = working![recordId];
             }
 
-            foreach (ProviderChange change in changes)
-                Clock.Observe(new Hlc(change.Mutation.HlcWall, change.Mutation.HlcLogical));
+            // Observe is a monotonic max operation. Folding the batch to its greatest
+            // HLC preserves the exact final clock state while avoiding one Hlc object
+            // allocation and one clock lock acquisition per provider feed row.
+            if (hasObservedTimestamp)
+                Clock.Observe(new Hlc(maxObservedWall, maxObservedLogical));
 
             return applied;
         }
