@@ -5842,4 +5842,41 @@ public sealed class StorageSyncCoordinatorTests
             scope, local.NodeId, peer.NodeId, replacementPeerEpoch, namespaceId, local.NodeId, 16).Items);
     }
 
+    [Fact]
+    public void Provider_batch_observes_only_the_maximum_HLC_and_preserves_clock_state()
+    {
+        string directory = Path.Combine(_root, "provider-batch-max-hlc");
+        using var storage = StorageDatabase.Open(directory, 595);
+        using var provider = new StorageDataProvider(storage);
+        byte[] nodeId = new byte[16];
+        nodeId[0] = 0xA7;
+        using var node = new NodeBuilder()
+            .WithNodeId(nodeId)
+            .WithEpoch(1)
+            .WithClock(static () => 1)
+            .Build();
+        var coordinator = new StorageSyncCoordinator(node, provider, 1);
+
+        for (int i = 0; i < 3; i++)
+        {
+            byte[] recordBytes = new byte[16];
+            recordBytes[15] = (byte)(i + 1);
+            provider.AppendLocalChange(new ProviderMutation
+            {
+                RecordId = RecordId.From(recordBytes),
+                FieldId = checked((ushort)(0x0901 + i)),
+                AuthorNodeId = node.NodeId,
+                OriginAuthorEpoch = 1,
+                HlcWall = i switch { 0 => 10UL, 1 => 8UL, _ => 10UL },
+                HlcLogical = i switch { 0 => 1U, 1 => 9U, _ => 2U },
+                Value = [(byte)i]
+            });
+        }
+
+        Assert.Equal(3, coordinator.PublishLocalChanges(_ => { }));
+        HlcClockSnapshot clock = node.ClockState;
+        Assert.Equal(10UL, clock.LastWall);
+        Assert.Equal(2U, clock.LastLogical);
+    }
+
 }
