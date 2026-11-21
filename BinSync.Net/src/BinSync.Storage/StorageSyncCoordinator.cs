@@ -1791,8 +1791,7 @@ public sealed class StorageSyncCoordinator
         {
             if (_metadataStore is null || !sawStableChangeId || sawLegacyChangeId)
                 throw new InvalidDataException("Metadata-Store-owned publication requires non-zero stable ChangeIds for every provider feed entry.");
-            var nodeChanges = (nodeWinners ?? winners).Values
-                .OrderBy(change => change.Sequence).ToArray();
+            var nodeChanges = ToSequenceOrderedArray(nodeWinners ?? winners);
             return PublishLocalChangesToMetadataStore(
                 winners, nodeChanges, scannedThroughSequence, totalChanges,
                 recoveredPublishedOrigins, persistNode);
@@ -1822,6 +1821,24 @@ public sealed class StorageSyncCoordinator
         return totalChanges;
     }
 
+    private static ProviderChange[] ToSequenceOrderedArray(
+        Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange> changes)
+    {
+        ProviderChange[] ordered = changes.Values.ToArray();
+        for (int i = 1; i < ordered.Length; i++)
+        {
+            if (ordered[i].Sequence < ordered[i - 1].Sequence)
+            {
+                // Dictionary enumeration commonly preserves append order, but that is
+                // not a correctness contract. Keep the fast path allocation-light and
+                // sort only when coalescing moved a later sequence ahead of an earlier one.
+                Array.Sort(ordered, static (left, right) => left.Sequence.CompareTo(right.Sequence));
+                break;
+            }
+        }
+        return ordered;
+    }
+
     private int PublishLocalChangesToMetadataStore(
         Dictionary<(RecordId RecordId, ushort FieldId, bool IsRecordTombstone), ProviderChange> winners,
         IReadOnlyList<ProviderChange> nodeChanges,
@@ -1848,7 +1865,7 @@ public sealed class StorageSyncCoordinator
         if (metadataHigh < cutoverNodeOutboxHigh)
             throw new InvalidDataException("Metadata Store outbound watermark regressed below the cutover fence.");
 
-        ProviderChange[] orderedWinners = winners.Values.OrderBy(change => change.Sequence).ToArray();
+        ProviderChange[] orderedWinners = ToSequenceOrderedArray(winners);
         var frozenOperations = new List<MetadataFrozenOperation>(orderedWinners.Length);
         foreach (var change in orderedWinners)
         {
