@@ -54,7 +54,6 @@ else if (args.Contains("--metadata-million-only", StringComparer.Ordinal))
     var millionConfig = DefaultConfig.Instance
         .AddDiagnoser(MemoryDiagnoser.Default)
         .AddJob(Job.Default
-            .WithToolchain(InProcessEmitToolchain.Instance)
             .WithWarmupCount(1)
             .WithIterationCount(3)
             .WithId("MillionRowShort"));
