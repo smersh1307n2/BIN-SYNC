@@ -11,8 +11,10 @@ on:
       - 'BinSync.Net/bench/BinSync.Bench/Program.cs'
       - 'BinSync.Net/bench/BinSync.Bench/MetadataPeerLifecycleBench.cs'
       - 'BinSync.Net/bench/BinSync.Bench/MetadataChangeIdGcBench.cs'
-      - 'BinSync.Net/bench/BinSync.Bench/MetadataStoreCardinalityBench.cs'
-      - 'BinSync.Net/bench/BinSync.Bench/CoordinatorRetryScanBench.cs'
+      - 'BinSync.Net/src/BinSync.Storage/**'
+      - 'BinSync.Net/src/BinSync.Core/**'
+      - 'external/Fld1.Storage'
+      - 'BinSync.Net/bench/BinSync.Bench/MetadataCoordinatorRetryScanBench.cs'
   workflow_dispatch:
 
 permissions:
