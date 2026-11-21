@@ -1,14 +1,18 @@
 name: Durable Metadata Bench
 
 on:
-  # Run automatically only when this benchmark workflow itself changes on the
-  # working branch; keep the expensive multi-suite benchmark opt-in otherwise.
+  # Run automatically when the benchmark workflow or any metadata benchmark
+  # fixture changes on the working branch; keep the expensive suite opt-in otherwise.
   push:
     branches:
       - feature/fld-external-storage
     paths:
       - '.github/workflows/metadata-bench.yml'
       - 'BinSync.Net/bench/BinSync.Bench/Program.cs'
+      - 'BinSync.Net/bench/BinSync.Bench/MetadataPeerLifecycleBench.cs'
+      - 'BinSync.Net/bench/BinSync.Bench/MetadataChangeIdGcBench.cs'
+      - 'BinSync.Net/bench/BinSync.Bench/MetadataStoreCardinalityBench.cs'
+      - 'BinSync.Net/bench/BinSync.Bench/CoordinatorRetryScanBench.cs'
   workflow_dispatch:
 
 permissions:
