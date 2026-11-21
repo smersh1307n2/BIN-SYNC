@@ -702,7 +702,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             {
                 foreach (var pair in EnumerateChangeLedger(partitionKey, current, acceptedRoster.NamespaceId))
                 {
-                    OperationOrigin origin = pair.Value.Provenance;
+                    OperationOrigin origin = pair.Provenance;
                     if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
                         continue;
                     AddOriginSequence(sequences, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence);
@@ -1029,14 +1029,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             candidates = new List<ChangeIdGcCandidate>(limit);
             foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
             {
-                ChangeLedgerValue ledgerValue = pair.Value;
-                OperationOrigin origin = ledgerValue.Provenance;
+                OperationOrigin origin = pair.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
                     pendingApplyLiveIds.MightContain(pair.Key.ChangeId) ||
                     streamLiveIds.MightContain(pair.Key.ChangeId) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
                     continue;
-                candidates.Add(new ChangeIdGcCandidate(pair.Key, ledgerValue, null));
+                candidates.Add(new ChangeIdGcCandidate(pair.Key, origin, null));
                 if (candidates.Count == limit)
                     break;
             }
@@ -1089,11 +1088,11 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             {
                 ChangeIdGcCandidate candidate = candidates[i];
                 LedgerKey key = candidate.Key;
-                ChangeLedgerValue snapshotValue = candidate.Value;
+                OperationOrigin snapshotOrigin = candidate.Provenance;
                 if (hostReferenced.Contains(key.ChangeId) ||
                     pendingApplyLiveIds.MightContain(key.ChangeId) ||
                     streamLiveIds.MightContain(key.ChangeId) ||
-                    !IsOriginCoveredBySafeFrontier(safeOriginFrontier, snapshotValue.Provenance))
+                    !IsOriginCoveredBySafeFrontier(safeOriginFrontier, snapshotOrigin))
                     continue;
 
                 candidates[approvedCount++] = candidate with
@@ -3098,9 +3097,10 @@ private bool ValidateIncomingBatchForStaging(
             {
                 foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
                 {
-                    if (pair.Value.AuthorNodeId == localAuthor &&
-                        epochsMissingAllocator.Contains(pair.Value.OriginAuthorEpoch))
-                        epochsWithLedger.Add(pair.Value.OriginAuthorEpoch);
+                    OperationOrigin provenance = pair.Provenance;
+                    if (provenance.AuthorNodeId == localAuthor &&
+                        epochsMissingAllocator.Contains(provenance.AuthorEpoch))
+                        epochsWithLedger.Add(provenance.AuthorEpoch);
                 }
             }
 
@@ -6385,6 +6385,25 @@ private bool ValidateIncomingBatchForStaging(
                 : 0);
     }
 
+    private static OperationOrigin DecodeChangeLedgerProvenance(ReadOnlySpan<byte> value)
+    {
+        if (value.Length is not (45 or 53 or 61 or 69) || value[44] > 1)
+            throw new InvalidDataException("Stored v3 ChangeId ledger value has an invalid length or origin flag.");
+        if (value.Length is 61 or 69)
+        {
+            bool hasLegacyFingerprint = false;
+            for (int i = 45; i < 61; i++)
+                hasLegacyFingerprint |= value[i] != 0;
+            if (!hasLegacyFingerprint)
+                throw new InvalidDataException("Stored legacy Node ChangeId fingerprint cannot be zero.");
+        }
+
+        return new OperationOrigin(
+            NodeId.From(value.Slice(16, 16)),
+            BinaryPrimitives.ReadUInt32LittleEndian(value.Slice(32)),
+            BinaryPrimitives.ReadUInt64LittleEndian(value.Slice(36)));
+    }
+
     private static ChangeLedgerValue DecodeChangeLedgerValue(ReadOnlySpan<byte> value)
     {
         if (value.Length is not (45 or 53 or 61 or 69) || value[44] > 1)
@@ -6485,7 +6504,7 @@ private bool ValidateIncomingBatchForStaging(
         return true;
     }
 
-    private IEnumerable<(LedgerKey Key, ChangeLedgerValue Value)> EnumerateChangeLedger(
+    private IEnumerable<(LedgerKey Key, OperationOrigin Provenance)> EnumerateChangeLedger(
         PartitionKey partitionKey, PartitionState state, int namespaceId)
     {
         byte[] root = PartitionRoot(partitionKey);
@@ -6505,7 +6524,7 @@ private bool ValidateIncomingBatchForStaging(
                 if (keyBytes.Length - offset != 16)
                     throw new InvalidDataException("ChangeLedger storage key is malformed.");
                 var ledgerKey = new LedgerKey(namespaceId, BatchId.From(keyBytes.AsSpan(offset, 16)));
-                yield return (ledgerKey, DecodeChangeLedgerValue(row.Value));
+                yield return (ledgerKey, DecodeChangeLedgerProvenance(row.Value));
             }
             if (page.Count < pageSize) yield break;
         }
@@ -7627,11 +7646,10 @@ private bool ValidateIncomingBatchForStaging(
     private readonly record struct ReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId, NodeId AuthorStream);
     private readonly record struct LegacyReceiveChainKey(NodeId Sender, uint Epoch, int NamespaceId);
     private readonly record struct LedgerKey(int NamespaceId, BatchId ChangeId);
-    // The immutable ledger value is already retained by ChangeLedger. Keep its
-    // identity as the revalidation snapshot instead of copying the full provenance
-    // value into every candidate; any ledger update replaces this record instance.
+    // GC only needs immutable Origin for post-Host revalidation. Keep this value
+    // lightweight instead of materializing and retaining each ledger fingerprint.
     private readonly record struct ChangeIdGcCandidate(
-        LedgerKey Key, ChangeLedgerValue Value, byte[]? StorageKey);
+        LedgerKey Key, OperationOrigin Provenance, byte[]? StorageKey);
 
     private sealed class ChangeIdTupleStorageKeyView : IReadOnlyList<byte[]>
     {
