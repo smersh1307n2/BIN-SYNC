@@ -512,7 +512,9 @@ public class StorageDataProvider : IDataProvider, IProviderPublicationMode, IPro
             ulong start = Math.Max(afterSequence, acked);
             using StorageSnapshot.PrefixCursor cursor =
                 snapshot.OpenPrefixCursor([LocalChange], ChangeKey(start));
-            var changes = new List<ProviderChange>(Math.Min(limit, 64));
+            ulong remaining = high > start ? high - start : 0;
+            int initialCapacity = (int)Math.Min((ulong)Math.Min(limit, 4096), remaining);
+            var changes = new List<ProviderChange>(initialCapacity);
             cursor.VisitPage(limit, VisitChange);
 
             ulong scanned = changes.Count == limit ? changes[^1].Sequence : high;
