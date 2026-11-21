@@ -331,10 +331,10 @@ public class MetadataStoreMillionRowBench
     [IterationCleanup]
     public void Cleanup() => _store.Dispose();
 
-    [Benchmark(OperationsPerInvoke = 1024, Description = "Freeze 1,024 local operations / 1,000,000 existing ChangeId rows")]
+    [Benchmark(OperationsPerInvoke = 64, Description = "Freeze 64 local operations / 1,000,000 existing ChangeId rows")]
     public int FreezeOperationsAtMillionRows()
     {
-        const int operationsPerInvocation = 1024;
+        const int operationsPerInvocation = 64;
         for (int i = 0; i < operationsPerInvocation; i++)
         {
             byte[] identity = IdBytes(Interlocked.Increment(ref _nextId));
