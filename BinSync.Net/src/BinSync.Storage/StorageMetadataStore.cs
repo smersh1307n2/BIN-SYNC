@@ -919,7 +919,7 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
             {
                 // namespace already filtered by enumerator
-                OperationOrigin origin = pair.Value.Provenance;
+                OperationOrigin origin = pair.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
                     continue;
                 if (!IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
