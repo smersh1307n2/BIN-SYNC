@@ -6508,7 +6508,7 @@ private bool ValidateIncomingBatchForStaging(
         byte[] prefix = StorageKey(root, 3, namespaceSuffix);
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
         using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
-        const int pageSize = 256;
+        const int pageSize = 1024;
         bool stopped = false;
         while (true)
         {
