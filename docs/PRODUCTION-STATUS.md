@@ -1,4 +1,39 @@
-# Production status — BinSync.Net vs BIN-SYNC CORE
+# Current readiness checkpoint — 2026-11-22
+
+## Executive status
+
+**BIN-SYNC v3.1 protocol/control-plane implementation: complete for the defined wire scope and exact-head CI-validated. Full product production release: not yet ready.** Keep those two claims separate.
+
+Validated code HEAD: `1ef023277240114711e5a7308fab102dd5235503`.
+- [BinSync.Net exact-head CI](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/45008583473): Linux/Windows .NET 10, signed v3.1 vectors, Fuzz/Lab and FLD cross-repository Host adapter passed.
+- [Executable Host lifecycle](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/45008583452): Ubuntu 7/7 and Windows 7/7, including OIDC configuration fail-closed, real two-Host TCP exchange, live-peer GC lease resume, staged GC activation, durable emergency stop/restart and offline-backup brake.
+- [ChangeId Stage 1 canary](https://github.com/smersh1307n2/BIN-SYNC/actions/runs/45008583508): Linux and Windows passed. Stage 2–4 canary evidence is recorded in Roadmap v3 §1.184.
+
+## Implemented v3.1 scope
+
+NRS2 signed namespace roster, OFR2 member applied-origin frontier, RCP2 authority retention checkpoint, FRA2 installed FULL_REPLACE acknowledgement, explicit capability negotiation, durable control-plane state, FULL_REPLACE lifecycle, Host/FLD reference-scan lease, bounded Receipt/ChangeId/Tombstone GC and proof-gated physical reclamation. v3.0-only peers cannot contribute a GC frontier. Ghost GC remains excluded.
+
+The executable reference Host now has two isolated operator modes:
+- Default OIDC operator mode validates JWTs through an HTTPS OIDC authority, audience and token lifetime, then requires the `sub` to be on an explicit allowlist. It requires HTTPS listener URLs and does not register test `/admin/*` endpoints. Fresh-store GC bootstrap requires explicit `BINSYNC_GC_ENABLE_ON_FRESH_STORE=true`.
+- Explicit Test mode is for integration tests only, binds HTTP to loopback, uses a separate test token and registers test-only injection/peer/shutdown routes.
+
+The library/composition feature defaults remain fail-closed. Test-mode reference Host enables the three GC domains through durable ChangeId → Receipt → Tombstone policy generations. Existing policy is never overwritten on restart.
+
+## Remaining product release gates
+
+1. **Peer transport security and trust provisioning.** OIDC secures the HTTP operator API only. The reference TCP peer adapter still needs deployment-provided authenticated/encrypted transport and pinned namespace TrustStore provisioning before it may face untrusted networks.
+2. **Independent backup anti-rollback authority.** The Metadata policy/audit store alone cannot detect a complete offline restore to an older generation. Keep GC stopped after restore until an independently retained operator record is checked and a new authorized all-off generation is committed; a cryptographic/remote monotonic anchor is not yet implemented.
+3. **Windows hardware power-loss qualification.** Process crash/restart and write-through rename tests are not evidence of actual power-loss durability on target hardware.
+4. **Representative production retention/scale evidence.** Existing 1k/10k/50k/250k GC measurements are correctness/engineering measurements, not a representative long-history capacity and peak-RSS qualification for target deployments.
+5. **Storage productization.** The Storage/Run path still needs bounded-memory disk-paged/index/cache qualification and a final single-source-of-truth/Option B cutover. The existing full-memory dictionary/whole-Run materialization observations in the historical checkpoint below remain to be reconciled with the target deployment profile.
+6. **Release packaging and contract finalization.** Promote the Host adapter from sample composition to a stable production library/package, finalize the normative v3.0/v3.1 release documents (the core specification header remains DRAFT), publish deployment guidance and create a tagged release only after the above gates are closed.
+
+Therefore: **v3.1 protocol implementation is ready; BIN-SYNC as a complete production product is not yet release-ready.** Do not merge PR #16 or expose the reference TCP peer listener publicly on the strength of protocol CI alone.
+
+---
+
+# Historical production status checkpoint — 2026-11-16 (retained for traceability; superseded by the current checkpoint above)
+
 
 # Current stabilization and production-readiness checkpoint — 2026-11-16
 
