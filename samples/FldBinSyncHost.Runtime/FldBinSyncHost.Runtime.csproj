@@ -8,7 +8,7 @@
     <Deterministic>true</Deterministic>
     <RootNamespace>BinSync.FldHost.Runtime</RootNamespace>
     <AssemblyName>FldBinSyncHost.Runtime</AssemblyName>
-    <Description>Production-shaped integration-test Host for the BIN-SYNC/FLD lifecycle; not a production service.</Description>
+    <Description>Executable BIN-SYNC/FLD reference Host with isolated test mode and OIDC-authenticated operator mode.</Description>
   </PropertyGroup>
   <PropertyGroup>
     <Fld1RepositoryRoot Condition="'$(Fld1RepositoryRoot)' == ''">$(MSBuildThisFileDirectory)../../../FLD-DB</Fld1RepositoryRoot>
@@ -16,6 +16,7 @@
     <Fld1StorageProject Condition="'$(Fld1StorageProject)' == ''">$(Fld1RepositoryRoot)/src/Fld1.Storage/Fld1.Storage.csproj</Fld1StorageProject>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <ProjectReference Include="../FldBinSyncHost/FldBinSyncHost.csproj" />
   </ItemGroup>
 </Project>
