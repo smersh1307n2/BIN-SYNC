@@ -1,6 +1,8 @@
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using BinSync;
 using BinSync.FldHost;
 using BinSync.Storage;
@@ -30,10 +32,54 @@ string scopeId = args[4];
 Guid metadataScopeId = Guid.Parse(args[5]);
 ushort namespaceId = ushort.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture);
 Guid providerClientId = Guid.Parse(args[7]);
-string operatorToken = Environment.GetEnvironmentVariable("BINSYNC_TEST_HOST_OPERATOR_TOKEN")
-    ?? throw new InvalidOperationException("BINSYNC_TEST_HOST_OPERATOR_TOKEN is required.");
-if (Encoding.UTF8.GetByteCount(operatorToken) < 32)
-    throw new InvalidOperationException("The test operator token must contain at least 32 UTF-8 bytes.");
+const string HostBootstrapActorId = "system:host-bootstrap";
+string hostMode = Environment.GetEnvironmentVariable("BINSYNC_HOST_MODE") ?? "Production";
+bool testMode = string.Equals(hostMode, "Test", StringComparison.Ordinal);
+if (!testMode && !string.Equals(hostMode, "Production", StringComparison.Ordinal))
+    throw new InvalidOperationException("BINSYNC_HOST_MODE must be either Production or Test.");
+
+string? operatorToken = null;
+HashSet<string> allowedOperatorSubjects = new(StringComparer.Ordinal);
+bool enableGcOnFreshStore = false;
+string[] hostUrls;
+if (testMode)
+{
+    operatorToken = Environment.GetEnvironmentVariable("BINSYNC_TEST_HOST_OPERATOR_TOKEN")
+        ?? throw new InvalidOperationException("BINSYNC_TEST_HOST_OPERATOR_TOKEN is required in Test mode.");
+    if (Encoding.UTF8.GetByteCount(operatorToken) < 32)
+        throw new InvalidOperationException("The test operator token must contain at least 32 UTF-8 bytes.");
+    hostUrls = new[] { "http://127.0.0.1:0" };
+    enableGcOnFreshStore = true;
+    if (backupRestoreBrake is false && args.Length == 9)
+        throw new ArgumentException("The backup-restore brake is available only in Test mode.", nameof(args));
+}
+else
+{
+    string authority = Environment.GetEnvironmentVariable("BINSYNC_OPERATOR_AUTHORITY")
+        ?? throw new InvalidOperationException("BINSYNC_OPERATOR_AUTHORITY is required in Production mode.");
+    if (!Uri.TryCreate(authority, UriKind.Absolute, out Uri? authorityUri) ||
+        authorityUri.Scheme != Uri.UriSchemeHttps)
+        throw new InvalidOperationException("BINSYNC_OPERATOR_AUTHORITY must be an absolute HTTPS issuer URL.");
+    string audience = Environment.GetEnvironmentVariable("BINSYNC_OPERATOR_AUDIENCE")
+        ?? throw new InvalidOperationException("BINSYNC_OPERATOR_AUDIENCE is required in Production mode.");
+    string subjects = Environment.GetEnvironmentVariable("BINSYNC_OPERATOR_SUBJECTS")
+        ?? throw new InvalidOperationException("BINSYNC_OPERATOR_SUBJECTS must allow-list operator subject IDs.");
+    foreach (string subject in subjects.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        allowedOperatorSubjects.Add(subject);
+    if (allowedOperatorSubjects.Count == 0 || allowedOperatorSubjects.Contains(HostBootstrapActorId))
+        throw new InvalidOperationException("At least one real operator subject is required; the internal bootstrap actor is reserved.");
+    string urls = Environment.GetEnvironmentVariable("BINSYNC_HOST_URLS")
+        ?? throw new InvalidOperationException("BINSYNC_HOST_URLS must configure one or more HTTPS endpoints.");
+    hostUrls = urls.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+    if (hostUrls.Length == 0 || hostUrls.Any(value =>
+        !Uri.TryCreate(value, UriKind.Absolute, out Uri? endpoint) || endpoint.Scheme != Uri.UriSchemeHttps))
+        throw new InvalidOperationException("Every BINSYNC_HOST_URLS endpoint must use HTTPS.");
+    enableGcOnFreshStore = string.Equals(
+        Environment.GetEnvironmentVariable("BINSYNC_GC_ENABLE_ON_FRESH_STORE"), "true",
+        StringComparison.OrdinalIgnoreCase);
+    if (backupRestoreBrake)
+        throw new ArgumentException("The test-only backup-restore switch is unavailable in Production mode.", nameof(args));
+}
 
 Directory.CreateDirectory(metadataRoot);
 using var metadataStorage = StorageDatabase.Open(metadataRoot, metadataPartition);
@@ -153,7 +199,7 @@ try
         provider,
         remoteApply,
         current => StorageNodePersistence.Save(metadataStorage, current),
-        new TestOnlyOperatorAuthorizer(),
+        testMode ? new TestOnlyOperatorAuthorizer() : new ConfiguredOperatorAuthorizer(allowedOperatorSubjects),
         // This executable is the disposable integration Host used to exercise
         // the enabled runtime. The library/composition defaults remain fail-closed.
         new StorageNamespaceGcFeatureOptions(
@@ -181,11 +227,11 @@ try
         // particular, a previously committed emergency stop must survive restart.
         FldBinSyncGcOperatorDiagnosticsSnapshot startupGc =
             await composition.Operator.GetDiagnosticsAsync(cancellationToken: cancellationToken);
-        if (startupGc.Policy is null)
+        if (startupGc.Policy is null && enableGcOnFreshStore)
         {
             await composition.Operator.UpdatePolicyAsync(
                 expectedGeneration: 0,
-                TestOnlyOperatorAuthorizer.ActorId,
+                HostBootstrapActorId,
                 reason: "fresh Host bootstrap: enable ChangeId GC first",
                 maintenanceStarted: true,
                 receiptEnabled: false,
@@ -221,16 +267,28 @@ try
 
     WebApplicationBuilder builder = WebApplication.CreateBuilder();
     builder.Logging.ClearProviders();
-    builder.WebHost.UseUrls("http://127.0.0.1:0");
+    builder.WebHost.UseUrls(hostUrls);
+    if (!testMode)
+    {
+        string authority = Environment.GetEnvironmentVariable("BINSYNC_OPERATOR_AUTHORITY")!;
+        string audience = Environment.GetEnvironmentVariable("BINSYNC_OPERATOR_AUDIENCE")!;
+        builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddJwtBearer(options =>
+            {
+                options.Authority = authority;
+                options.Audience = audience;
+                options.RequireHttpsMetadata = true;
+                options.MapInboundClaims = false;
+            });
+    }
     app = builder.Build();
 
-    byte[] expectedToken = Encoding.UTF8.GetBytes(operatorToken);
+    byte[]? expectedToken = operatorToken is null ? null : Encoding.UTF8.GetBytes(operatorToken);
     app.Use(async (context, next) =>
     {
-        bool protectedPath =
-            context.Request.Path.StartsWithSegments("/operator") ||
-            context.Request.Path.StartsWithSegments("/admin");
-        if (protectedPath)
+        bool operatorPath = context.Request.Path.StartsWithSegments("/operator");
+        bool adminPath = context.Request.Path.StartsWithSegments("/admin");
+        if (testMode && (operatorPath || adminPath))
         {
             string header = context.Request.Headers.Authorization.ToString();
             const string prefix = "Bearer ";
@@ -241,13 +299,40 @@ try
             }
 
             byte[] supplied = Encoding.UTF8.GetBytes(header[prefix.Length..]);
-            if (!CryptographicOperations.FixedTimeEquals(supplied, expectedToken))
+            if (!CryptographicOperations.FixedTimeEquals(supplied, expectedToken!))
             {
                 context.Response.StatusCode = StatusCodes.Status401Unauthorized;
                 return;
             }
 
             context.Items["operator-actor"] = TestOnlyOperatorAuthorizer.ActorId;
+        }
+        else if (!testMode && adminPath)
+        {
+            // Test injection, peer-connect and process-shutdown routes are not part
+            // of the production operator surface.
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        else if (!testMode && operatorPath)
+        {
+            AuthenticateResult authentication = await context.AuthenticateAsync(
+                JwtBearerDefaults.AuthenticationScheme);
+            if (!authentication.Succeeded || authentication.Principal is null)
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                return;
+            }
+
+            string? actorId = authentication.Principal.FindFirst("sub")?.Value;
+            if (string.IsNullOrWhiteSpace(actorId) || !allowedOperatorSubjects.Contains(actorId))
+            {
+                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+
+            context.User = authentication.Principal;
+            context.Items["operator-actor"] = actorId;
         }
 
         await next(context);
@@ -293,6 +378,8 @@ try
         lastPeerError = peerRuntime.LastError
     }));
 
+    if (testMode)
+    {
     // Test-only ACK visibility. ReadOutboundAuthors is a set of author feed
     // identities, not a pending-delivery count: it intentionally remains populated
     // after ACK. Inspect each interested peer's durable in-flight reservation instead.
@@ -477,6 +564,8 @@ try
         }
     });
 
+    }
+
     app.MapGet("/operator/gc", async (CancellationToken cancellationToken) =>
     {
         FldBinSyncGcOperatorDiagnosticsSnapshot snapshot =
@@ -486,13 +575,14 @@ try
 
     app.MapPost("/operator/gc/policy", async (
         PolicyUpdateRequest request,
+        HttpContext httpContext,
         CancellationToken cancellationToken) =>
     {
         try
         {
             FldBinSyncGcOperatorPolicy policy = await composition.Operator.UpdatePolicyAsync(
                 request.ExpectedGeneration,
-                TestOnlyOperatorAuthorizer.ActorId,
+                (string)httpContext.Items["operator-actor"]!,
                 request.Reason,
                 request.MaintenanceStarted,
                 request.ReceiptEnabled,
@@ -523,6 +613,7 @@ try
 
     app.MapPost("/operator/gc/emergency-stop", async (
         EmergencyStopRequest request,
+        HttpContext httpContext,
         CancellationToken cancellationToken) =>
     {
         composition.Operator.EmergencyStop();
@@ -530,7 +621,7 @@ try
         {
             FldBinSyncGcOperatorPolicy policy =
                 await composition.Operator.EmergencyStopDurablyAsync(
-                    TestOnlyOperatorAuthorizer.ActorId,
+                    (string)httpContext.Items["operator-actor"]!,
                     request.Reason,
                     cancellationToken);
             await scheduler.StopAsync();
@@ -545,6 +636,8 @@ try
         }
     });
 
+    if (testMode)
+    {
     app.MapPost("/admin/shutdown", async (ShutdownRequest request, CancellationToken cancellationToken) =>
     {
         try
@@ -597,6 +690,8 @@ try
         return Results.Ok(new { status = "stopping", durableAllOffPolicyVerified = true });
     });
 
+    }
+
     await app.StartAsync();
     string address = app.Services.GetRequiredService<IServer>()
         .Features.Get<IServerAddressesFeature>()?.Addresses.Single()
@@ -621,8 +716,8 @@ finally
             try
             {
                 _ = await composition.Operator.EmergencyStopDurablyAsync(
-                    TestOnlyOperatorAuthorizer.ActorId,
-                    "test Host process shutdown");
+                    HostBootstrapActorId,
+                    "Host process shutdown");
             }
             catch
             {
