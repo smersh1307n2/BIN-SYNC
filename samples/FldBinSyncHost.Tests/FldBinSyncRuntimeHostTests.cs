@@ -17,7 +17,7 @@ namespace BinSync.FldHost.Tests;
 public sealed class FldBinSyncRuntimeHostTests
 {
     [Fact]
-    public async Task Production_operator_mode_fails_closed_without_oidc_configuration()
+    public async Task Oidc_operator_mode_fails_closed_without_oidc_configuration()
     {
         string runtime = Path.Combine(AppContext.BaseDirectory, "host-runtime", "FldBinSyncHost.Runtime.dll");
         Assert.True(File.Exists(runtime), "The executable integration Host must be copied to the test output.");
@@ -28,7 +28,7 @@ public sealed class FldBinSyncRuntimeHostTests
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
-        start.Environment["BINSYNC_HOST_MODE"] = "Production";
+        start.Environment["BINSYNC_HOST_MODE"] = "Oidc";
         start.ArgumentList.Add(runtime);
         foreach (string argument in new[]
         {
