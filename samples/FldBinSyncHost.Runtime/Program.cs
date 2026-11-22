@@ -33,10 +33,10 @@ Guid metadataScopeId = Guid.Parse(args[5]);
 ushort namespaceId = ushort.Parse(args[6], System.Globalization.CultureInfo.InvariantCulture);
 Guid providerClientId = Guid.Parse(args[7]);
 const string HostBootstrapActorId = "system:host-bootstrap";
-string hostMode = Environment.GetEnvironmentVariable("BINSYNC_HOST_MODE") ?? "Production";
+string hostMode = Environment.GetEnvironmentVariable("BINSYNC_HOST_MODE") ?? "Oidc";
 bool testMode = string.Equals(hostMode, "Test", StringComparison.Ordinal);
-if (!testMode && !string.Equals(hostMode, "Production", StringComparison.Ordinal))
-    throw new InvalidOperationException("BINSYNC_HOST_MODE must be either Production or Test.");
+if (!testMode && !string.Equals(hostMode, "Oidc", StringComparison.Ordinal))
+    throw new InvalidOperationException("BINSYNC_HOST_MODE must be either Oidc or Test.");
 
 string? operatorToken = null;
 HashSet<string> allowedOperatorSubjects = new(StringComparer.Ordinal);
@@ -56,12 +56,12 @@ if (testMode)
 else
 {
     string authority = Environment.GetEnvironmentVariable("BINSYNC_OPERATOR_AUTHORITY")
-        ?? throw new InvalidOperationException("BINSYNC_OPERATOR_AUTHORITY is required in Production mode.");
+        ?? throw new InvalidOperationException("BINSYNC_OPERATOR_AUTHORITY is required in Oidc mode.");
     if (!Uri.TryCreate(authority, UriKind.Absolute, out Uri? authorityUri) ||
         authorityUri.Scheme != Uri.UriSchemeHttps)
         throw new InvalidOperationException("BINSYNC_OPERATOR_AUTHORITY must be an absolute HTTPS issuer URL.");
     string audience = Environment.GetEnvironmentVariable("BINSYNC_OPERATOR_AUDIENCE")
-        ?? throw new InvalidOperationException("BINSYNC_OPERATOR_AUDIENCE is required in Production mode.");
+        ?? throw new InvalidOperationException("BINSYNC_OPERATOR_AUDIENCE is required in OIDC operator mode.");
     string subjects = Environment.GetEnvironmentVariable("BINSYNC_OPERATOR_SUBJECTS")
         ?? throw new InvalidOperationException("BINSYNC_OPERATOR_SUBJECTS must allow-list operator subject IDs.");
     foreach (string subject in subjects.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
@@ -78,7 +78,7 @@ else
         Environment.GetEnvironmentVariable("BINSYNC_GC_ENABLE_ON_FRESH_STORE"), "true",
         StringComparison.OrdinalIgnoreCase);
     if (backupRestoreBrake)
-        throw new ArgumentException("The test-only backup-restore switch is unavailable in Production mode.", nameof(args));
+        throw new ArgumentException("The test-only backup-restore switch is unavailable in OIDC operator mode.", nameof(args));
 }
 
 Directory.CreateDirectory(metadataRoot);
@@ -102,13 +102,15 @@ FldDatabaseIpcAsyncRemoteBatchApplyStore? remoteApply = null;
 FldBinSyncAsyncHostComposition? composition = null;
 TestPeerRuntime? peerRuntime = null;
 int maintenanceIntervalMs = int.TryParse(
-    Environment.GetEnvironmentVariable("BINSYNC_TEST_HOST_MAINTENANCE_INTERVAL_MS"),
+    Environment.GetEnvironmentVariable(testMode
+        ? "BINSYNC_TEST_HOST_MAINTENANCE_INTERVAL_MS"
+        : "BINSYNC_HOST_MAINTENANCE_INTERVAL_MS"),
     System.Globalization.NumberStyles.None,
     System.Globalization.CultureInfo.InvariantCulture,
     out int configuredMaintenanceIntervalMs)
         ? configuredMaintenanceIntervalMs : 1000;
 if (maintenanceIntervalMs is < 100 or > 60000)
-    throw new InvalidOperationException("Test Host maintenance interval must be between 100 and 60000 ms.");
+    throw new InvalidOperationException("Host maintenance interval must be between 100 and 60000 ms.");
 long gcMaintenanceSlices = 0;
 long gcReceiptsReclaimed = 0;
 long gcChangeIdsReclaimed = 0;
