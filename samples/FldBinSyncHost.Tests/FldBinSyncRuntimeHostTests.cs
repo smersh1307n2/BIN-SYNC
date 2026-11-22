@@ -726,8 +726,9 @@ public sealed class FldBinSyncRuntimeHostTests
             databaseHost = StartDatabaseHost(fldRoot);
             await WaitForDatabaseHost(fldRoot, databaseHost, TimeSpan.FromSeconds(45));
 
-            // Create a durable all-off policy (generation 1), then persist the
-            // emergency stop (generation 2) before making a closed offline backup.
+            // Fresh Host bootstrap durably enables GC through generations 1–3. Commit
+            // an all-off policy (generation 4), then the emergency stop (generation 5)
+            // before making a closed offline backup.
             runtimeHost = StartRuntimeHost(metadataRoot, fldRoot);
             Uri address = (await WaitForRuntimeHost(runtimeHost, TimeSpan.FromSeconds(45))).Address;
             using (var client = CreateClient(address, OperatorToken))
@@ -736,7 +737,7 @@ public sealed class FldBinSyncRuntimeHostTests
                     "/operator/gc/policy",
                     new
                     {
-                        expectedGeneration = 0,
+                        expectedGeneration = 3,
                         reason = "prepare all-off offline backup",
                         maintenanceStarted = false,
                         receiptEnabled = false,
@@ -763,7 +764,7 @@ public sealed class FldBinSyncRuntimeHostTests
             CopyDirectory(metadataRoot, backupRoot);
             // This record is deliberately outside the database backup. It models
             // the operator's independently retained evidence for restore review.
-            await File.WriteAllTextAsync(externalOperatorRecord, "generation=2\nauditSequence=2\nallDomainsOff=true\n");
+            await File.WriteAllTextAsync(externalOperatorRecord, "generation=5\nauditSequence=5\nallDomainsOff=true\n");
 
             // Advance the live database after the backup so restoring the backup
             // demonstrably moves policy generation/audit history backwards.
@@ -775,7 +776,7 @@ public sealed class FldBinSyncRuntimeHostTests
                     "/operator/gc/policy",
                     new
                     {
-                        expectedGeneration = 2,
+                        expectedGeneration = 5,
                         reason = "advance policy after offline backup",
                         maintenanceStarted = false,
                         receiptEnabled = false,
@@ -784,7 +785,7 @@ public sealed class FldBinSyncRuntimeHostTests
                     });
                 Assert.Equal(HttpStatusCode.OK, advance.StatusCode);
                 using JsonDocument advanced = JsonDocument.Parse(await advance.Content.ReadAsStringAsync());
-                Assert.Equal(3UL, advanced.RootElement.GetProperty("generation").GetUInt64());
+                Assert.Equal(6UL, advanced.RootElement.GetProperty("generation").GetUInt64());
 
                 using HttpResponseMessage clean = await client.PostAsJsonAsync(
                     "/admin/shutdown-clean",
@@ -807,14 +808,14 @@ public sealed class FldBinSyncRuntimeHostTests
             using (var client = CreateClient(address, OperatorToken))
             {
                 string[] operatorRecord = await File.ReadAllLinesAsync(externalOperatorRecord);
-                Assert.Contains("generation=2", operatorRecord);
-                Assert.Contains("auditSequence=2", operatorRecord);
+                Assert.Contains("generation=5", operatorRecord);
+                Assert.Contains("auditSequence=5", operatorRecord);
                 Assert.Contains("allDomainsOff=true", operatorRecord);
 
                 using JsonDocument restored = JsonDocument.Parse(await client.GetStringAsync("/operator/gc"));
                 JsonElement oldPolicy = restored.RootElement.GetProperty("policy");
-                Assert.Equal(2UL, oldPolicy.GetProperty("generation").GetUInt64());
-                Assert.Equal(2UL, oldPolicy.GetProperty("auditSequence").GetUInt64());
+                Assert.Equal(5UL, oldPolicy.GetProperty("generation").GetUInt64());
+                Assert.Equal(5UL, oldPolicy.GetProperty("auditSequence").GetUInt64());
                 Assert.False(oldPolicy.GetProperty("maintenanceStarted").GetBoolean());
                 Assert.False(oldPolicy.GetProperty("receiptEnabled").GetBoolean());
                 Assert.False(oldPolicy.GetProperty("changeIdEnabled").GetBoolean());
@@ -828,7 +829,7 @@ public sealed class FldBinSyncRuntimeHostTests
                     "/operator/gc/policy",
                     new
                     {
-                        expectedGeneration = 2,
+                        expectedGeneration = 5,
                         reason = "external operational record verified restored backup; reaffirm all-off before re-enable",
                         maintenanceStarted = false,
                         receiptEnabled = false,
@@ -837,7 +838,7 @@ public sealed class FldBinSyncRuntimeHostTests
                     });
                 Assert.Equal(HttpStatusCode.OK, reauthorized.StatusCode);
                 using JsonDocument fresh = JsonDocument.Parse(await reauthorized.Content.ReadAsStringAsync());
-                Assert.Equal(3UL, fresh.RootElement.GetProperty("generation").GetUInt64());
+                Assert.Equal(6UL, fresh.RootElement.GetProperty("generation").GetUInt64());
 
                 using JsonDocument afterReauthorization = JsonDocument.Parse(
                     await client.GetStringAsync("/operator/gc"));
