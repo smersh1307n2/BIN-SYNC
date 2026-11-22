@@ -9,19 +9,34 @@ namespace BinSync;
 public static class Domains
 {
     /// <summary>BLAKE3 domain separation label for per-record digests.</summary>
-    public static readonly byte[] DomainRecord = Ascii("BIN-SYNC/RECORD/v1");
-    /// <summary>BLAKE3 domain separation label for per-field digests.</summary>
-    public static readonly byte[] DomainField = Ascii("BIN-SYNC/FIELD/v1");
-    /// <summary>BLAKE3 domain separation label for bucket rollups.</summary>
-    public static readonly byte[] DomainBucket = Ascii("BIN-SYNC/BUCKET/v1");
-    /// <summary>BLAKE3 domain separation label for state digests.</summary>
-    public static readonly byte[] DomainState = Ascii("BIN-SYNC/STATE/v1");
-    /// <summary>BLAKE3 domain separation label for batch digests.</summary>
-    public static readonly byte[] DomainBatch = Ascii("BIN-SYNC/BATCH/v1");
-    /// <summary>BLAKE3 domain separation label for the records-root hash.</summary>
-    public static readonly byte[] DomainRecords = Ascii("BIN-SYNC/RECORDS/v1");
-    /// <summary>BLAKE3 domain separation label for auth-id material.</summary>
-    public static readonly byte[] DomainAuthId = Ascii("BIN-SYNC/AUTHID/v1");
+    private static readonly byte[] DomainRecordStorage = Ascii("BIN-SYNC/RECORD/v2");
+    private static readonly byte[] DomainFieldStorage = Ascii("BIN-SYNC/FIELD/v1");
+    private static readonly byte[] DomainBucketStorage = Ascii("BIN-SYNC/BUCKET/v1");
+    private static readonly byte[] DomainStateStorage = Ascii("BIN-SYNC/STATE/v2");
+    private static readonly byte[] DomainBatchStorage = Ascii("BIN-SYNC/BATCH/v1");
+    private static readonly byte[] DomainRecordsStorage = Ascii("BIN-SYNC/RECORDS/v1");
+    private static readonly byte[] DomainAuthIdStorage = Ascii("BIN-SYNC/AUTHID/v1");
+
+    /// <summary>BLAKE3 domain separation label for per-record digests. Returns an owned copy.</summary>
+    public static byte[] DomainRecord => DomainRecordStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for per-field digests. Returns an owned copy.</summary>
+    public static byte[] DomainField => DomainFieldStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for bucket rollups. Returns an owned copy.</summary>
+    public static byte[] DomainBucket => DomainBucketStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for state digests. Returns an owned copy.</summary>
+    public static byte[] DomainState => DomainStateStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for batch digests. Returns an owned copy.</summary>
+    public static byte[] DomainBatch => DomainBatchStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for the records-root hash. Returns an owned copy.</summary>
+    public static byte[] DomainRecords => DomainRecordsStorage.ToArray();
+    /// <summary>BLAKE3 domain separation label for auth-id material. Returns an owned copy.</summary>
+    public static byte[] DomainAuthId => DomainAuthIdStorage.ToArray();
+
+    internal static byte[] DomainRecordBytes => DomainRecordStorage;
+    internal static byte[] DomainBucketBytes => DomainBucketStorage;
+    internal static byte[] DomainStateBytes => DomainStateStorage;
+    internal static byte[] DomainBatchBytes => DomainBatchStorage;
+    internal static byte[] DomainRecordsBytes => DomainRecordsStorage;
 
     private static byte[] Ascii(string s) => System.Text.Encoding.ASCII.GetBytes(s);
     /// <summary>Concatenate byte arrays into one buffer (domain label helpers).</summary>
@@ -78,10 +93,16 @@ public static class Digests
 
     /// <summary>Build the canonical byte payload hashed for a single field digest.</summary>
     public static byte[] FieldDigestPayload(ushort fieldId, ushort keyEpoch, ulong wall,
-        uint logical, NodeId authorNodeId, ReadOnlyMemory<byte> value)
+        uint logical, NodeId authorNodeId, ReadOnlyMemory<byte> value) =>
+        FieldDigestPayload(fieldId, keyEpoch, wall, logical, authorNodeId, value, isTombstone: false);
+
+    /// <summary>Build a field digest payload with an explicit value/tombstone discriminator.</summary>
+    public static byte[] FieldDigestPayload(ushort fieldId, ushort keyEpoch, ulong wall,
+        uint logical, NodeId authorNodeId, ReadOnlyMemory<byte> value, bool isTombstone)
     {
         var w = new Writer();
-        w.U16(fieldId).U16(keyEpoch).U64(wall).U32(logical).B128(authorNodeId);
+        w.U16(fieldId).U8(isTombstone ? (byte)1 : (byte)0)
+            .U16(keyEpoch).U64(wall).U32(logical).B128(authorNodeId);
         w.Varint((ulong)value.Length).Raw(value.Span);
         return w.Value();
     }
@@ -101,21 +122,33 @@ public static class Digests
     public static byte[] RecordDigest(Record rec)
     {
         var parts = new List<byte[]>();
-        var allFields = new List<(ushort, FieldState)>(rec.State.Select(kv => (kv.Key, kv.Value)));
-        foreach (var t in rec.FieldTombs) allFields.Add((t.Key, t.Value));
-        allFields.Sort((x, y) => x.Item1.CompareTo(y.Item1));
-        foreach (var (fid, fs) in allFields)
+        var allFields = new List<(ushort FieldId, byte Kind, FieldState State)>(rec.State.Count);
+        foreach (var field in rec.State)
+            allFields.Add((field.Key, 0, field.Value));
+
+        // Most records have no field tombstones. Do not invoke the lazy getter on
+        // the digest hot path unless the record actually owns tomb entries.
+        if (rec.HasFieldTombs)
+            foreach (var tomb in rec.FieldTombs)
+                allFields.Add((tomb.Key, 1, tomb.Value));
+
+        allFields.Sort((x, y) =>
+        {
+            int byField = x.FieldId.CompareTo(y.FieldId);
+            return byField != 0 ? byField : x.Kind.CompareTo(y.Kind);
+        });
+        foreach (var (fid, kind, fs) in allFields)
             parts.Add(FieldDigestPayload(fid, fs.KeyEpoch, fs.Timestamp.Wall,
-                                         fs.Timestamp.Logical, fs.AuthorNodeId, fs.Value));
+                fs.Timestamp.Logical, fs.AuthorNodeId, fs.Value, isTombstone: kind == 1));
         var lc = LifecycleDigestPayload(
             rec.LifecycleHlc?.Wall ?? 0, rec.LifecycleHlc?.Logical ?? 0,
             rec.LifecycleAuthor ?? default, rec.LifecycleValue);
-        int est = Domains.DomainRecord.Length + 16 + lc.Length;
+        int est = Domains.DomainRecordBytes.Length + 16 + lc.Length;
         for (int i = 0; i < parts.Count; i++) est += parts[i].Length;
         var w = new Writer(est);
         Span<byte> ridBuf = stackalloc byte[16];
         rec.RecordId.WriteTo(ridBuf);
-        w.Raw(Domains.DomainRecord).Raw(ridBuf);
+        w.Raw(Domains.DomainRecordBytes).Raw(ridBuf);
         for (int i = 0; i < parts.Count; i++) w.Raw(parts[i]);
         w.Raw(lc);
         return Blake3(w.Value(), 32);
@@ -140,8 +173,6 @@ public class BucketAccumulator
     /// <summary>Running XOR/sum/count accumulator used to build bucket digests.</summary>
     public BucketAccumulator(byte[]? prefix = null) => Prefix = prefix ?? Array.Empty<byte>();
 
-    /// <summary>Derive the bucket key for a record id (BLAKE3 over the id).</summary>
-    public static byte[] BucketKey(byte[] recordId) => Digests.Blake3(recordId, 32);
     /// <summary>Derive the bucket key for a record id (BLAKE3 over the id).</summary>
     public static byte[] BucketKey(RecordId recordId)
     {
@@ -184,22 +215,26 @@ public class BucketAccumulator
     }
 
     /// <summary>BLAKE3 rollup of this accumulator under the bucket domain label.</summary>
-    public byte[] Rollup() => Digests.Blake3(Domains.Cat(Domains.DomainBucket, CanonicalEncoding()), 32);
+    public byte[] Rollup() => Digests.Blake3(Domains.Cat(Domains.DomainBucketBytes, CanonicalEncoding()), 32);
 }
 
 /// <summary>Helpers to compute namespace state roots and bucket digests.</summary>
 public static class StateHash
 {
-    /// <summary>Compute the state-root digest for a namespace given outbox cursor metadata.</summary>
-    public static byte[] StateRootDigest(ushort namespaceId, ulong outboxCursor, List<BucketAccumulator> buckets)
+    /// <summary>Compute the state-root digest for replicated namespace data.</summary>
+    public static byte[] StateRootDigest(ushort namespaceId, List<BucketAccumulator> buckets)
     {
         var sorted = buckets.OrderBy(b => Convert.ToHexString(b.CanonicalEncoding())).ToList();
         long total = buckets.Sum(b => b.Count);
         var w = new Writer();
-        w.Raw(Domains.DomainState).U16(namespaceId).U64(outboxCursor).Varint((ulong)total);
+        w.Raw(Domains.DomainStateBytes).U16(namespaceId).Varint((ulong)total);
         foreach (var b in sorted) w.Bytes(b.CanonicalEncoding());
         return Digests.Blake3(w.Value(), 32);
     }
+
+    /// <summary>Compatibility overload. Outbox cursors are not part of replicated state.</summary>
+    public static byte[] StateRootDigest(ushort namespaceId, ulong outboxCursor, List<BucketAccumulator> buckets) =>
+        StateRootDigest(namespaceId, buckets);
 
     /// <summary>Partition record digests into bucket accumulators for anti-entropy.</summary>
     public static List<BucketAccumulator> BuildBuckets(Dictionary<RecordId, Record> records, int radixBits = 8)

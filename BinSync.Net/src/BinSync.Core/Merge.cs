@@ -44,8 +44,14 @@ public static class Merge
     public static (FieldState Winner, bool Changed) MergeFieldWithPolicy(
         FieldState? local, FieldState remote, MergePolicy policy)
     {
+        if (!Enum.IsDefined(policy))
+            throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unknown merge policy.");
+
         if (local is null)
+        {
+            ValidateInitialCrdtPayload(policy, remote.Value);
             return (remote, true);
+        }
 
         if (local.Timestamp.Wall == remote.Timestamp.Wall &&
             local.Timestamp.Logical == remote.Timestamp.Logical &&
@@ -55,6 +61,7 @@ public static class Merge
 
         return policy switch
         {
+            MergePolicy.LwwField => PickLww(local, remote),
             MergePolicy.MaxBytes => PickByValue(local, remote, preferGreater: true, numeric: false),
             MergePolicy.MinBytes => PickByValue(local, remote, preferGreater: false, numeric: false),
             MergePolicy.MaxU64 => PickByValue(local, remote, preferGreater: true, numeric: true),
@@ -65,8 +72,33 @@ public static class Merge
             MergePolicy.SeqFractional => MergeCrdtPayload(local, remote, SeqFractional.Merge),
             MergePolicy.BlobRef => MergeCrdtPayload(local, remote, BlobRef.Merge),
             MergePolicy.Manual => MergeManual(local, remote),
-            _ => PickLww(local, remote),
+            _ => throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unknown merge policy."),
         };
+    }
+
+    // A first value has no local operand to invoke the merge codec. Validate it
+    // explicitly so malformed canonical CRDT payloads cannot enter state through
+    // the local-null fast path.
+    private static void ValidateInitialCrdtPayload(MergePolicy policy, byte[] payload)
+    {
+        switch (policy)
+        {
+            case MergePolicy.CounterG:
+                _ = CounterG.Decode(payload);
+                break;
+            case MergePolicy.CounterPn:
+                _ = CounterPn.Decode(payload);
+                break;
+            case MergePolicy.SetOr:
+                _ = SetOr.Decode(payload);
+                break;
+            case MergePolicy.SeqFractional:
+                _ = SeqFractional.Decode(payload);
+                break;
+            case MergePolicy.BlobRef:
+                _ = BlobRef.Decode(payload);
+                break;
+        }
     }
 
     private static (FieldState Winner, bool Changed) MergeCrdtPayload(
@@ -150,6 +182,9 @@ public static class Merge
         Hlc? localHlc, NodeId? localAuthor, byte localValue,
         Hlc remoteHlc, NodeId remoteAuthor, byte remoteValue)
     {
+        if (localValue is not Model.Alive and not Model.Dead ||
+            remoteValue is not Model.Alive and not Model.Dead)
+            throw new ArgumentOutOfRangeException(nameof(remoteValue), "Lifecycle value must be 0x00 (alive) or 0x01 (dead).");
         if (localHlc is null)
             return (remoteHlc, remoteAuthor, remoteValue, true);
         int cmp = HlcOps.CompareHlc(remoteHlc, remoteAuthor, localHlc, localAuthor);
@@ -167,45 +202,76 @@ public static class Merge
     public static bool ApplyFieldWrite(Record record, ushort fieldId, FieldState op,
         MergePolicy policy = MergePolicy.LwwField)
     {
+        // A newer tombstone is a version of this field, not a separate side channel:
+        // stale writes must not resurrect it. Keep the lazy tomb map cold on the
+        // common no-tomb path.
+        bool removedTomb = false;
+        if (record.HasFieldTombs &&
+            record.FieldTombs.TryGetValue(fieldId, out var tomb))
+        {
+            if (HlcOps.CompareHlc(op.Timestamp, op.AuthorNodeId,
+                                  tomb.Timestamp, tomb.AuthorNodeId) <= 0)
+                return false;
+
+            removedTomb = record.FieldTombs.Remove(fieldId);
+        }
+
         var local = record.State.TryGetValue(fieldId, out var l) ? l : null;
         var (winner, changed) = MergeFieldWithPolicy(local, op, policy);
         if (changed) record.State[fieldId] = winner;
-        return changed;
+        return changed || removedTomb;
     }
 
     /// <summary>Apply a field tombstone into a record; returns whether state changed.</summary>
     public static bool ApplyFieldTomb(Record record, ushort fieldId, FieldState op)
     {
-        record.State.TryGetValue(fieldId, out var local);
-        record.FieldTombs.TryGetValue(fieldId, out var tombLocal);
-        bool changed;
-        if (tombLocal is not null)
+        FieldState? previousTomb = null;
+        if (record.HasFieldTombs &&
+            record.FieldTombs.TryGetValue(fieldId, out var existingTomb))
+            previousTomb = existingTomb;
+        bool hadTomb = previousTomb is not null;
+        FieldState winner = op;
+        bool tombChanged = !hadTomb;
+
+        if (hadTomb)
         {
-            var (winner, ch) = MergeField(tombLocal, op);
-            if (ch) record.FieldTombs[fieldId] = winner;
-            tombLocal = winner;
-            changed = ch;
+            var (merged, changed) = MergeField(previousTomb!, op);
+            winner = merged;
+            tombChanged = changed;
+        }
+
+        if (record.State.TryGetValue(fieldId, out var local))
+        {
+            int order = HlcOps.CompareHlc(winner.Timestamp, winner.AuthorNodeId,
+                                          local.Timestamp, local.AuthorNodeId);
+            if (order < 0)
+            {
+                // The live value is newer. An older tombstone is redundant and
+                // must not be retained in the canonical field state.
+                return hadTomb && record.FieldTombs.Remove(fieldId);
+            }
+
+            bool removedValue = record.State.Remove(fieldId);
+            if (hadTomb)
+            {
+                if (tombChanged) record.FieldTombs[fieldId] = winner;
+            }
+            else
+            {
+                record.FieldTombs[fieldId] = winner;
+            }
+            return removedValue || tombChanged;
+        }
+
+        if (hadTomb)
+        {
+            if (tombChanged) record.FieldTombs[fieldId] = winner;
         }
         else
         {
-            record.FieldTombs[fieldId] = op;
-            tombLocal = op;
-            changed = true;
+            record.FieldTombs[fieldId] = winner;
         }
-        if (local is not null)
-        {
-            var (keep, _) = MergeField(local, tombLocal);
-            bool keepIsTomb = ReferenceEquals(keep, tombLocal);
-            if (keepIsTomb ||
-                (HlcOps.CompareHlc(tombLocal.Timestamp, tombLocal.AuthorNodeId,
-                                   local.Timestamp, local.AuthorNodeId) >= 0 &&
-                 tombLocal.Value.Length == 0))
-            {
-                record.State.Remove(fieldId);
-                changed = true;
-            }
-        }
-        return changed;
+        return tombChanged;
     }
 
     /// <summary>Apply a record lifecycle change; returns whether state changed.</summary>
@@ -216,9 +282,6 @@ public static class Merge
         record.LifecycleHlc = lc; record.LifecycleAuthor = la; record.LifecycleValue = lv;
         return changed;
     }
-
-    public static bool ApplyLifecycle(Record record, Hlc hlc, byte[] author, byte value) =>
-        ApplyLifecycle(record, hlc, NodeId.From(author), value);
 
     /// <summary>Equality comparer for byte arrays by content.</summary>
     public static bool BytesEq(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
@@ -236,6 +299,8 @@ public sealed class MergePolicyRegistry
     /// <summary>Configure the merge policy for a specific namespace field.</summary>
     public void Set(int namespaceId, ushort fieldId, MergePolicy policy)
     {
+        if (!Enum.IsDefined(policy))
+            throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unknown merge policy.");
         lock (_lock) _map[(namespaceId, fieldId)] = policy;
     }
 

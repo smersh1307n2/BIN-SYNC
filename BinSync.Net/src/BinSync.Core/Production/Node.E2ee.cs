@@ -9,7 +9,14 @@ public sealed partial class Node
     /// When set, sealed field APIs use the ring to seal and open values.
     /// Default WriteField never consults this.
     /// </summary>
-    public E2eeKeyRing? E2eeKeys { get; set; }
+    private E2eeKeyRing? _e2eeKeys;
+
+    /// <summary>Optional E2EE key ring. Access is serialized with sealed field operations.</summary>
+    public E2eeKeyRing? E2eeKeys
+    {
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _e2eeKeys; } }
+        set { lock (_lockMeta) { ThrowIfDisposed(); _e2eeKeys = value; } }
+    }
 
     /// <summary>
     /// Seal <paramref name="plaintext"/> under the namespace key and write ciphertext
@@ -18,47 +25,69 @@ public sealed partial class Node
     public bool WriteFieldSealed(
         int namespaceId, RecordId recordId, int fieldId, byte[] plaintext, Hlc? hlc = null)
     {
-        lock (_lockMeta)
+        ValidateNamespaceId(namespaceId);
+        ValidateFieldId(fieldId);
+        ArgumentNullException.ThrowIfNull(plaintext);
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
+            ThrowIfDisposed();
+            EnsureNodeOwnedMutationAllowedInternal(namespaceId);
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
             if (!ring.TryGet(namespaceId, out var key, out var epoch))
                 throw new InvalidOperationException($"no E2EE key for namespace {namespaceId}");
 
-            var store = NsInternal(namespaceId);
-            if (!store.TryGetValue(recordId, out var rec))
-                store[recordId] = rec = new Record(recordId, (ushort)namespaceId);
-
-            var h = hlc ?? Clock.SendTick();
-            Span<byte> ridBuf = stackalloc byte[16];
-            recordId.WriteTo(ridBuf);
-            Span<byte> authorBuf = stackalloc byte[16];
-            NodeId.WriteTo(authorBuf);
-            var sealedValue = E2ee.SealField(
-                key, ridBuf, (ushort)fieldId, h.Wall, h.Logical, authorBuf, epoch, plaintext);
-
-            var fs = new FieldState(sealedValue, h, NodeId, KeyEpoch: epoch);
-            var op = new OpFieldWrite
+            try
             {
-                FieldId = (ushort)fieldId,
-                KeyEpoch = epoch,
-                Wall = h.Wall,
-                Logical = h.Logical,
-                Origin = 0,
-                AuthorNodeId = NodeId,
-                Value = sealedValue,
-            };
-            bool changed = Merge.ApplyFieldWrite(rec, (ushort)fieldId, fs);
-            if (changed)
-                PushOutboxInternal(namespaceId, recordId, op, NodeId.ToArray());
-            return changed;
-        }
-    }
+                Storage.TryGetValue(namespaceId, out var store);
+                Record? current = null;
+                bool exists = store is not null && store.TryGetValue(recordId, out current);
+                var rec = exists ? Clone(current!) : new Record(recordId, (ushort)namespaceId);
 
-    /// <summary>Sealed write with legacy byte[] record id.</summary>
-    public bool WriteFieldSealed(
-        int namespaceId, byte[] recordId, int fieldId, byte[] plaintext, Hlc? hlc = null) =>
-        WriteFieldSealed(namespaceId, RecordId.From(recordId), fieldId, plaintext, hlc);
+                var h = hlc ?? Clock.SendTick();
+                Span<byte> ridBuf = stackalloc byte[16];
+                recordId.WriteTo(ridBuf);
+                Span<byte> authorBuf = stackalloc byte[16];
+                NodeId.WriteTo(authorBuf);
+                var sealedValue = E2ee.SealField(
+                    key, ridBuf, (ushort)fieldId, h.Wall, h.Logical, authorBuf, epoch, plaintext);
+
+                var fs = new FieldState(sealedValue, h, NodeId, KeyEpoch: epoch);
+                var (winner, changed) = Merge.MergeFieldWithPolicy(
+                    rec.State.TryGetValue((ushort)fieldId, out var old) ? old : null,
+                    fs,
+                    MergePolicy.LwwField);
+                if (!changed)
+                    return false;
+
+                EnsureLocalWriteCapacity(namespaceId, isNewRecord: !exists);
+                var op = new OpFieldWrite
+                {
+                    FieldId = (ushort)fieldId,
+                    KeyEpoch = epoch,
+                    Wall = h.Wall,
+                    Logical = h.Logical,
+                    Origin = 1,
+                    AuthorNodeId = NodeId,
+                    Value = sealedValue,
+                };
+
+                rec.State[(ushort)fieldId] = winner;
+                var entry = PrepareOutboxEntryInternal(
+                    namespaceId, recordId, op, NodeId.ToArray(), suppressRestoredEcho: false)
+                    ?? throw new InvalidOperationException("A changed sealed write must produce an Outbox entry.");
+                // Use the same stage → durable WAL append → publish sequence as ordinary writes.
+                CommitLocalMutationInternal(entry, rec, applyToStorage: true, preserveRecordIdentity: true);
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+            }
+        }
+
+        RaiseFieldWritten(namespaceId, recordId, fieldId);
+        return true;
+    }
 
     /// <summary>
     /// Read a field and open ciphertext with the namespace key.
@@ -66,34 +95,40 @@ public sealed partial class Node
     /// </summary>
     public byte[]? ReadFieldOpen(int namespaceId, RecordId recordId, int fieldId)
     {
-        lock (_lockMeta)
+        ValidateNamespaceId(namespaceId);
+        ValidateFieldId(fieldId);
+        lock (_lockStorage) lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var ring = E2eeKeys
                 ?? throw new InvalidOperationException("E2eeKeys is not configured");
             if (!ring.TryGet(namespaceId, out var key, out _))
                 throw new InvalidOperationException($"no E2EE key for namespace {namespaceId}");
 
-            if (!Storage.TryGetValue(namespaceId, out var map))
-                return null;
-            if (!map.TryGetValue(recordId, out var rec))
-                return null;
-            if (!rec.State.TryGetValue((ushort)fieldId, out var fs))
-                return null;
+            try
+            {
+                if (!Storage.TryGetValue(namespaceId, out var map))
+                    return null;
+                if (!map.TryGetValue(recordId, out var rec))
+                    return null;
+                if (!rec.State.TryGetValue((ushort)fieldId, out var fs))
+                    return null;
 
-            Span<byte> ridBuf = stackalloc byte[16];
-            recordId.WriteTo(ridBuf);
-            Span<byte> authorBuf = stackalloc byte[16];
-            fs.AuthorNodeId.WriteTo(authorBuf);
-            return E2ee.OpenField(
-                key, ridBuf, (ushort)fieldId,
-                fs.Timestamp.Wall, fs.Timestamp.Logical,
-                authorBuf, fs.KeyEpoch, fs.Value.AsSpan());
+                Span<byte> ridBuf = stackalloc byte[16];
+                recordId.WriteTo(ridBuf);
+                Span<byte> authorBuf = stackalloc byte[16];
+                fs.AuthorNodeId.WriteTo(authorBuf);
+                return E2ee.OpenField(
+                    key, ridBuf, (ushort)fieldId,
+                    fs.Timestamp.Wall, fs.Timestamp.Logical,
+                    authorBuf, fs.KeyEpoch, fs.Value.AsSpan());
+            }
+            finally
+            {
+                System.Security.Cryptography.CryptographicOperations.ZeroMemory(key);
+            }
         }
     }
-
-    /// <summary>Open field with legacy byte[] record id.</summary>
-    public byte[]? ReadFieldOpen(int namespaceId, byte[] recordId, int fieldId) =>
-        ReadFieldOpen(namespaceId, RecordId.From(recordId), fieldId);
 
     /// <summary>
     /// True when the stored field opens successfully under the configured key.
@@ -117,7 +152,4 @@ public sealed partial class Node
         }
     }
 
-    /// <summary>Try-open with legacy byte[] record id.</summary>
-    public bool TryOpenField(int namespaceId, byte[] recordId, int fieldId, out byte[]? plaintext) =>
-        TryOpenField(namespaceId, RecordId.From(recordId), fieldId, out plaintext);
 }

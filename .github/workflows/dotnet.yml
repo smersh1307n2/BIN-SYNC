@@ -2,25 +2,21 @@ name: BinSync.Net
 
 on:
   push:
-    branches: ["**"]
+    branches: ["main", "feature/fld-external-storage"]
     paths:
       - "BinSync.Net/**"
-      - ".github/workflows/dotnet.yml"
-      - "docs/PRODUCTION-STATUS.md"
+      - "samples/**"
+      - ".github/workflows/**"
       - "scripts/vendor-ed25519-from-ztsharp.sh"
       - "third_party/ed25519-zlib/**"
-  pull_request:
-    paths:
-      - "BinSync.Net/**"
-      - ".github/workflows/dotnet.yml"
-      - "scripts/vendor-ed25519-from-ztsharp.sh"
+      - "external/Fld1.Storage"
   workflow_dispatch:
   schedule:
     # Nightly longer fuzz pass (UTC)
     - cron: "17 3 * * *"
 
 concurrency:
-  group: binsync-net-${{ github.workflow }}-${{ github.ref }}
+  group: binsync-net-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,35 +27,111 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: 10.0.x
 
       - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        shell: bash
         run: bash scripts/vendor-ed25519-from-ztsharp.sh
 
-      - name: Restore
-        working-directory: BinSync.Net
-        run: dotnet restore BinSync.slnx
+      - name: Run changed-component tests and samples
+        shell: bash
+        env:
+          TEST_RESULTS: ${{ runner.temp }}/test-results
+        run: |
+          set -euo pipefail
+          test_project="BinSync.Net/tests/BinSync.Tests/BinSync.Tests.csproj"
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            dotnet restore BinSync.Net/BinSync.slnx
+            dotnet build BinSync.Net/BinSync.slnx --configuration Release --no-restore
+            dotnet test BinSync.Net/BinSync.slnx --configuration Release --no-build --verbosity minimal \
+              --collect:"XPlat Code Coverage" --results-directory "$TEST_RESULTS" \
+              --logger "console;verbosity=detailed" --logger "trx;LogFileName=test-results.trx" \
+              --blame-hang-timeout 3m --blame-hang-dump-type mini \
+              -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+            dotnet run --project samples/TwoNodeLoopback -c Release
+            dotnet run --project samples/TwoNodeTcp -c Release
+            dotnet run --project samples/ScenarioHarness -c Release
+            dotnet run --project samples/V31ControlPlaneVectors -c Release
+            exit 0
+          fi
 
-      - name: Build
-        working-directory: BinSync.Net
-        run: dotnet build BinSync.slnx --configuration Release --no-restore
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base_sha="$(git rev-parse HEAD^1 2>/dev/null || true)"
+          else
+            base_sha="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          if [[ -z "$base_sha" ]] || ! git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
+            echo "No usable parent commit; fail safe to the complete test suite."
+            dotnet restore BinSync.Net/BinSync.slnx
+            dotnet build BinSync.Net/BinSync.slnx --configuration Release --no-restore
+            dotnet test BinSync.Net/BinSync.slnx --configuration Release --no-build --verbosity minimal \\
+              --collect:"XPlat Code Coverage" --results-directory "$TEST_RESULTS" \\
+              --logger "console;verbosity=detailed" --logger "trx;LogFileName=test-results.trx" \\
+              --blame-hang-timeout 3m --blame-hang-dump-type mini \\
+              -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+            exit 0
+          fi
 
-      - name: Test
-        working-directory: BinSync.Net
-        run: >
-          dotnet test BinSync.slnx
-          --configuration Release
-          --no-build
-          --verbosity minimal
-          --collect:"XPlat Code Coverage"
-          --results-directory "${{ runner.temp }}/test-results"
-          --logger "trx;LogFileName=test-results.trx"
-          --
-          DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+          echo "Changed-files base SHA: $base_sha"
+          mapfile -t changed < <(git diff --name-only "$base_sha" HEAD)
+          run_tests=0
+          run_all_samples=0
+          samples=()
+          for file in "${changed[@]}"; do
+            case "$file" in
+              BinSync.Net/src/BinSync.Core/*|BinSync.Net/tests/BinSync.Tests/*|BinSync.Net/tests/BinSync.MetadataStore.Conformance/*|scripts/vendor-ed25519-from-ztsharp.sh|third_party/ed25519-zlib/*)
+                run_tests=1 ;;
+              BinSync.Net/BinSync.slnx|BinSync.Net/Directory.*|Directory.*|*.props|*.targets|global.json|.github/workflows/dotnet.yml)
+                run_tests=1 ;;
+              BinSync.Net/src/BinSync.Storage/*|BinSync.Net/tests/BinSync.Storage.Integration/*|external/Fld1.Storage|external/Fld1.Storage/*)
+                # Covered by the dedicated FLD Storage integration workflow.
+                ;;
+              samples/TwoNodeLoopback/*) samples+=("samples/TwoNodeLoopback") ;;
+              samples/TwoNodeTcp/*) samples+=("samples/TwoNodeTcp") ;;
+              samples/ScenarioHarness/*) samples+=("samples/ScenarioHarness") ;;
+              samples/V31ControlPlaneVectors/*)
+                # Covered by the signed golden-vector job.
+                ;;
+              samples/StorageArraySync/*|samples/StorageArrayTcpSync/*|samples/FldBinSyncHost/*|samples/FldBinSyncHost.Tests/*|samples/FldBinSyncHost.LeaseLockProbe/*|samples/FldBinSyncHost.Runtime/*)
+                # Covered by the dedicated storage/Host integration workflows.
+                ;;
+              BinSync.Net/src/*|BinSync.Net/tests/*|BinSync.Net/*)
+                run_tests=1 ;;
+              samples/*) run_all_samples=1 ;;
+              *)
+                # Documentation and benchmark-only edits do not require functional tests.
+                ;;
+            esac
+          done
+
+          if (( run_tests )); then
+            dotnet restore "$test_project"
+            dotnet build "$test_project" --configuration Release --no-restore
+            dotnet test "$test_project" --configuration Release --no-build --verbosity minimal \
+              --collect:"XPlat Code Coverage" --results-directory "$TEST_RESULTS" \
+              --logger "console;verbosity=detailed" --logger "trx;LogFileName=test-results.trx" \
+              --blame-hang-timeout 3m --blame-hang-dump-type mini \
+              -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+          else
+            echo "No BinSync.Core test project changes; affected integration checks run in their dedicated workflow."
+          fi
+
+          if (( run_all_samples )); then
+            dotnet run --project samples/TwoNodeLoopback -c Release
+            dotnet run --project samples/TwoNodeTcp -c Release
+            dotnet run --project samples/ScenarioHarness -c Release
+          else
+            for sample in "${samples[@]}"; do
+              dotnet run --project "$sample" -c Release
+            done
+          fi
 
       - name: Upload test results
         if: always()
@@ -69,9 +141,6 @@ jobs:
           path: ${{ runner.temp }}/test-results
           retention-days: 14
           if-no-files-found: ignore
-
-
-
 
       - name: Coverage threshold (≥50% line)
         if: always()
@@ -96,18 +165,59 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  test-windows:
+    name: test (.NET 10, Windows)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/feature/fld-external-storage')
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Restore
+        working-directory: BinSync.Net
+        run: dotnet restore BinSync.slnx
+
+      - name: Build
+        working-directory: BinSync.Net
+        run: dotnet build BinSync.slnx --configuration Release --no-restore
+
+      - name: Test
+        working-directory: BinSync.Net
+        run: >
+          dotnet test BinSync.slnx
+          --configuration Release
+          --no-build
+          --verbosity minimal
+          --logger "console;verbosity=detailed"
+          --blame-hang-timeout 3m
+          --blame-hang-dump-type mini
+
   fuzz:
     name: fuzz + lab (§17)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/feature/fld-external-storage')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Setup .NET 10
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: 10.0.x
 
       - name: Vendor Ed25519 from ZtSharp (MIT subset)
         run: bash scripts/vendor-ed25519-from-ztsharp.sh
@@ -141,3 +251,154 @@ jobs:
           path: ${{ runner.temp }}/fuzz-results
           retention-days: 14
           if-no-files-found: ignore
+
+  v31-golden-vectors:
+    name: v3.1 signed control-plane golden vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Run v3.1 signed payload/vector conformance sample
+        run: dotnet run --project samples/V31ControlPlaneVectors -c Release
+
+  fld-host-integration-build:
+    name: FLD cross-repository host adapter build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && fromJSON('["ubuntu-latest","windows-latest"]') || fromJSON('["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout BIN-SYNC
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 2
+
+      - name: Detect FLD Storage pin change
+        id: fld-pin
+        shell: bash
+        run: |
+          changed=true
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            base_sha="$(git rev-parse HEAD^ 2>/dev/null || true)"
+            if [[ -n "$base_sha" ]] && git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
+              if git diff --quiet "$base_sha" HEAD -- external/Fld1.Storage; then
+                changed=false
+              fi
+            fi
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "FLD Storage pin changed: $changed"
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Vendor Ed25519 from ZtSharp (MIT subset)
+        run: bash scripts/vendor-ed25519-from-ztsharp.sh
+
+      - name: Resolve exact FLD Storage gitlink SHA
+        id: fld-ref
+        shell: bash
+        run: |
+          sha="$(git ls-tree HEAD external/Fld1.Storage | awk '{print $3}')"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "BIN-SYNC pins FLD Storage at $sha"
+
+      - name: Checkout exact FLD-DB revision used by the Storage submodule
+        uses: actions/checkout@v4
+        with:
+          repository: smersh1307n2/FLD-DB
+          ref: ${{ steps.fld-ref.outputs.sha }}
+          path: FLD-DB
+          persist-credentials: false
+
+      - name: Build cross-repository FLD host adapter
+        shell: bash
+        run: |
+          dotnet build samples/FldBinSyncHost/FldBinSyncHost.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj"
+
+      - name: Test FLD Core, Storage, Manifest, Run, WAL and Engine durability contracts
+        if: steps.fld-pin.outputs.changed == 'true' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+        shell: bash
+        run: |
+          dotnet test FLD-DB/tests/Fld1.Core.Tests/Fld1.Core.Tests.csproj --configuration Release
+          dotnet test FLD-DB/tests/Fld1.Storage.Tests/Fld1.Storage.Tests.csproj --configuration Release
+          dotnet test FLD-DB/tests/Fld1.Manifest.Tests/Fld1.Manifest.Tests.csproj --configuration Release
+          dotnet test FLD-DB/tests/Fld1.Run.Tests/Fld1.Run.Tests.csproj --configuration Release
+          dotnet test FLD-DB/tests/Fld1.Wal.Tests/Fld1.Wal.Tests.csproj --configuration Release
+          dotnet test FLD-DB/tests/Fld1.Engine.Tests/Fld1.Engine.Tests.csproj --configuration Release
+
+      - name: Determine Host adapter test scope
+        id: host-scope
+        shell: bash
+        run: |
+          policy_only=true
+          base_sha="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          if [[ "$GITHUB_EVENT_NAME" != "push" || -z "$base_sha" ]]; then
+            policy_only=false
+          else
+            while IFS= read -r file; do
+              case "$file" in
+                samples/FldBinSyncHost/FldBinSyncGcOperatorPolicy.cs|samples/FldBinSyncHost/FldBinSyncAsyncHostComposition.cs|samples/FldBinSyncHost/FldBinSyncGcHostOperations.cs|samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs|samples/FldBinSyncHost/README.md|samples/FldBinSyncHost.Tests/FldBinSyncGcOperatorPolicyTests.cs|samples/FldBinSyncHost.Tests/FldBinSyncGcHostOperationsTests.cs|samples/FldBinSyncHost.Tests/StorageFldBinSyncGcOperatorPolicyStoreTests.cs|samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj|samples/FldBinSyncHost.LeaseLockProbe/*|docs/METADATA-STORE-GC-DESIGN.md|docs/BIN-SYNC-V3.1-HOST-ORCHESTRATION.md|docs/BIN-SYNC-ROADMAP-v3.md|.github/workflows/dotnet.yml)
+                  ;;
+                *)
+                  policy_only=false
+                  ;;
+              esac
+            done < <(git diff --name-only "$base_sha" HEAD)
+          fi
+          echo "policy_only=$policy_only" >> "$GITHUB_OUTPUT"
+          echo "Run only operator-policy tests: $policy_only"
+
+      - name: Test FLD host adapter against durable FLD database
+        shell: bash
+        env:
+          POLICY_ONLY: ${{ steps.host-scope.outputs.policy_only }}
+        run: |
+          if [[ "$POLICY_ONLY" == "true" ]]; then
+            filter="FullyQualifiedName~FldBinSyncGcOperatorPolicyTests|FullyQualifiedName~StorageFldBinSyncGcOperatorPolicyStoreTests|FullyQualifiedName~FldBinSyncGcMaintenanceControlTests|FullyQualifiedName~FldBinSyncAsyncGcReadinessTests|FullyQualifiedName~FldBinSyncGcHostOperationsTests"
+          else
+            filter="FullyQualifiedName!~Async_host_adapter_signed_tombstone_gc_scale&FullyQualifiedName!~Async_host_adapter_signed_changeid_gc_scale"
+          fi
+          dotnet test samples/FldBinSyncHost.Tests/FldBinSyncHost.Tests.csproj --configuration Release \
+            -p:Fld1RepositoryRoot="${{ github.workspace }}/FLD-DB" \
+            -p:Fld1DatabaseProject="${{ github.workspace }}/FLD-DB/src/Fld1.Database/Fld1.Database.csproj" \
+            -p:Fld1StorageProject="${{ github.workspace }}/FLD-DB/src/Fld1.Storage/Fld1.Storage.csproj" \
+            --filter "$filter" \
+            --logger "console;verbosity=normal" \
+            --logger "trx;LogFileName=fld-host-integration.trx" \
+            --results-directory "$RUNNER_TEMP/fld-host-integration-test-results" \
+            --blame-hang-timeout 5m \
+            --blame-hang-dump-type mini
+
+      - name: Upload Host adapter test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fld-host-integration-diagnostics-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/fld-host-integration-test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
+# Re-run validation against the currently pinned FLD Storage revision.

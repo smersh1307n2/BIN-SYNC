@@ -48,59 +48,114 @@ public sealed class SchemaRegistry
         get { lock (_gate) return _map.Sum(kv => kv.Value.Count); }
     }
 
-    /// <summary>Register or replace a schema version. Enforces §18.1 field-id non-reuse across versions.</summary>
+    internal static void ValidateDescriptorRange(SchemaDescriptor descriptor)
+    {
+        Node.ValidateNamespaceId(descriptor.NamespaceId);
+        if ((uint)descriptor.SchemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(descriptor.SchemaId));
+        if ((uint)descriptor.Version > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(descriptor.Version));
+        if ((uint)descriptor.MergePolicy > byte.MaxValue) throw new ArgumentOutOfRangeException(nameof(descriptor.MergePolicy));
+    }
+
+    private static bool DescriptorsEqual(SchemaDescriptor left, SchemaDescriptor right) =>
+        left.MergePolicy == right.MergePolicy &&
+        left.FieldIds.SetEquals(right.FieldIds) &&
+        left.RetiredFieldIds.SetEquals(right.RetiredFieldIds);
+
+    private static SchemaDescriptor CloneDescriptor(SchemaDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor.FieldIds);
+        ArgumentNullException.ThrowIfNull(descriptor.RetiredFieldIds);
+        return new SchemaDescriptor
+        {
+            NamespaceId = descriptor.NamespaceId,
+            SchemaId = descriptor.SchemaId,
+            Version = descriptor.Version,
+            MergePolicy = descriptor.MergePolicy,
+            FieldIds = new HashSet<ushort>(descriptor.FieldIds),
+            RetiredFieldIds = new HashSet<ushort>(descriptor.RetiredFieldIds),
+        };
+    }
+
+    /// <summary>Register an immutable schema version. Enforces §18.1 field-id non-reuse across versions.</summary>
     public void Register(SchemaDescriptor desc)
     {
-        if (desc.Version < 0) throw new ArgumentException("version must be non-negative");
+        ArgumentNullException.ThrowIfNull(desc);
+        var owned = CloneDescriptor(desc);
+        ValidateDescriptorRange(owned);
+        if (owned.FieldIds.Overlaps(owned.RetiredFieldIds))
+            throw new ArgumentException("a field cannot be both active and retired");
         lock (_gate)
         {
-            var key = (desc.NamespaceId, desc.SchemaId);
-            if (!_map.TryGetValue(key, out var byVer))
-            {
-                byVer = new Dictionary<int, SchemaDescriptor>();
-                _map[key] = byVer;
-            }
+            var key = (owned.NamespaceId, owned.SchemaId);
+            bool hadHistory = _map.TryGetValue(key, out var existingHistory);
+            var byVer = existingHistory ?? new Dictionary<int, SchemaDescriptor>();
+            if (byVer.TryGetValue(owned.Version, out var sameVersion) &&
+                !DescriptorsEqual(sameVersion, owned))
+                throw new ArgumentException(
+                    $"Schema version {owned.Version} is immutable; publish a new version for descriptor changes.");
 
-            // Collect retired + known from all versions
+            // Validate the complete known version history in version order. Once a field
+            // disappears from a later descriptor (or is explicitly retired), its id
+            // cannot become active again in any subsequent version.
+            var history = byVer.Values
+                .Where(existing => existing.Version != owned.Version)
+                .Append(owned)
+                .OrderBy(existing => existing.Version);
+            var seen = new HashSet<ushort>();
             var retired = new HashSet<ushort>();
-            var everUsed = new HashSet<ushort>();
-            foreach (var existing in byVer.Values)
+            var closed = new HashSet<ushort>();
+
+            foreach (var descriptor in history)
             {
-                foreach (var f in existing.RetiredFieldIds) retired.Add(f);
-                foreach (var f in existing.FieldIds) everUsed.Add(f);
+                foreach (var fieldId in descriptor.FieldIds)
+                {
+                    if (retired.Contains(fieldId) || closed.Contains(fieldId))
+                        throw new ArgumentException(
+                            $"field 0x{fieldId:X4} was retired or removed and cannot be reused (§18.1)");
+                }
+
+                foreach (var fieldId in descriptor.RetiredFieldIds)
+                {
+                    if (descriptor.FieldIds.Contains(fieldId))
+                        throw new ArgumentException(
+                            $"field 0x{fieldId:X4} cannot be both active and retired");
+                    retired.Add(fieldId);
+                }
+
+                foreach (var fieldId in seen)
+                {
+                    if (!descriptor.FieldIds.Contains(fieldId))
+                        closed.Add(fieldId);
+                }
+
+                foreach (var fieldId in descriptor.FieldIds)
+                    seen.Add(fieldId);
             }
 
-            // New descriptor must not revive a retired id, and must not reclaim an id
-            // that was used in another version unless it is still listed (same field).
-            foreach (var f in desc.FieldIds)
-            {
-                if (retired.Contains(f))
-                    throw new ArgumentException($"field 0x{f:X4} is retired and cannot be reused (§18.1)");
-            }
-            foreach (var f in desc.RetiredFieldIds)
-            {
-                if (desc.FieldIds.Contains(f))
-                    throw new ArgumentException($"field 0x{f:X4} cannot be both active and retired");
-            }
-
-            byVer[desc.Version] = desc;
+            byVer[owned.Version] = owned;
+            if (!hadHistory)
+                _map.Add(key, byVer);
         }
     }
 
     /// <summary>Try to resolve a schema definition by namespace, schema id, and version.</summary>
     public bool TryGet(int namespaceId, int schemaId, int version, out SchemaDescriptor? desc)
     {
+        ValidateSchemaKey(namespaceId, schemaId, version);
         lock (_gate)
         {
             desc = null;
             if (!_map.TryGetValue((namespaceId, schemaId), out var byVer)) return false;
-            return byVer.TryGetValue(version, out desc);
+            if (!byVer.TryGetValue(version, out var stored)) return false;
+            desc = CloneDescriptor(stored);
+            return true;
         }
     }
 
     /// <summary>Highest registered version for (ns, schemaId), or null.</summary>
     public int? MaxVersion(int namespaceId, int schemaId)
     {
+        ValidateSchemaKey(namespaceId, schemaId);
         lock (_gate)
         {
             if (!_map.TryGetValue((namespaceId, schemaId), out var byVer) || byVer.Count == 0)
@@ -113,35 +168,59 @@ public sealed class SchemaRegistry
     /// Gate a batch against the registry (§18.2–18.3).
     /// Unknown schema/version → Pending; lower-than-known with different policy → Mismatch.
     /// </summary>
+    private static void ValidateSchemaKey(int namespaceId, int schemaId, int? version = null, int? mergePolicy = null)
+    {
+        Node.ValidateNamespaceId(namespaceId);
+        if ((uint)schemaId > ushort.MaxValue) throw new ArgumentOutOfRangeException(nameof(schemaId));
+        if (version.HasValue && (uint)version.Value > ushort.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(version));
+        if (mergePolicy.HasValue && (uint)mergePolicy.Value > byte.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(mergePolicy));
+    }
+
+    private SchemaOutcome EvaluateLocked(int namespaceId, int schemaId, int schemaVersion, int mergePolicy, out string? detail)
+    {
+        ValidateSchemaKey(namespaceId, schemaId, schemaVersion, mergePolicy);
+        detail = null;
+        if (!_map.TryGetValue((namespaceId, schemaId), out var byVer) || byVer.Count == 0)
+        {
+            detail = "unknown schema";
+            return SchemaOutcome.Pending;
+        }
+        if (!byVer.TryGetValue(schemaVersion, out var desc))
+        {
+            int max = byVer.Keys.Max();
+            detail = schemaVersion > max
+                ? $"pending version {schemaVersion} (have ≤{max})"
+                : $"unknown version {schemaVersion}";
+            return SchemaOutcome.Pending;
+        }
+        // Policy 0 is the legacy/default spelling of LWW_FIELD (wire code 0x02),
+        // not a wildcard that may bypass schema compatibility checks.
+        int registeredPolicy = desc.MergePolicy == 0 ? 0x02 : desc.MergePolicy;
+        int incomingPolicy = mergePolicy == 0 ? 0x02 : mergePolicy;
+        if (registeredPolicy != incomingPolicy)
+        {
+            detail = $"policy {incomingPolicy} != registered {registeredPolicy}";
+            return SchemaOutcome.Mismatch;
+        }
+        return SchemaOutcome.Ok;
+    }
+
     public SchemaOutcome Evaluate(int namespaceId, int schemaId, int schemaVersion, int mergePolicy, out string? detail)
     {
-        detail = null;
+        lock (_gate)
+            return EvaluateLocked(namespaceId, schemaId, schemaVersion, mergePolicy, out detail);
+    }
+
+    internal (SchemaOutcome Outcome, string? Detail, BatchResult? Result) EvaluateAndApply(
+        int namespaceId, int schemaId, int schemaVersion, int mergePolicy, Func<BatchResult> apply)
+    {
+        ArgumentNullException.ThrowIfNull(apply);
         lock (_gate)
         {
-            if (!_map.TryGetValue((namespaceId, schemaId), out var byVer) || byVer.Count == 0)
-            {
-                detail = "unknown schema";
-                return SchemaOutcome.Pending;
-            }
-            if (!byVer.TryGetValue(schemaVersion, out var desc))
-            {
-                // Future version we have not learned yet
-                int max = byVer.Keys.Max();
-                if (schemaVersion > max)
-                {
-                    detail = $"pending version {schemaVersion} (have ≤{max})";
-                    return SchemaOutcome.Pending;
-                }
-                detail = $"unknown version {schemaVersion}";
-                return SchemaOutcome.Pending;
-            }
-            if (desc.MergePolicy != mergePolicy && mergePolicy != 0)
-            {
-                // Allow mergePolicy=0 as "unspecified / inherit"
-                detail = $"policy {mergePolicy} != registered {desc.MergePolicy}";
-                return SchemaOutcome.Mismatch;
-            }
-            return SchemaOutcome.Ok;
+            var outcome = EvaluateLocked(namespaceId, schemaId, schemaVersion, mergePolicy, out var detail);
+            return (outcome, detail, outcome == SchemaOutcome.Ok ? apply() : null);
         }
     }
 
@@ -152,6 +231,7 @@ public sealed class SchemaRegistry
         {
             return _map.Values.SelectMany(v => v.Values)
                 .OrderBy(d => d.NamespaceId).ThenBy(d => d.SchemaId).ThenBy(d => d.Version)
+                .Select(CloneDescriptor)
                 .ToList();
         }
     }
@@ -159,19 +239,60 @@ public sealed class SchemaRegistry
     /// <summary>Merge remote descriptors (from SCHEMA_MAP). Returns how many new versions learned.</summary>
     public int Learn(IEnumerable<SchemaDescriptor> remote)
     {
-        int learned = 0;
-        foreach (var d in remote)
+        ArgumentNullException.ThrowIfNull(remote);
+        // Materialize caller-owned descriptors first, then apply a stable version order.
+        // Otherwise a shuffled SCHEMA_MAP can cause a different valid prefix to be kept
+        // when a later descriptor proves that an intermediate version retired a field.
+        var ordered = remote.Select(CloneDescriptor)
+            .OrderBy(d => d.NamespaceId)
+            .ThenBy(d => d.SchemaId)
+            .ThenBy(d => d.Version)
+            .ToList();
+
+        // Descriptor-local errors are malformed input, not ignorable history conflicts.
+        foreach (var descriptor in ordered)
         {
-            if (TryGet(d.NamespaceId, d.SchemaId, d.Version, out _))
-                continue;
-            try
+            ValidateDescriptorRange(descriptor);
+            if (descriptor.FieldIds.Overlaps(descriptor.RetiredFieldIds))
+                throw new InvalidDataException("A schema field cannot be both active and retired.");
+        }
+
+        int learned = 0;
+        lock (_gate)
+        {
+            // Preflight immutable-version conflicts before mutating the registry.
+            // Also detect conflicting duplicates inside one incoming map.
+            var incoming = new Dictionary<(int Ns, int SchemaId, int Version), SchemaDescriptor>();
+            foreach (var descriptor in ordered)
             {
-                Register(d);
-                learned++;
+                var key = (Ns: descriptor.NamespaceId, SchemaId: descriptor.SchemaId, Version: descriptor.Version);
+                if (incoming.TryGetValue(key, out var prior) &&
+                    !DescriptorsEqual(prior, descriptor))
+                    throw new InvalidDataException(
+                        $"Conflicting schema descriptors in map for namespace {key.Ns}, schema {key.SchemaId}, version {key.Version}.");
+                incoming[key] = descriptor;
+
+                if (_map.TryGetValue((descriptor.NamespaceId, descriptor.SchemaId), out var byVersion) &&
+                    byVersion.TryGetValue(descriptor.Version, out var existing) &&
+                    !DescriptorsEqual(existing, descriptor))
+                    throw new InvalidDataException(
+                        $"Conflicting schema descriptor for namespace {descriptor.NamespaceId}, schema {descriptor.SchemaId}, version {descriptor.Version}.");
             }
-            catch (ArgumentException)
+
+            foreach (var descriptor in ordered)
             {
-                // conflicting retirement rules — skip
+                if (_map.TryGetValue((descriptor.NamespaceId, descriptor.SchemaId), out var byVersion) &&
+                    byVersion.ContainsKey(descriptor.Version))
+                    continue;
+                try
+                {
+                    Register(descriptor);
+                    learned++;
+                }
+                catch (ArgumentException)
+                {
+                    // Conflicting retirement rules: skip the invalid later version.
+                }
             }
         }
         return learned;
@@ -181,6 +302,9 @@ public sealed class SchemaRegistry
 /// <summary>SCHEMA_MAP frame (type 0x04) encode/decode.</summary>
 public static class SchemaMap
 {
+    private const int MaxSchemaCount = 100_000;
+    private const int MaxTotalFieldIds = 250_000;
+
     /// <summary>Wire frame type byte (e.g. DELTA_BATCH, ACK).</summary>
     public const byte FrameType = 0x04;
 
@@ -192,10 +316,37 @@ public static class SchemaMap
     /// </summary>
     public static byte[] Encode(IReadOnlyList<SchemaDescriptor> list)
     {
+        ArgumentNullException.ThrowIfNull(list);
+        if (list.Count > MaxSchemaCount)
+            throw new ArgumentException("Schema map exceeds the maximum descriptor count.", nameof(list));
+        var keys = new HashSet<(int NamespaceId, int SchemaId, int Version)>();
+        int totalFieldIds = 0;
+        foreach (var descriptor in list)
+        {
+            ArgumentNullException.ThrowIfNull(descriptor);
+            SchemaRegistry.ValidateDescriptorRange(descriptor);
+            ArgumentNullException.ThrowIfNull(descriptor.FieldIds);
+            ArgumentNullException.ThrowIfNull(descriptor.RetiredFieldIds);
+            if (descriptor.FieldIds.Overlaps(descriptor.RetiredFieldIds))
+                throw new ArgumentException("a field cannot be both active and retired", nameof(list));
+            if (!keys.Add((descriptor.NamespaceId, descriptor.SchemaId, descriptor.Version)))
+                throw new ArgumentException("Duplicate schema version in map.", nameof(list));
+            int fieldCount = checked(descriptor.FieldIds.Count + descriptor.RetiredFieldIds.Count);
+            if (fieldCount > ushort.MaxValue + 1 ||
+                (totalFieldIds = checked(totalFieldIds + fieldCount)) > MaxTotalFieldIds)
+                throw new ArgumentException("Schema map exceeds the maximum field-id count.", nameof(list));
+        }
+
         var w = new Writer();
         w.Varint((ulong)list.Count);
         foreach (var d in list)
         {
+            ArgumentNullException.ThrowIfNull(d);
+            SchemaRegistry.ValidateDescriptorRange(d);
+            ArgumentNullException.ThrowIfNull(d.FieldIds);
+            ArgumentNullException.ThrowIfNull(d.RetiredFieldIds);
+            if (d.FieldIds.Overlaps(d.RetiredFieldIds))
+                throw new ArgumentException("a field cannot be both active and retired", nameof(list));
             w.U16((ushort)d.NamespaceId);
             w.U16((ushort)d.SchemaId);
             w.U16((ushort)d.Version);
@@ -214,20 +365,54 @@ public static class SchemaMap
     public static List<SchemaDescriptor> Decode(ReadOnlySpan<byte> payload)
     {
         var r = new Reader(payload.ToArray());
-        int n = (int)r.Varint();
-        var list = new List<SchemaDescriptor>(n);
-        for (int i = 0; i < n; i++)
+        ulong count = r.Varint();
+        if (count > MaxSchemaCount || count > (ulong)(r.Remaining / 9))
+            throw new InvalidDataException("Schema count exceeds the available payload or configured limit.");
+        var list = new List<SchemaDescriptor>((int)count);
+        var keys = new HashSet<(int NamespaceId, int SchemaId, int Version)>();
+        int totalFieldIds = 0;
+        for (int i = 0; i < (int)count; i++)
         {
             int ns = r.U16();
             int sid = r.U16();
             int ver = r.U16();
             int policy = r.U8();
-            int fc = (int)r.Varint();
+            if (!keys.Add((ns, sid, ver)))
+                throw new InvalidDataException("Duplicate schema version in map.");
+
+            ulong fieldCount = r.Varint();
+            if (fieldCount > ushort.MaxValue + 1UL ||
+                fieldCount > (ulong)(r.Remaining / 2) ||
+                (totalFieldIds = checked(totalFieldIds + (int)fieldCount)) > MaxTotalFieldIds)
+                throw new InvalidDataException("Schema field count exceeds the available payload or configured limit.");
             var fields = new HashSet<ushort>();
-            for (int j = 0; j < fc; j++) fields.Add(r.U16());
-            int rc = (int)r.Varint();
+            ushort previousField = 0;
+            for (int j = 0; j < (int)fieldCount; j++)
+            {
+                ushort field = r.U16();
+                if ((j > 0 && field <= previousField) || !fields.Add(field))
+                    throw new InvalidDataException("Schema field IDs must be strictly ordered and unique.");
+                previousField = field;
+            }
+
+            ulong retiredCount = r.Varint();
+            if (retiredCount > ushort.MaxValue + 1UL ||
+                fieldCount + retiredCount > ushort.MaxValue + 1UL ||
+                retiredCount > (ulong)(r.Remaining / 2) ||
+                (totalFieldIds = checked(totalFieldIds + (int)retiredCount)) > MaxTotalFieldIds)
+                throw new InvalidDataException("Schema retired-field count exceeds the available payload or configured limit.");
             var retired = new HashSet<ushort>();
-            for (int j = 0; j < rc; j++) retired.Add(r.U16());
+            ushort previousRetired = 0;
+            for (int j = 0; j < (int)retiredCount; j++)
+            {
+                ushort field = r.U16();
+                if ((j > 0 && field <= previousRetired) || !retired.Add(field))
+                    throw new InvalidDataException("Retired schema field IDs must be strictly ordered and unique.");
+                previousRetired = field;
+            }
+            if (fields.Overlaps(retired))
+                throw new InvalidDataException("A schema field cannot be both active and retired.");
+
             list.Add(new SchemaDescriptor
             {
                 NamespaceId = ns,
@@ -238,6 +423,8 @@ public static class SchemaMap
                 RetiredFieldIds = retired,
             });
         }
+        if (!r.Eof())
+            throw new InvalidDataException("Schema map payload contains trailing bytes.");
         return list;
     }
 

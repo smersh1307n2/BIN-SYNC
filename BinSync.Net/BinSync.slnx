@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/BinSync.Core/BinSync.Core.csproj" />
+    <Project Path="src/BinSync.Storage/BinSync.Storage.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/BinSync.Tests/BinSync.Tests.csproj" />

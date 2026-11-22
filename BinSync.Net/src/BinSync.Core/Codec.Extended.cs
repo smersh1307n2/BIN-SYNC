@@ -30,6 +30,26 @@ public readonly struct Tlv
 /// <summary>Canonical binary codec: ULEB128 varints, little-endian fixed ints, b128, TLV, strings, floats.</summary>
 public static partial class Codec
 {
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false,
+        throwOnInvalidBytes: true);
+
+    internal static byte[] EncodeUtf8(string? value) => StrictUtf8.GetBytes(value ?? string.Empty);
+
+    internal static string DecodeUtf8(ReadOnlySpan<byte> bytes)
+    {
+        // Preserve the existing compatibility rule: strip one leading UTF-8 BOM.
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            bytes = bytes[3..];
+        try
+        {
+            return StrictUtf8.GetString(bytes);
+        }
+        catch (DecoderFallbackException ex)
+        {
+            throw new InvalidDataException("Invalid UTF-8 string.", ex);
+        }
+    }
+
     /// <summary>Canonical LE encode of a signed 64-bit integer (two's complement).</summary>
     public static byte[] EncodeI64(long v)
     {
@@ -95,7 +115,7 @@ public static partial class Codec
     /// <summary>UTF-8 string without BOM: len varint | bytes (§6.1).</summary>
     public static byte[] EncodeString(string s)
     {
-        var utf8 = Encoding.UTF8.GetBytes(s ?? "");
+        var utf8 = EncodeUtf8(s);
         var w = new Writer();
         w.Varint((ulong)utf8.Length).Raw(utf8);
         return w.Value();
@@ -107,10 +127,7 @@ public static partial class Codec
         var r = new Reader(data, pos);
         var bytes = r.Bytes();
         next = r.Pos;
-        // Reject BOM if present as first three bytes of content (spec: no BOM)
-        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
-            return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
-        return Encoding.UTF8.GetString(bytes);
+        return DecodeUtf8(bytes);
     }
 
     /// <summary>
@@ -195,7 +212,7 @@ public partial class Writer
     /// <summary>Append a length-prefixed UTF-8 string.</summary>
     public Writer StringUtf8(string s)
     {
-        var utf8 = Encoding.UTF8.GetBytes(s ?? "");
+        var utf8 = Codec.EncodeUtf8(s);
         Varint((ulong)utf8.Length).Raw(utf8);
         return this;
     }
@@ -230,9 +247,7 @@ public partial class Reader
     public string StringUtf8()
     {
         var bytes = Bytes();
-        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
-            return Encoding.UTF8.GetString(bytes, 3, bytes.Length - 3);
-        return Encoding.UTF8.GetString(bytes);
+        return Codec.DecodeUtf8(bytes);
     }
 
     /// <summary>Append a little-endian IEEE-754 binary64; rejects NaN.</summary>

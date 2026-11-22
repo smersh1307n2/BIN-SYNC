@@ -8,7 +8,14 @@ public sealed partial class Node
     /// When set, callers may use <see cref="VerifyAndApplyBatch(Batch, NodeId, ReadOnlySpan{byte}, byte[])"/> before apply.
     /// Plain <see cref="ApplyBatch"/> does not consult trust (backward compatible).
     /// </summary>
-    public TrustStore? Trust { get; set; }
+    private TrustStore? _trust;
+
+    /// <summary>Optional thread-safe trust store used by signature-gated operations.</summary>
+    public TrustStore? Trust
+    {
+        get { lock (_lockMeta) { ThrowIfDisposed(); return _trust; } }
+        set { lock (_lockMeta) { ThrowIfDisposed(); _trust = value; } }
+    }
 
     /// <summary>
     /// Ensure <see cref="Trust"/> exists (TOFU by default) and return it.
@@ -17,6 +24,7 @@ public sealed partial class Node
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             Trust ??= new TrustStore { DefaultMode = mode };
             return Trust;
         }
@@ -28,50 +36,62 @@ public sealed partial class Node
     public BatchResult VerifyAndApplyBatch(
         Batch batch, NodeId senderPeer, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null)
     {
+        ArgumentNullException.ThrowIfNull(batch);
+        var ownedBatch = CloneBatchForPublicRead(batch);
+        var ownedSignature = signature.ToArray();
+        var ownedCandidateKey = candidatePublicKey?.ToArray();
         BatchResult result;
-        lock (_lockMeta)
+        lock (_lockStorage) lock (_lockOutbox) lock (_lockMeta)
         {
+            ThrowIfDisposed();
             var store = Trust ?? throw new InvalidOperationException("Trust store not configured");
-            store.VerifyBatchOrThrow(batch, signature, candidatePublicKey);
-            // Apply under full gates (trust check already done under Meta)
+            // Keep Node and trust gates through publication: trust replacement, peer
+            // revocation, and the accepted batch have one linearized order.
+            result = store.VerifyBatchAndExecute(
+                ownedBatch,
+                ownedSignature,
+                ownedCandidateKey,
+                () => ApplyBatchInternal(ownedBatch, senderPeer));
         }
-        result = ApplyBatch(batch, senderPeer);
+        if (!result.Duplicate || result.Applied > 0)
+            RaiseBatchApplied(result, senderPeer);
         return result;
     }
-
-    /// <summary>Verify then apply (legacy byte[] sender id).</summary>
-    public BatchResult VerifyAndApplyBatch(
-        Batch batch, byte[] senderPeer, ReadOnlySpan<byte> signature, byte[]? candidatePublicKey = null) =>
-        VerifyAndApplyBatch(batch, NodeId.From(senderPeer), signature, candidatePublicKey);
 
     /// <summary>Pin or pre-share a peer key.</summary>
     public void TrustPeer(NodeId nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared)
     {
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             EnsureTrust(mode == TrustMode.Tofu ? TrustMode.Tofu : mode)
-                .Allow(nodeId.ToArray(), publicKey, mode);
+                .Allow(nodeId, publicKey, mode);
         }
+        RaiseTrustChanged(nodeId, true);
     }
-
-    /// <summary>Pin or pre-share a peer key (legacy byte[] id).</summary>
-    public void TrustPeer(byte[] nodeId, byte[] publicKey, TrustMode mode = TrustMode.PreShared) =>
-        TrustPeer(NodeId.From(nodeId), publicKey, mode);
 
     /// <summary>Revoke a previously trusted peer.</summary>
     public void RevokeTrust(NodeId nodeId)
     {
-        lock (_lockMeta) Trust?.Revoke(nodeId.ToArray());
+        bool revoked;
+        lock (_lockMeta)
+        {
+            ThrowIfDisposed();
+            var store = Trust;
+            revoked = store is not null && store.TryGet(nodeId, out _);
+            store?.Revoke(nodeId);
+        }
+        if (revoked) RaiseTrustChanged(nodeId, false);
     }
-
-    /// <summary>Revoke a previously trusted peer (legacy byte[] id).</summary>
-    public void RevokeTrust(byte[] nodeId) => RevokeTrust(NodeId.From(nodeId));
 
     /// <summary>Persist <see cref="Trust"/> (creating a TOFU store if missing).</summary>
     public void SaveTrust(string path)
     {
         lock (_lockMeta)
+        {
+            ThrowIfDisposed();
             TrustPersistence.Save(EnsureTrust(), path);
+        }
     }
 
     /// <summary>Replace <see cref="Trust"/> with a file previously written by <see cref="SaveTrust"/>.</summary>
@@ -80,6 +100,7 @@ public sealed partial class Node
         var loaded = TrustPersistence.Load(path);
         lock (_lockMeta)
         {
+            ThrowIfDisposed();
             Trust = loaded;
             return Trust;
         }

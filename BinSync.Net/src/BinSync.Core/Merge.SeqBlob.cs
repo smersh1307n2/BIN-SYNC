@@ -1,4 +1,7 @@
 // SEQ_FRACTIONAL (§8.7) and BLOB_REF (§8.8) payload codecs + merge.
+using System.Buffers;
+using System.Text;
+
 namespace BinSync;
 
 /// <summary>
@@ -38,7 +41,7 @@ public static class SeqFractional
     public static Item Decode(byte[] data)
     {
         var r = new Reader(data);
-        return new Item
+        var item = new Item
         {
             ParentId = r.B128(),
             OrderKey = r.StringUtf8(),
@@ -46,6 +49,8 @@ public static class SeqFractional
             Seq = r.U64(),
             Value = r.Bytes(),
         };
+        if (!r.Eof()) throw new InvalidDataException("Trailing bytes after SEQ_FRACTIONAL payload.");
+        return item;
     }
 
     /// <summary>
@@ -54,24 +59,50 @@ public static class SeqFractional
     /// </summary>
     public static int Compare(Item a, Item b)
     {
-        int c = string.CompareOrdinal(
-            Convert.ToHexString(a.ParentId), Convert.ToHexString(b.ParentId));
+        int c = a.ParentId.AsSpan().SequenceCompareTo(b.ParentId);
         if (c != 0) return c;
-        c = string.CompareOrdinal(a.OrderKey ?? "", b.OrderKey ?? "");
+        c = CompareOrderKeyUtf8(a.OrderKey ?? "", b.OrderKey ?? "");
         if (c != 0) return c;
-        c = string.CompareOrdinal(
-            Convert.ToHexString(a.AuthorNodeId), Convert.ToHexString(b.AuthorNodeId));
+        c = a.AuthorNodeId.AsSpan().SequenceCompareTo(b.AuthorNodeId);
         if (c != 0) return c;
         return a.Seq.CompareTo(b.Seq);
+    }
+
+    // UTF-8 lexicographic order is Unicode scalar-value order. Comparing UTF-16
+    // code units with String.CompareOrdinal differs for supplementary characters,
+    // which would make replicas implemented in other languages choose another winner.
+    private static int CompareOrderKeyUtf8(string left, string right)
+    {
+        var a = left.AsSpan();
+        var b = right.AsSpan();
+        while (!a.IsEmpty && !b.IsEmpty)
+        {
+            if (Rune.DecodeFromUtf16(a, out var ar, out int aConsumed) != OperationStatus.Done ||
+                Rune.DecodeFromUtf16(b, out var br, out int bConsumed) != OperationStatus.Done)
+                throw new ArgumentException("SEQ_FRACTIONAL orderKey must contain valid Unicode scalar values.");
+
+            int c = ar.Value.CompareTo(br.Value);
+            if (c != 0) return c;
+            a = a[aConsumed..];
+            b = b[bConsumed..];
+        }
+        return a.IsEmpty ? (b.IsEmpty ? 0 : -1) : 1;
     }
 
     /// <summary>Winner is the item that ranks higher in the total order (or equal → keep either).</summary>
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
-        if (local is null || local.Length == 0) return remote;
+        if (local is null || local.Length == 0)
+        {
+            _ = Decode(remote); // Validate even when the merge has no local operand.
+            return remote;
+        }
         var a = Decode(local);
         var b = Decode(remote);
-        return Compare(b, a) > 0 ? remote : local;
+        int order = Compare(b, a);
+        if (order == 0 && !a.Value.AsSpan().SequenceEqual(b.Value))
+            throw new InvalidDataException("Conflicting SEQ_FRACTIONAL values share the same item identity.");
+        return order > 0 ? remote : local;
     }
 }
 
@@ -112,13 +143,15 @@ public static class BlobRef
     public static Descriptor Decode(byte[] data)
     {
         var r = new Reader(data);
-        return new Descriptor
+        var descriptor = new Descriptor
         {
             BlobId = r.B128(),
             Size = r.U64(),
             ContentType = r.StringUtf8(),
             Hash = r.B256(),
         };
+        if (!r.Eof()) throw new InvalidDataException("Trailing bytes after BLOB_REF payload.");
+        return descriptor;
     }
 
     /// <summary>
@@ -127,13 +160,22 @@ public static class BlobRef
     /// </summary>
     public static byte[] Merge(byte[]? local, byte[] remote)
     {
-        if (local is null || local.Length == 0) return remote;
+        if (local is null || local.Length == 0)
+        {
+            _ = Decode(remote); // Validate even when the merge has no local operand.
+            return remote;
+        }
         var a = Decode(local);
         var b = Decode(remote);
-        int cmp = string.CompareOrdinal(
-            Convert.ToHexString(a.BlobId), Convert.ToHexString(b.BlobId));
+        int cmp = a.BlobId.AsSpan().SequenceCompareTo(b.BlobId);
         if (cmp == 0)
-            return local; // identical identity — no rewrite
+        {
+            if (a.Size != b.Size ||
+                !string.Equals(a.ContentType, b.ContentType, StringComparison.Ordinal) ||
+                !a.Hash.AsSpan().SequenceEqual(b.Hash))
+                throw new InvalidDataException("Conflicting BLOB_REF descriptors share the same blobId.");
+            return local; // identical immutable descriptor — no rewrite
+        }
         return cmp < 0 ? remote : local;
     }
 }

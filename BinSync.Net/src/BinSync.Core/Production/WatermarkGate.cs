@@ -10,7 +10,7 @@ public static class WatermarkGate
     /// <paramref name="peerWatermarkWall"/> is strictly below
     /// <paramref name="localSafeWatermark"/>. A zero local watermark disables the check.
     /// </summary>
-    public static void RequireCurrent(ulong peerWatermarkWall, ulong localSafeWatermark, byte[]? batchId = null)
+    public static void RequireCurrent(ulong peerWatermarkWall, ulong localSafeWatermark, BatchId? batchId = null)
     {
         if (localSafeWatermark != 0 && peerWatermarkWall < localSafeWatermark)
             throw new SyncException("OUTDATED_WATERMARK", batchId);

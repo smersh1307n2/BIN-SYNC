@@ -1,4 +1,5 @@
 // §6 codec extensions: TLV, strings, floats, signed, field canonicalization.
+using System.Text;
 using BinSync;
 using Xunit;
 
@@ -24,6 +25,16 @@ public class CodecExtendedTests
         // \x80\x00 is overlong encoding of 0
         Assert.ThrowsAny<InvalidVarintException>(() =>
             Codec.DecodeVarint(new byte[] { 0x80, 0x00 }));
+    }
+
+    [Fact]
+    public void Reader_rejects_oversized_length_prefixes_before_allocating()
+    {
+        byte[] oversizedLength = Codec.EncodeVarint(ulong.MaxValue);
+        Assert.Throws<EndOfStreamException>(() => new Reader(oversizedLength).Bytes());
+        Assert.Throws<EndOfStreamException>(() => new Reader(oversizedLength).BytesSpan());
+        Assert.Throws<EndOfStreamException>(() => new Reader(oversizedLength).BytesMemory());
+        Assert.Throws<InvalidVarintException>(() => Codec.DecodeVarint(new byte[] { 0 }, -1));
     }
 
     [Fact]
@@ -59,6 +70,26 @@ public class CodecExtendedTests
         var enc = Codec.EncodeString(s);
         var dec = Codec.DecodeString(enc, 0, out _);
         Assert.Equal(s, dec);
+    }
+
+    [Fact]
+    public void String_invalid_utf8_is_rejected_instead_of_replaced()
+    {
+        byte[] invalidUtf8 = { 0xC0, 0xAF };
+        var writer = new Writer();
+        writer.Bytes(invalidUtf8);
+        byte[] encoded = writer.Value();
+
+        Assert.Throws<InvalidDataException>(() => Codec.DecodeString(encoded, 0, out _));
+        Assert.Throws<InvalidDataException>(() => new Reader(encoded).StringUtf8());
+    }
+
+    [Fact]
+    public void String_encoder_rejects_unpaired_surrogates()
+    {
+        string invalidUtf16 = new string((char)0xD800, 1);
+        Assert.Throws<EncoderFallbackException>(() => Codec.EncodeString(invalidUtf16));
+        Assert.Throws<EncoderFallbackException>(() => new Writer().StringUtf8(invalidUtf16));
     }
 
     [Fact]

@@ -101,19 +101,18 @@ public class FuzzTests
 
             using (var wal = Wal.Open(walPath))
             {
+                live.AttachWal(wal);
                 for (int i = 0; i < N; i++)
                 {
                     var rid = Author(1000 + i);
                     ushort fid = (ushort)(0x100 + (i % 16));
                     var value = RandBytes(rng, 12);
                     var hlc = new Hlc((ulong)(1000 + i), (uint)(i % 7));
-                    var author = Author(rng.Next(1, 50));
-                    live.ApplyRemoteField(1, rid, fid, value, hlc, author);
-                    wal.AppendFieldWrite(1, rid, fid, value, hlc, author);
+                    live.WriteField(1, rid, fid, value, hlc);
                 }
             }
 
-            var recovered = new Node(Author(2), epoch: 1);
+            var recovered = new Node(Author(1), epoch: 1);
             int applied = Wal.ReplayFile(walPath, recovered);
             Assert.Equal(N, applied);
 
@@ -140,7 +139,6 @@ public class FuzzTests
         }
     }
 
-    /// <summary>Codec: random Bytes + B128 round-trips.</summary>
     [Fact]
     public void Fuzz_Codec_bytes_and_b128_roundtrip()
     {

@@ -31,6 +31,26 @@ public class MergeCrdtTests
     }
 
     [Fact]
+    public void First_crdt_value_is_validated_when_local_state_is_missing()
+    {
+        var actor = Author(3);
+        var validPayloads = new (MergePolicy Policy, byte[] Payload)[]
+        {
+            (MergePolicy.CounterG, CounterG.Encode(new Dictionary<byte[], ulong>(BytesEq.Instance) { [actor] = 1 })),
+            (MergePolicy.CounterPn, CounterPn.Encode(
+                new Dictionary<byte[], ulong>(BytesEq.Instance) { [actor] = 1 },
+                new Dictionary<byte[], ulong>(BytesEq.Instance))),
+            (MergePolicy.SetOr, SetOr.Encode(Array.Empty<SetOr.Add>(), Array.Empty<SetOr.Dot>())),
+            (MergePolicy.SeqFractional, SeqFractional.Encode(new SeqFractional.Item { ParentId = Author(0), AuthorNodeId = actor, Seq = 1 })),
+            (MergePolicy.BlobRef, BlobRef.Encode(new BlobRef.Descriptor { BlobId = actor, Hash = new byte[32] })),
+        };
+
+        foreach (var (policy, payload) in validPayloads)
+            Assert.Throws<InvalidDataException>(() =>
+                Merge.MergeFieldWithPolicy(null, Fs(payload.Concat(new byte[] { 0 }).ToArray(), 1, 3), policy));
+    }
+
+    [Fact]
     public void CounterG_field_merge_policy()
     {
         var a = Author(1);
@@ -84,6 +104,21 @@ public class MergeCrdtTests
     }
 
     [Fact]
+    public void SetOr_merge_rejects_same_add_dot_for_different_elements_across_replicas()
+    {
+        var actor = Author(7);
+        var local = SetOr.Encode(
+            new[] { new SetOr.Add { Element = new byte[] { 0xA1 }, Actor = actor, Seq = 42 } },
+            Array.Empty<SetOr.Dot>());
+        var remote = SetOr.Encode(
+            new[] { new SetOr.Add { Element = new byte[] { 0xB2 }, Actor = actor, Seq = 42 } },
+            Array.Empty<SetOr.Dot>());
+
+        Assert.Throws<InvalidDataException>(() => SetOr.Merge(local, remote));
+        Assert.Throws<InvalidDataException>(() => SetOr.Merge(remote, local));
+    }
+
+    [Fact]
     public void SetOr_merge_unions_adds_and_removes()
     {
         var a1 = Author(1);
@@ -119,6 +154,109 @@ public class MergeCrdtTests
         Assert.True(changed);
         Assert.Equal(5UL, w.Timestamp.Wall);
         Assert.Equal(new byte[] { 0xAA }, w.Value);
+    }
+
+    [Fact]
+    public void Counter_decoders_reject_duplicate_unsorted_and_trailing_entries()
+    {
+        var a = Author(1);
+        var b = Author(2);
+        var duplicate = new Writer().Varint(2).B128(a).U64(1).B128(a).U64(2).Value();
+        Assert.Throws<InvalidDataException>(() => CounterG.Decode(duplicate));
+
+        var unsorted = new Writer().Varint(2).B128(b).U64(1).B128(a).U64(2).Value();
+        Assert.Throws<InvalidDataException>(() => CounterG.Decode(unsorted));
+
+        var pnDuplicate = new Writer().Varint(2)
+            .B128(a).U64(1).B128(a).U64(2)
+            .Varint(0).Value();
+        Assert.Throws<InvalidDataException>(() => CounterPn.Decode(pnDuplicate));
+
+        var trailing = CounterG.Encode(new Dictionary<byte[], ulong>(BytesEq.Instance) { [a] = 1 })
+            .Concat(new byte[] { 0 }).ToArray();
+        Assert.Throws<InvalidDataException>(() => CounterG.Decode(trailing));
+    }
+
+    [Fact]
+    public void Counter_decoders_reject_impossible_counts_before_allocation()
+    {
+        var huge = new Writer().Varint(ulong.MaxValue).Value();
+        Assert.Throws<InvalidDataException>(() => CounterG.Decode(huge));
+        Assert.Throws<InvalidDataException>(() => CounterPn.Decode(huge));
+        Assert.Throws<InvalidDataException>(() => SetOr.Decode(huge));
+    }
+
+    [Fact]
+    public void Counter_totals_reject_signed_and_unsigned_overflow()
+    {
+        var a = Author(1);
+        var b = Author(2);
+        var growOnly = CounterG.Encode(new Dictionary<byte[], ulong>(BytesEq.Instance)
+        {
+            [a] = ulong.MaxValue,
+            [b] = 1,
+        });
+        Assert.Throws<OverflowException>(() => CounterG.Total(growOnly));
+
+        var pn = CounterPn.Encode(
+            new Dictionary<byte[], ulong>(BytesEq.Instance) { [a] = (ulong)long.MaxValue + 1 },
+            new Dictionary<byte[], ulong>(BytesEq.Instance));
+        Assert.Throws<OverflowException>(() => CounterPn.Value(pn));
+    }
+
+    [Fact]
+    public void CounterPn_value_allows_large_positive_and_negative_totals_to_cancel()
+    {
+        var a = Author(1);
+        var b = Author(2);
+        var payload = CounterPn.Encode(
+            new Dictionary<byte[], ulong>(BytesEq.Instance)
+            {
+                [a] = ulong.MaxValue,
+                [b] = 17,
+            },
+            new Dictionary<byte[], ulong>(BytesEq.Instance)
+            {
+                [a] = ulong.MaxValue,
+                [b] = 12,
+            });
+
+        Assert.Equal(5L, CounterPn.Value(payload));
+    }
+
+    [Fact]
+    public void SetOr_decoder_rejects_duplicate_dots_and_trailing_bytes()
+    {
+        var actor = Author(1);
+        var duplicateAddDot = new Writer().Varint(2)
+            .Bytes(new byte[] { 1 }).B128(actor).U64(7)
+            .Bytes(new byte[] { 2 }).B128(actor).U64(7)
+            .Varint(0).Value();
+        Assert.Throws<InvalidDataException>(() => SetOr.Decode(duplicateAddDot));
+
+        var duplicateRemove = new Writer().Varint(0).Varint(2)
+            .B128(actor).U64(7).B128(actor).U64(7).Value();
+        Assert.Throws<InvalidDataException>(() => SetOr.Decode(duplicateRemove));
+
+        var valid = SetOr.Encode(Array.Empty<SetOr.Add>(), Array.Empty<SetOr.Dot>());
+        Assert.Throws<InvalidDataException>(() => SetOr.Decode(valid.Concat(new byte[] { 0 }).ToArray()));
+    }
+
+    [Fact]
+    public void Unknown_merge_policy_is_rejected_by_helpers_and_registry()
+    {
+        var local = Fs(new byte[] { 1 }, wall: 1, authorTail: 1);
+        var remote = Fs(new byte[] { 2 }, wall: 2, authorTail: 2);
+        var unknown = (MergePolicy)0xFF;
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Merge.MergeFieldWithPolicy(null, remote, unknown));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Merge.MergeFieldWithPolicy(local, remote, unknown));
+
+        var registry = new MergePolicyRegistry();
+        Assert.Throws<ArgumentOutOfRangeException>(() => registry.Set(1, 0x100, unknown));
+        Assert.Equal(MergePolicy.LwwField, registry.Get(1, 0x100));
     }
 
     [Fact]

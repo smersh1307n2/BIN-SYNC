@@ -49,10 +49,15 @@ public class ScenariosB
         Transport.MakeSession(a, relay); Transport.MakeSession(relay, c); Transport.MakeSession(a, c);
         a.WriteField(NS, Rid(1), 0x0100, Asc("from-A"), new Hlc(777, 0));
         c.WriteField(NS, Rid(1), 0x0100, Asc("from-C"), new Hlc(777, 0));
+        BatchId originalChangeId = Assert.Single(a.Outbox[NS]).ChangeId;
         Transport.DeliverBatch(a, relay, NS);   // relay stores under ORIGINAL author A [И4]
         var recR = relay.Storage[NS][Rid(1)];
         Assert.Equal(Fix.Nid(1), recR.State[0x0100].AuthorNodeId);  // authorship preserved [А1]
+        Assert.Equal(originalChangeId, Assert.Single(relay.Outbox[NS]).ChangeId);
         Transport.DeliverBatch(relay, c, NS);   // C has own op with same time, larger author → C wins
+        // A's operation loses the LWW comparison on C, but first-seen provenance
+        // still makes that immutable ChangeId relay-eligible.
+        Assert.Contains(originalChangeId, c.Outbox[NS].Select(entry => entry.ChangeId));
         var recC = c.Storage[NS][Rid(1)];
         Assert.Equal(Fix.Nid(3), recC.State[0x0100].AuthorNodeId);
         Transport.SyncRound(relay, c, NS);
@@ -90,6 +95,8 @@ public class ScenariosB
                 NamespaceId = e.NamespaceId,
                 Seq = e.Seq,
                 ChangeId = e.ChangeId,
+                OriginAuthorEpoch = e.OriginAuthorEpoch,
+                OriginSequence = e.OriginSequence,
                 RecordId = e.RecordId,
                 OpKind = e.OpKind,
                 Payload = Ops.EncodeOp(obj),
@@ -193,7 +200,7 @@ public class ScenariosB
         for (long i = 1; i <= 3; i++)
             a.WriteField(NS, Rid(i), 0x0100, Asc($"s{i}"), new Hlc((ulong)(100 + i), 0));
         foreach (var batch in a.BuildSnapshot(NS))
-            b.ApplySnapshot(batch, a.NodeId);
+            b.ApplySnapshot(batch);
         a.WriteField(NS, Rid(4), 0x0100, Asc("d4"), new Hlc(110, 0));
         a.WriteField(NS, Rid(5), 0x0100, Asc("d5"), new Hlc(111, 0));
         Transport.DeliverBatch(a, b, NS);
@@ -361,6 +368,36 @@ public class ScenariosB
     }
 
     [Fact]
+    public void Delta_batch_prefers_lowest_pending_sequence_across_eligible_author_streams()
+    {
+        var a = Fix.MakeNode(51);
+        var b = Fix.MakeNode(52);
+        var c = Fix.MakeNode(53);
+        Transport.MakeSession(a, b);
+        Transport.MakeSession(a, c);
+
+        // Advance A's stream for C so its next pending sequence is 5.
+        for (int i = 0; i < 4; i++)
+            Assert.True(a.WriteField(NS, Rid((byte)(0x51 + i)), 0x0100,
+                new[] { (byte)(0xA0 + i) }, new Hlc((ulong)(100 + i), 0)));
+        Transport.SyncRound(a, c, NS);
+        Assert.True(a.WriteField(NS, Rid(0x60), 0x0100,
+            new byte[] { 0xA5 }, new Hlc(200, 0)));
+
+        // A later-arriving author stream begins at sequence 1. It must be selected
+        // ahead of A's contiguous sequence 5, regardless of Outbox insertion order.
+        Assert.True(b.WriteField(NS, Rid(0x61), 0x0100,
+            new byte[] { 0xB1 }, new Hlc(201, 0)));
+        Assert.NotNull(Transport.DeliverBatch(b, a, NS));
+
+        Batch? selected = a.CreateDeltaBatch(c.NodeId, NS);
+        Assert.NotNull(selected);
+        Assert.NotEmpty(selected!.Entries);
+        Assert.All(selected.Entries, entry => Assert.Equal(b.NodeId, entry.AuthorNodeId));
+        Assert.Equal(1L, selected.CursorStart);
+    }
+
+    [Fact]
     public void Scenario37_RingEchoStop()
     {
         // §17.37 / Ш2, С2, П4 — ring A→B→V→A: A's outbox size stays exactly 1.
@@ -451,6 +488,59 @@ public class ScenariosB
         Assert.Equal(100, accs[0].Count);
         Assert.Single(accs.Select(a => a.Xor).Distinct());
         Assert.Single(accs.Select(a => a.Sum).Distinct());
+    }
+
+    [Fact]
+    public void Scenario43_FourNodeOriginRelayAndAlternateRouteDedup()
+    {
+        var a = Fix.MakeNode(201);
+        var b = Fix.MakeNode(202);
+        var c = Fix.MakeNode(203);
+        var d = Fix.MakeNode(204);
+
+        Transport.MakeSession(a, b);
+        Transport.MakeSession(b, c);
+        Transport.MakeSession(c, d);
+        Transport.MakeSession(b, d); // Pre-register the alternate relay route before publication.
+
+        Assert.True(a.WriteField(NS, Rid(1), 0x0100, Asc("origin-one"), new Hlc(100, 0)));
+        Assert.True(a.WriteField(NS, Rid(2), 0x0100, Asc("origin-two"), new Hlc(101, 0)));
+        var originByChangeId = a.Outbox[NS].ToDictionary(
+            entry => entry.ChangeId,
+            entry => (entry.AuthorNodeId, entry.OriginAuthorEpoch, entry.OriginSequence));
+        Assert.Equal(2, originByChangeId.Count);
+
+        // Four-node chain: only A knows the original operations at publication time.
+        Assert.NotNull(Transport.DeliverBatch(a, b, NS));
+        Assert.NotNull(Transport.DeliverBatch(b, c, NS));
+        Assert.NotNull(Transport.DeliverBatch(c, d, NS));
+
+        foreach (var relay in new[] { b, c, d })
+        {
+            var relayed = relay.Outbox[NS].Where(entry => originByChangeId.ContainsKey(entry.ChangeId)).ToArray();
+            Assert.Equal(2, relayed.Length);
+            Assert.Equal(2, relayed.Select(entry => entry.ChangeId).Distinct().Count());
+            foreach (var entry in relayed)
+                Assert.Equal(originByChangeId[entry.ChangeId],
+                    (entry.AuthorNodeId, entry.OriginAuthorEpoch, entry.OriginSequence));
+        }
+
+        foreach (var recordId in new[] { Rid(1), Rid(2) })
+        {
+            Assert.Equal(a.NodeId, b.Storage[NS][recordId].State[0x0100].AuthorNodeId);
+            Assert.Equal(a.NodeId, c.Storage[NS][recordId].State[0x0100].AuthorNodeId);
+            Assert.Equal(a.NodeId, d.Storage[NS][recordId].State[0x0100].AuthorNodeId);
+        }
+
+        // The same operations now arrive from B after already arriving via C.
+        // This is a distinct relay route; D must not enqueue a second copy.
+        Assert.NotNull(Transport.DeliverBatch(b, d, NS));
+        var finalRelay = d.Outbox[NS].Where(entry => originByChangeId.ContainsKey(entry.ChangeId)).ToArray();
+        Assert.Equal(2, finalRelay.Length);
+        Assert.Equal(2, finalRelay.Select(entry => entry.ChangeId).Distinct().Count());
+        foreach (var entry in finalRelay)
+            Assert.Equal(originByChangeId[entry.ChangeId],
+                (entry.AuthorNodeId, entry.OriginAuthorEpoch, entry.OriginSequence));
     }
 
     [Fact]

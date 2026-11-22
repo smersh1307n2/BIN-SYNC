@@ -6,11 +6,11 @@ namespace BinSync.Tests;
 
 public class KeyRotationTests
 {
-    static byte[] Id(byte b)
+    static NodeId Id(byte b)
     {
         var a = new byte[16];
         a[15] = b;
-        return a;
+        return NodeId.From(a);
     }
 
     [Fact]
@@ -20,6 +20,10 @@ public class KeyRotationTests
         var nodeId = Id(0x10);
         var store = new KeyEpochStore();
         store.TrustIdentity(nodeId, pub);
+        Assert.True(store.TryGetIdentity(nodeId, out var exposedKey));
+        exposedKey[0] ^= 0xFF;
+        Assert.True(store.TryGetIdentity(nodeId, out var storedKey));
+        Assert.Equal(pub, storedKey);
 
         Assert.Equal(0, store.GetEpoch(1, nodeId));
 
@@ -30,6 +34,24 @@ public class KeyRotationTests
         var n2 = KeyRotation.Create(1, 1, 2, nodeId, seed);
         Assert.True(store.TryApply(n2));
         Assert.Equal(2, store.GetEpoch(1, nodeId));
+    }
+
+    [Fact]
+    public void Key_epoch_store_rejects_zero_identity_bootstrap()
+    {
+        var (_, publicKey) = BatchSignature.GenerateKeyPair();
+        var store = new KeyEpochStore();
+
+        Assert.Throws<ArgumentException>(() => store.TrustIdentity(default, publicKey));
+        Assert.Throws<ArgumentException>(() => store.SeedEpoch(1, default, 1));
+        Assert.False(store.TryApply(new KeyRotationNotice
+        {
+            NamespaceId = 1,
+            OldKeyEpoch = 0,
+            NewKeyEpoch = 1,
+            NodeId = default,
+            Proof = new byte[BatchSignature.SignatureSize],
+        }));
     }
 
     [Fact]
@@ -82,6 +104,47 @@ public class KeyRotationTests
     }
 
     [Fact]
+    public void KeyRotation_rejects_malformed_proof_lengths_and_trailing_bytes()
+    {
+        var (seed, _) = BatchSignature.GenerateKeyPair();
+        var notice = KeyRotation.Create(1, 0, 1, Id(6), seed);
+        var payload = KeyRotation.Encode(notice);
+        Assert.Throws<InvalidDataException>(() => KeyRotation.Decode(payload.Append((byte)0).ToArray()));
+
+        var wrongLength = payload.ToArray();
+        wrongLength[22] = 63;
+        wrongLength[23] = 0;
+        Assert.Throws<InvalidDataException>(() => KeyRotation.Decode(wrongLength));
+
+        var invalidNotice = new KeyRotationNotice
+        {
+            NamespaceId = 1,
+            OldKeyEpoch = 0,
+            NewKeyEpoch = 1,
+            NodeId = Id(6),
+            Proof = new byte[63],
+        };
+        Assert.Throws<ArgumentException>(() => KeyRotation.Encode(invalidNotice));
+    }
+
+    [Fact]
+    public void Node_ApplyKeyRotation_RaisesDetachedNotice()
+    {
+        var (seed, pub) = BatchSignature.GenerateKeyPair();
+        var nodeId = Id(7);
+        var store = new KeyEpochStore();
+        store.TrustIdentity(nodeId, pub);
+        var notice = KeyRotation.Create(1, 0, 1, nodeId, seed);
+        var originalProof = notice.Proof.ToArray();
+        using var node = Fix.MakeNode(114);
+        node.KeyRotationApplied += applied => applied.Proof[0] ^= 0xFF;
+
+        Assert.True(node.ApplyKeyRotation(notice, store));
+        Assert.Equal(originalProof, notice.Proof);
+        Assert.Equal(1, store.GetEpoch(1, nodeId));
+    }
+
+    [Fact]
     public async Task Tcp_ExchangeKeyRotation_advances_peer_epoch()
     {
         var (seedA, pubA) = BatchSignature.GenerateKeyPair();
@@ -103,7 +166,7 @@ public class KeyRotationTests
 
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(nodeB);
-        await using var client = await TcpSyncSession.ConnectAsync(nodeA, "127.0.0.1", listener.Port);
+        await using var client = await TcpSync.ConnectAsync(nodeA, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
         // Initiator (A) sends its rotation first; acceptor (B) replies with its own.
@@ -125,22 +188,81 @@ public class KeyRotationTests
     }
 
     [Fact]
-    public async Task Tcp_KEY_ROTATION_frame_rejected_when_type_wrong()
+    public async Task Tcp_KEY_ROTATION_wait_preserves_other_frame_types_for_their_receivers()
     {
         var a = Fix.MakeNode(112);
         var b = Fix.MakeNode(113);
+        var (seedA, pubA) = BatchSignature.GenerateKeyPair();
+        var idA = Id(0xA1);
+
+        var store = new KeyEpochStore();
+        store.TrustIdentity(idA, pubA);
+        var notice = KeyRotation.Create(1, 0, 1, idA, seedA);
+
         await using var listener = TcpSyncListener.Start();
         var accept = listener.AcceptAsync(b);
-        await using var client = await TcpSyncSession.ConnectAsync(a, "127.0.0.1", listener.Port);
+        await using var client = await TcpSync.ConnectAsync(a, "127.0.0.1", listener.Port);
         await using var server = await accept;
 
-        // Send a PING instead of KEY_ROTATION
-        var ping = FrameCodec.BuildFrame(0x0F, 0, 1, Array.Empty<byte>());
-        // Use reflection-free path: send via public Push won't work; use Receive expecting KEY_ROTATION
-        // Push raw through a second connection pattern — send GC then expect KEY_ROTATION fail on peer
+        // A valid GC_NOTICE must not be consumed by the KEY_ROTATION waiter.
         await client.SendGcNoticeAsync(a, 1);
-        var store = new KeyEpochStore();
-        await Assert.ThrowsAsync<FrameException>(async () =>
-            await server.ReceiveKeyRotationAsync(store));
+        var keyRotationTask = server.ReceiveKeyRotationAsync(store);
+
+        await client.SendKeyRotationAsync(notice);
+        Assert.True(await keyRotationTask.WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.Equal(1, store.GetEpoch(1, idA));
+
+        // The earlier unrelated frame remains queued and is delivered to its own receiver.
+        _ = await server.ReceiveGcNoticeAsync(b).WaitAsync(TimeSpan.FromSeconds(3));
     }
+    [Fact]
+    public async Task Pipe_KEY_ROTATION_rejects_namespace_stream_mismatch_without_advancing_epoch()
+    {
+        using var lower = Fix.MakeNode(121);
+        using var higher = Fix.MakeNode(122);
+        var (toLower, toHigher) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(higher, toHigher);
+        await using var client = await SyncSession.ConnectAsync(lower, toLower);
+        await using var server = await acceptTask;
+
+        var (seed, publicKey) = BatchSignature.GenerateKeyPair();
+        var publisher = Id(0xC1);
+        var store = new KeyEpochStore();
+        store.TrustIdentity(publisher, publicKey);
+        var notice = KeyRotation.Create(1, 0, 1, publisher, seed);
+        byte[] frame = FrameCodec.BuildFrame(KeyRotation.FrameType,
+            0x0001_0002u, 17, KeyRotation.Encode(notice));
+
+        var receive = server.ReceiveKeyRotationAsync(store);
+        await toLower.SendAsync(frame);
+
+        await Assert.ThrowsAsync<FrameException>(() => receive);
+        Assert.Equal(0, store.GetEpoch(1, publisher));
+    }
+
+    [Fact]
+    public async Task Pipe_KEY_ROTATION_rejects_nonzero_flags_without_advancing_epoch()
+    {
+        using var lower = Fix.MakeNode(123);
+        using var higher = Fix.MakeNode(124);
+        var (toLower, toHigher) = PipeTransport.CreatePair();
+        var acceptTask = SyncSession.AcceptAsync(higher, toHigher);
+        await using var client = await SyncSession.ConnectAsync(lower, toLower);
+        await using var server = await acceptTask;
+
+        var (seed, publicKey) = BatchSignature.GenerateKeyPair();
+        var publisher = Id(0xC2);
+        var store = new KeyEpochStore();
+        store.TrustIdentity(publisher, publicKey);
+        var notice = KeyRotation.Create(1, 0, 1, publisher, seed);
+        byte[] frame = FrameCodec.BuildFrame(KeyRotation.FrameType,
+            0x0001_0001u, 17, KeyRotation.Encode(notice), flags: Frames.FLAG_SIGNED);
+
+        var receive = server.ReceiveKeyRotationAsync(store);
+        await toLower.SendAsync(frame);
+
+        await Assert.ThrowsAsync<FrameException>(() => receive);
+        Assert.Equal(0, store.GetEpoch(1, publisher));
+    }
+
 }
