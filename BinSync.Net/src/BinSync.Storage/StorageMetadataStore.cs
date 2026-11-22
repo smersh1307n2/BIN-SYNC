@@ -4096,24 +4096,40 @@ private bool ValidateIncomingBatchForStaging(
             var rosterKey = new InterestedPeerKey(namespaceId, peer, peerEpoch);
             if (current.InterestedPeers.Contains(rosterKey)) return;
 
-            var candidateStreams = current.OutboundHighWatermarks.Keys
-                .Where(key => key.NamespaceId == namespaceId && key.Author != peer)
-                .Select(key => new PeerStreamKey(peer, peerEpoch, namespaceId, key.Author))
-                .Concat(current.RelayHighWatermarks.Keys
-                    .Where(key => key.NamespaceId == namespaceId && key.Author != peer)
-                    .Select(key => new PeerStreamKey(peer, peerEpoch, namespaceId, key.Author)))
-                .Distinct()
-                .ToArray();
-            var streamKeys = candidateStreams.Where(key => !current.PeerStreams.ContainsKey(key)).ToArray();
-            var requiredKeys = candidateStreams.Where(key => !current.RequiredPeerStreams.Contains(key)).ToArray();
-            var writes = new List<(byte[] Key, byte[] Value)>(1 + streamKeys.Length + requiredKeys.Length);
-            writes.Add((EncodeInterestedPeerKey(partitionKey, rosterKey), Array.Empty<byte>()));
-            foreach (var key in streamKeys)
-                writes.Add((EncodePeerStreamKey(partitionKey, key), EncodePeerStreamState(EmptyPeerStreamValue())));
-            foreach (var key in requiredKeys)
-                writes.Add((EncodeRequiredPeerStreamKey(partitionKey, key), Array.Empty<byte>()));
+            // Keep the durable write set bounded to the rows that actually need
+            // insertion. Avoid LINQ's candidate/stream/required arrays: on a large
+            // namespace they duplicate the author roster several times before the
+            // single atomic Storage batch is built.
+            var seen = new HashSet<PeerStreamKey>();
+            var writes = new List<(byte[] Key, byte[] Value)>
+            {
+                (EncodeInterestedPeerKey(partitionKey, rosterKey), Array.Empty<byte>())
+            };
+
+            foreach (var key in current.OutboundHighWatermarks.Keys)
+            {
+                if (key.NamespaceId == namespaceId && key.Author != peer)
+                    AddCandidate(key.Author);
+            }
+            foreach (var key in current.RelayHighWatermarks.Keys)
+            {
+                if (key.NamespaceId == namespaceId && key.Author != peer)
+                    AddCandidate(key.Author);
+            }
 
             CommitPeerMetadataDelta(partitionKey, current, writes, Array.Empty<byte[]>(), static () => { });
+
+            void AddCandidate(NodeId author)
+            {
+                var key = new PeerStreamKey(peer, peerEpoch, namespaceId, author);
+                if (!seen.Add(key))
+                    return;
+                if (!current.PeerStreams.ContainsKey(key))
+                    writes.Add((EncodePeerStreamKey(partitionKey, key),
+                        EncodePeerStreamState(EmptyPeerStreamValue())));
+                if (!current.RequiredPeerStreams.Contains(key))
+                    writes.Add((EncodeRequiredPeerStreamKey(partitionKey, key), Array.Empty<byte>()));
+            }
         }
     }
 
