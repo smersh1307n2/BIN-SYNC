@@ -1,5 +1,12 @@
 ## Unreleased
 
+### v3.1 protocol and Host GC activation — 2026-11-22
+
+- Closed the mandatory v3.1 signed control-plane implementation and exact-head conformance gate: NRS2, OFR2, RCP2, FRA2, negotiated capability dependencies, durable state and FULL_REPLACE lifecycle. Exact validated code HEAD: `1ef023277240114711e5a7308fab102dd5235503`; BinSync.Net Linux/Windows, signed vectors, fuzz/lab and FLD cross-repository Host adapter passed.
+- Enabled Receipt, ChangeId and Tombstone GC in the executable reference Host's isolated Test mode through durable staged policy bootstrap; added the OIDC operator mode with HTTPS/JWT issuer/audience/lifetime validation and an explicit subject allowlist. Test-only `/admin/*` endpoints are absent from OIDC mode; fresh-store GC bootstrap there requires explicit opt-in.
+- Host lifecycle passed 7/7 on Ubuntu and Windows; ChangeId Stage 1 canary passed on both OSes. Stage 2–4 canaries remain recorded in Roadmap v3 §1.184. Composition/library defaults remain fail-closed; Ghost GC remains excluded.
+- This is not a tagged product release. Peer transport authentication/encryption and pinned TrustStore provisioning, independent offline-backup anti-rollback authority, Windows hardware power-loss qualification, representative production retention/scale qualification, bounded-memory Storage productization and stable Host library packaging remain release gates. See `docs/PRODUCTION-STATUS.md`.
+
 ## Unreleased — v3.1 C-pass
 
 - Added the typed, scope/local-replica/namespace/GC-store/trust-bound `IFullReplaceCommitLease` contract and made `StorageFullReplaceReceiver` reject ordinary `IDisposable` guards or a lease for another namespace. `StorageSyncCoordinator.AcquireFullReplaceCommitGuard` composes the Metadata Store PendingApply/reservation proof with the Node, host FLD/WAL and provider gates; the sample FLD host exposes the required factory.
