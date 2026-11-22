@@ -360,3 +360,63 @@ public class MetadataStoreMillionRowBench
         return bytes;
     }
 }
+
+
+/// <summary>
+/// Isolates peer registration cost as the number of distinct author streams grows.
+/// This exposes temporary candidate/stream arrays that payload-count benchmarks do
+/// not exercise. Durable seeding is excluded from the measured invocation.
+/// </summary>
+[MemoryDiagnoser]
+[InvocationCount(1)]
+[WarmupCount(1)]
+[IterationCount(5)]
+[HideColumns("Error", "StdDev", "Median", "RatioSD")]
+public class MetadataPeerRegistrationAuthorScaleBench
+{
+    private const string Scope = "metadata-peer-author-scale-bench";
+    private const int NamespaceId = 1;
+    private static readonly NodeId Local = NodeId.From(IdBytes(1));
+    private StorageMetadataStore _store = null!;
+
+    [Params(1, 16, 64, 256)]
+    public int AuthorStreams { get; set; }
+
+    [IterationSetup]
+    public void Setup()
+    {
+        string directory = Path.Combine(Path.GetTempPath(),
+            "binsync-metadata-peer-author-scale-" + Guid.NewGuid().ToString("N"));
+        _store = new StorageMetadataStore(directory, 706, deleteOnDispose: true);
+        for (int i = 0; i < AuthorStreams; i++)
+        {
+            byte[] identity = IdBytes(10_000_000L + i);
+            var operation = new MetadataFrozenOperation
+            {
+                ChangeId = BatchId.From(identity),
+                Fingerprint = identity,
+                Payload = BitConverter.GetBytes(i),
+                OriginAuthorEpoch = 1
+            };
+            _store.FreezeOutbound(Scope, Local, NamespaceId, NodeId.From(IdBytes(100_000L + i)),
+                new[] { operation });
+        }
+    }
+
+    [IterationCleanup]
+    public void Cleanup() => _store.Dispose();
+
+    [Benchmark(Description = "Register one peer / distinct author-stream cardinality")]
+    public int RegisterPeerAcrossAuthorStreams()
+    {
+        _store.RegisterInterestedPeer(Scope, Local, NodeId.From(IdBytes(2_000_000L)), 1, NamespaceId);
+        return AuthorStreams;
+    }
+
+    private static byte[] IdBytes(long value)
+    {
+        var bytes = new byte[16];
+        BinaryPrimitives.WriteInt64BigEndian(bytes.AsSpan(8), value);
+        return bytes;
+    }
+}
