@@ -17,6 +17,42 @@ namespace BinSync.FldHost.Tests;
 public sealed class FldBinSyncRuntimeHostTests
 {
     [Fact]
+    public async Task Production_operator_mode_fails_closed_without_oidc_configuration()
+    {
+        string runtime = Path.Combine(AppContext.BaseDirectory, "host-runtime", "FldBinSyncHost.Runtime.dll");
+        Assert.True(File.Exists(runtime), "The executable integration Host must be copied to the test output.");
+
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.Environment["BINSYNC_HOST_MODE"] = "Production";
+        start.ArgumentList.Add(runtime);
+        foreach (string argument in new[]
+        {
+            Path.Combine(Path.GetTempPath(), "binsync-prod-metadata-" + Guid.NewGuid().ToString("N")),
+            Path.Combine(Path.GetTempPath(), "binsync-prod-fld-" + Guid.NewGuid().ToString("N")),
+            MetadataPartition.ToString(CultureInfo.InvariantCulture),
+            Convert.ToHexString(Id(0x61)),
+            ScopeId,
+            MetadataScopeId.ToString("D"),
+            NamespaceId.ToString(CultureInfo.InvariantCulture),
+            ProviderClientId.ToString("D")
+        })
+            start.ArgumentList.Add(argument);
+
+        using Process process = Process.Start(start)
+            ?? throw new InvalidOperationException("Could not start the production-mode validation process.");
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        string error = await process.StandardError.ReadToEndAsync();
+        Assert.NotEqual(0, process.ExitCode);
+        Assert.Contains("BINSYNC_OPERATOR_AUTHORITY", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("READY|", await process.StandardOutput.ReadToEndAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Idle_tombstone_window_rejects_new_peer_until_atomic_generation_slice_finishes()
     {
         string root = Path.Combine(Path.GetTempPath(), "binsync-gc-idle-window-" + Guid.NewGuid().ToString("N"));
