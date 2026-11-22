@@ -1015,6 +1015,7 @@ public sealed class FldBinSyncRuntimeHostTests
             RedirectStandardOutput = true,
             RedirectStandardError = true
         };
+        start.Environment["BINSYNC_HOST_MODE"] = "Test";
         start.Environment["BINSYNC_TEST_HOST_OPERATOR_TOKEN"] = OperatorToken;
         if (allowedPeerIds is not null)
             start.Environment["BINSYNC_TEST_HOST_ALLOWED_PEERS"] = allowedPeerIds;
