@@ -13,6 +13,7 @@ on:
       - 'samples/FldBinSyncHost/FldDatabaseIpcAsyncDataProvider.cs'
       - 'samples/FldBinSyncHost/FldDatabaseIpcAsyncRemoteBatchApplyStore.cs'
       - 'samples/FldBinSyncHost/StorageFldBinSyncGcOperatorPolicyStore.cs'
+      - 'BinSync.Net/src/BinSync.Storage/**'
       - 'external/Fld1.Storage'
       - '.github/workflows/host-runtime-lifecycle.yml'
   workflow_dispatch:
