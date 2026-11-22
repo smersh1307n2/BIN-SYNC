@@ -174,13 +174,49 @@ try
         current => StorageNodePersistence.Save(metadataStorage, current),
         Environment.GetEnvironmentVariable("BINSYNC_TEST_HOST_ALLOWED_PEERS"));
 
-    await composition.StartAsync(_ =>
+    await composition.StartAsync(async cancellationToken =>
     {
+        // A fresh Host starts GC through the same durable, audited staged policy
+        // used by the operator API. Never overwrite an existing policy: in
+        // particular, a previously committed emergency stop must survive restart.
+        FldBinSyncGcOperatorDiagnosticsSnapshot startupGc =
+            await composition.Operator.GetDiagnosticsAsync(cancellationToken: cancellationToken);
+        if (startupGc.Policy is null)
+        {
+            await composition.Operator.UpdatePolicyAsync(
+                expectedGeneration: 0,
+                TestOnlyOperatorAuthorizer.ActorId,
+                reason: "fresh Host bootstrap: enable ChangeId GC first",
+                maintenanceStarted: true,
+                receiptEnabled: false,
+                changeIdEnabled: true,
+                tombstoneEnabled: false,
+                cancellationToken);
+            await composition.Operator.UpdatePolicyAsync(
+                expectedGeneration: 1,
+                TestOnlyOperatorAuthorizer.ActorId,
+                reason: "fresh Host bootstrap: enable Receipt GC after ChangeId",
+                maintenanceStarted: true,
+                receiptEnabled: true,
+                changeIdEnabled: true,
+                tombstoneEnabled: false,
+                cancellationToken);
+            await composition.Operator.UpdatePolicyAsync(
+                expectedGeneration: 2,
+                TestOnlyOperatorAuthorizer.ActorId,
+                reason: "fresh Host bootstrap: enable proof-gated Tombstone GC last",
+                maintenanceStarted: true,
+                receiptEnabled: true,
+                changeIdEnabled: true,
+                tombstoneEnabled: true,
+                cancellationToken);
+        }
+
         // The real TCP SyncSession listener and maintenance loop are deliberately
-        // started only after durable policy restoration and provider/Node recovery.
+        // started only after durable policy restoration, optional fresh-store GC
+        // bootstrap, and provider/Node recovery.
         peerRuntime.Start();
         scheduler.Start();
-        return Task.CompletedTask;
     });
 
     WebApplicationBuilder builder = WebApplication.CreateBuilder();
