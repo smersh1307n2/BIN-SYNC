@@ -240,7 +240,7 @@ try
                 cancellationToken);
             await composition.Operator.UpdatePolicyAsync(
                 expectedGeneration: 1,
-                TestOnlyOperatorAuthorizer.ActorId,
+                HostBootstrapActorId,
                 reason: "fresh Host bootstrap: enable Receipt GC after ChangeId",
                 maintenanceStarted: true,
                 receiptEnabled: true,
@@ -249,7 +249,7 @@ try
                 cancellationToken);
             await composition.Operator.UpdatePolicyAsync(
                 expectedGeneration: 2,
-                TestOnlyOperatorAuthorizer.ActorId,
+                HostBootstrapActorId,
                 reason: "fresh Host bootstrap: enable proof-gated Tombstone GC last",
                 maintenanceStarted: true,
                 receiptEnabled: true,
@@ -768,6 +768,30 @@ internal sealed class TestOnlyOperatorAuthorizer : IFldBinSyncGcOperatorAuthoriz
         CancellationToken cancellationToken = default)
         => ValueTask.FromResult(
             string.Equals(actorId, ActorId, StringComparison.Ordinal));
+}
+
+internal sealed class ConfiguredOperatorAuthorizer : IFldBinSyncGcOperatorAuthorizer
+{
+    private readonly HashSet<string> _allowedSubjects;
+    private readonly string _bootstrapActorId;
+
+    public ConfiguredOperatorAuthorizer(IEnumerable<string> allowedSubjects, string bootstrapActorId)
+    {
+        _allowedSubjects = new HashSet<string>(
+            allowedSubjects ?? throw new ArgumentNullException(nameof(allowedSubjects)),
+            StringComparer.Ordinal);
+        _bootstrapActorId = string.IsNullOrWhiteSpace(bootstrapActorId)
+            ? throw new ArgumentException("A bootstrap actor identity is required.", nameof(bootstrapActorId))
+            : bootstrapActorId;
+    }
+
+    public ValueTask<bool> AuthorizeAsync(
+        string actorId,
+        FldBinSyncGcOperatorPolicyBinding binding,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(
+            string.Equals(actorId, _bootstrapActorId, StringComparison.Ordinal) ||
+            _allowedSubjects.Contains(actorId));
 }
 
 internal sealed class TestMaintenanceScheduler
