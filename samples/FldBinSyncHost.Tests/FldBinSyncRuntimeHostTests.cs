@@ -597,7 +597,7 @@ public sealed class FldBinSyncRuntimeHostTests
             Assert.Equal("ready", ready.RootElement.GetProperty("status").GetString());
             Assert.True(ready.RootElement.GetProperty("peerListenerStarted").GetBoolean());
             Assert.True(ready.RootElement.GetProperty("maintenanceSchedulerStarted").GetBoolean());
-            Assert.False(ready.RootElement.GetProperty("gcExecutionEnabled").GetBoolean());
+            Assert.True(ready.RootElement.GetProperty("gcExecutionEnabled").GetBoolean());
             await WaitForMaintenanceTick(client, TimeSpan.FromSeconds(20));
 
             using var peerNode = new Node(NodeId.From(Id(0x54)));
