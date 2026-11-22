@@ -201,7 +201,7 @@ try
         provider,
         remoteApply,
         current => StorageNodePersistence.Save(metadataStorage, current),
-        testMode ? new TestOnlyOperatorAuthorizer() : new ConfiguredOperatorAuthorizer(allowedOperatorSubjects),
+        testMode ? new TestOnlyOperatorAuthorizer() : new ConfiguredOperatorAuthorizer(allowedOperatorSubjects, HostBootstrapActorId),
         // This executable is the disposable integration Host used to exercise
         // the enabled runtime. The library/composition defaults remain fail-closed.
         new StorageNamespaceGcFeatureOptions(
