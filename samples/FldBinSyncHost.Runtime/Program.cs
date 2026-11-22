@@ -769,7 +769,8 @@ internal sealed class TestOnlyOperatorAuthorizer : IFldBinSyncGcOperatorAuthoriz
         FldBinSyncGcOperatorPolicyBinding binding,
         CancellationToken cancellationToken = default)
         => ValueTask.FromResult(
-            string.Equals(actorId, ActorId, StringComparison.Ordinal));
+            string.Equals(actorId, ActorId, StringComparison.Ordinal) ||
+            string.Equals(actorId, "system:host-bootstrap", StringComparison.Ordinal));
 }
 
 internal sealed class ConfiguredOperatorAuthorizer : IFldBinSyncGcOperatorAuthorizer
