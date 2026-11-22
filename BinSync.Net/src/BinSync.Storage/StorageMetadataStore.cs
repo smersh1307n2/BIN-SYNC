@@ -700,13 +700,13 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             var sequences = new Dictionary<(NodeId Author, uint Epoch), List<ulong>>();
             if (current is not null)
             {
-                foreach (var pair in EnumerateChangeLedger(partitionKey, current, acceptedRoster.NamespaceId))
-                {
-                    OperationOrigin origin = pair.Provenance;
-                    if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
-                        continue;
-                    AddOriginSequence(sequences, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence);
-                }
+                VisitChangeLedger(partitionKey, acceptedRoster.NamespaceId,
+                    (key, origin) =>
+                    {
+                        if (!origin.AuthorNodeId.IsZero && origin.AuthorEpoch != 0 && origin.Sequence != 0)
+                            AddOriginSequence(sequences, origin.AuthorNodeId, origin.AuthorEpoch, origin.Sequence);
+                        return true;
+                    });
             }
 
 
@@ -916,24 +916,19 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
                 BuildMetadataStreamChangeIdBloomFilter(partitionKey, current, namespaceId);
             var candidates = new List<(LedgerKey Key, byte[] StorageKey)>(limit);
             byte[] partitionRoot = PartitionRoot(partitionKey);
-            foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
+            VisitChangeLedger(partitionKey, namespaceId, (key, origin) =>
             {
-                // namespace already filtered by enumerator
-                OperationOrigin origin = pair.Provenance;
-                if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0)
-                    continue;
-                if (!IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
-                    continue;
-                if (liveChangeIds.MightContain(pair.Key.ChangeId) ||
-                    pendingApplyLiveIds.MightContain(pair.Key.ChangeId) ||
-                    streamLiveIds.MightContain(pair.Key.ChangeId) ||
-                    externalScan.HasExternalChangeIdReference(pair.Key.ChangeId))
-                    continue;
+                if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
+                    !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin) ||
+                    liveChangeIds.MightContain(key.ChangeId) ||
+                    pendingApplyLiveIds.MightContain(key.ChangeId) ||
+                    streamLiveIds.MightContain(key.ChangeId) ||
+                    externalScan.HasExternalChangeIdReference(key.ChangeId))
+                    return true;
 
-                candidates.Add((pair.Key, ChangeLedgerStorageKey(partitionRoot, namespaceId, pair.Key.ChangeId)));
-                if (candidates.Count == limit)
-                    break;
-            }
+                candidates.Add((key, ChangeLedgerStorageKey(partitionRoot, namespaceId, key.ChangeId)));
+                return candidates.Count < limit;
+            });
 
             if (candidates.Count == 0)
                 return 0;
@@ -1027,18 +1022,16 @@ public class StorageMetadataStore : IMetadataStore, IMetadataPeerStateStore, IMe
             pendingApplyLiveIds = BuildPendingApplyChangeIdBloomFilter(current, namespaceId);
             streamLiveIds = BuildMetadataStreamChangeIdBloomFilter(partitionKey, current, namespaceId);
             candidates = new List<ChangeIdGcCandidate>(limit);
-            foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
+            VisitChangeLedger(partitionKey, namespaceId, (key, origin) =>
             {
-                OperationOrigin origin = pair.Provenance;
                 if (origin.AuthorNodeId.IsZero || origin.AuthorEpoch == 0 || origin.Sequence == 0 ||
-                    pendingApplyLiveIds.MightContain(pair.Key.ChangeId) ||
-                    streamLiveIds.MightContain(pair.Key.ChangeId) ||
+                    pendingApplyLiveIds.MightContain(key.ChangeId) ||
+                    streamLiveIds.MightContain(key.ChangeId) ||
                     !IsOriginCoveredBySafeFrontier(safeOriginFrontier, origin))
-                    continue;
-                candidates.Add(new ChangeIdGcCandidate(pair.Key, origin, null));
-                if (candidates.Count == limit)
-                    break;
-            }
+                    return true;
+                candidates.Add(new ChangeIdGcCandidate(key, origin, null));
+                return candidates.Count < limit;
+            });
         }
         ReportAllocation("metadata-candidate-discovery");
 
@@ -3095,13 +3088,13 @@ private bool ValidateIncomingBatchForStaging(
             var epochsWithLedger = new HashSet<uint>();
             if (epochsMissingAllocator.Count != 0)
             {
-                foreach (var pair in EnumerateChangeLedger(partitionKey, current, namespaceId))
+                VisitChangeLedger(partitionKey, namespaceId, (key, provenance) =>
                 {
-                    OperationOrigin provenance = pair.Provenance;
                     if (provenance.AuthorNodeId == localAuthor &&
                         epochsMissingAllocator.Contains(provenance.AuthorEpoch))
                         epochsWithLedger.Add(provenance.AuthorEpoch);
-                }
+                    return true;
+                });
             }
 
             for (int newOperationIndex = 0; newOperationIndex < newOperationCount; newOperationIndex++)
@@ -6504,8 +6497,10 @@ private bool ValidateIncomingBatchForStaging(
         return true;
     }
 
-    private IEnumerable<(LedgerKey Key, OperationOrigin Provenance)> EnumerateChangeLedger(
-        PartitionKey partitionKey, PartitionState state, int namespaceId)
+    private delegate bool ChangeLedgerRowVisitor(LedgerKey key, OperationOrigin provenance);
+
+    private void VisitChangeLedger(
+        PartitionKey partitionKey, int namespaceId, ChangeLedgerRowVisitor visitor)
     {
         byte[] root = PartitionRoot(partitionKey);
         Span<byte> namespaceSuffix = stackalloc byte[2];
@@ -6514,19 +6509,27 @@ private bool ValidateIncomingBatchForStaging(
         using StorageSnapshot snapshot = _storage.OpenSnapshot();
         using StorageSnapshot.PrefixCursor cursor = snapshot.OpenPrefixCursor(prefix);
         const int pageSize = 256;
+        bool stopped = false;
         while (true)
         {
-            IReadOnlyList<StorageEntry> page = cursor.ReadPage(pageSize);
-            foreach (StorageEntry row in page)
+            int visited = cursor.VisitPage(pageSize, VisitRow);
+            if (stopped || visited < pageSize)
+                return;
+        }
+
+        bool VisitRow(in StorageEntryView row)
+        {
+            ReadOnlySpan<byte> keyBytes = row.Key;
+            int offset = prefix.Length;
+            if (keyBytes.Length - offset != 16)
+                throw new InvalidDataException("ChangeLedger storage key is malformed.");
+            var ledgerKey = new LedgerKey(namespaceId, BatchId.From(keyBytes.Slice(offset, 16)));
+            if (!visitor(ledgerKey, DecodeChangeLedgerProvenance(row.Value)))
             {
-                byte[] keyBytes = row.Key;
-                int offset = prefix.Length;
-                if (keyBytes.Length - offset != 16)
-                    throw new InvalidDataException("ChangeLedger storage key is malformed.");
-                var ledgerKey = new LedgerKey(namespaceId, BatchId.From(keyBytes.AsSpan(offset, 16)));
-                yield return (ledgerKey, DecodeChangeLedgerProvenance(row.Value));
+                stopped = true;
+                return false;
             }
-            if (page.Count < pageSize) yield break;
+            return true;
         }
     }
 
